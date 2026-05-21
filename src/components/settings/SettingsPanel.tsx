@@ -446,14 +446,18 @@ export function SettingsPanel() {
                 API 密钥
                 <input value={newApiKey} type="password" placeholder="sk-..." onChange={(event) => setNewApiKey(event.target.value)} />
               </label>
-              <label>
-                图片默认模型
-                <input value={newProfileDraft.defaultImageModel} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, defaultImageModel: event.target.value })} />
-              </label>
-              <label>
-                提示词助手模型
-                <input value={newProfileDraft.defaultPromptModel} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, defaultPromptModel: event.target.value })} />
-              </label>
+              {newProfileDraft.enabledUsages.includes('image') ? (
+                <label>
+                  图片默认模型
+                  <input value={newProfileDraft.defaultImageModel} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, defaultImageModel: event.target.value })} />
+                </label>
+              ) : null}
+              {newProfileDraft.enabledUsages.includes('prompt') ? (
+                <label>
+                  提示词助手模型
+                  <input value={newProfileDraft.defaultPromptModel} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, defaultPromptModel: event.target.value })} />
+                </label>
+              ) : null}
             </div>
             <div className="button-row modal-actions">
               <button type="button" onClick={() => setNewProfileDraft(null)}>
