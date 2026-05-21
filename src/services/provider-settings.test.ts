@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getProfileSecret } from '../lib/platform'
+import { DEFAULT_PROMPT_MODEL } from '../shared/image-options'
 import { ProviderSettingsStore } from './provider-settings'
 
 describe('ProviderSettingsStore', () => {
@@ -26,6 +27,40 @@ describe('ProviderSettingsStore', () => {
     expect(profile?.apiKeyStored).toBe(true)
     expect(JSON.stringify(profile)).not.toContain('sk-123456789')
     await expect(getProfileSecret(profile?.id || '')).resolves.toMatchObject({ value: 'sk-123456789' })
+  })
+
+  it('preserves an existing API key when editing profile metadata without a new key', async () => {
+    const store = new ProviderSettingsStore()
+    const settings = await store.upsertProfile({
+      name: 'Local mock',
+      baseUrl: 'http://127.0.0.1:37123',
+      apiKey: 'sk-123456789'
+    })
+    const profile = settings.profiles.at(-1)
+
+    const updated = await store.upsertProfile({
+      id: profile?.id,
+      name: 'Renamed mock',
+      baseUrl: 'http://127.0.0.1:37124',
+      enabledUsages: ['prompt']
+    })
+    const nextProfile = updated.profiles.find((item) => item.id === profile?.id)
+
+    expect(nextProfile?.name).toBe('Renamed mock')
+    expect(nextProfile?.apiKeyStored).toBe(true)
+    await expect(getProfileSecret(profile?.id || '')).resolves.toMatchObject({ value: 'sk-123456789' })
+  })
+
+  it('migrates the old prompt default model to the current default', async () => {
+    const store = new ProviderSettingsStore()
+    const settings = await store.upsertProfile({
+      name: 'Legacy prompt model',
+      defaultPromptModel: 'gpt-4.1-mini'
+    })
+    const profile = settings.profiles.at(-1)
+
+    expect(profile?.defaultPromptModel).toBe(DEFAULT_PROMPT_MODEL)
+    expect(profile?.defaultPromptModel).toBe('gpt-5.4-mini')
   })
 
   it('allows image and prompt selections to differ', async () => {

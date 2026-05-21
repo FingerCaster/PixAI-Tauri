@@ -13,6 +13,7 @@ import { DEFAULT_MODEL, DEFAULT_PROMPT_MODEL, trimBaseUrl } from '../shared/imag
 import type { ConnectionTestResult, ProviderProfile, ProviderProfileInput, ProviderSettings, ProviderSettingsUpdate, ProviderUsage } from '../shared/types'
 
 const STATE_NAME = 'provider-settings'
+const LEGACY_DEFAULT_PROMPT_MODELS = new Set(['gpt-4.1-mini'])
 
 type ProviderSettingsFile = ProviderSettings
 
@@ -73,7 +74,7 @@ export class ProviderSettingsStore {
       type,
       baseUrl: trimBaseUrl(input.baseUrl || existing?.baseUrl || 'https://api.openai.com'),
       defaultImageModel: input.defaultImageModel?.trim() || existing?.defaultImageModel || DEFAULT_MODEL,
-      defaultPromptModel: input.defaultPromptModel?.trim() || existing?.defaultPromptModel || DEFAULT_PROMPT_MODEL,
+      defaultPromptModel: normalizePromptModel(input.defaultPromptModel?.trim() || existing?.defaultPromptModel),
       enabledUsages: input.enabledUsages || existing?.enabledUsages || ['image', 'prompt'],
       capabilities: input.capabilities || existing?.capabilities || adapter.capabilities,
       apiKeyStored,
@@ -171,12 +172,25 @@ function createDefaultSettings(): ProviderSettings {
 }
 
 function normalizeSettings(settings: ProviderSettings, fallback?: ProviderSettings): ProviderSettings {
-  const profiles = settings.profiles?.length ? settings.profiles : createDefaultSettings().profiles
+  const profiles = (settings.profiles?.length ? settings.profiles : createDefaultSettings().profiles).map(normalizeProfile)
   return {
     profiles,
     selectedImageProfileId: selectProfileForUsage(profiles, settings.selectedImageProfileId, 'image', fallback?.selectedImageProfileId),
     selectedPromptProfileId: selectProfileForUsage(profiles, settings.selectedPromptProfileId, 'prompt', fallback?.selectedPromptProfileId)
   }
+}
+
+function normalizeProfile(profile: ProviderProfile): ProviderProfile {
+  return {
+    ...profile,
+    defaultPromptModel: normalizePromptModel(profile.defaultPromptModel)
+  }
+}
+
+function normalizePromptModel(model?: string): string {
+  const candidate = model?.trim()
+  if (!candidate || LEGACY_DEFAULT_PROMPT_MODELS.has(candidate)) return DEFAULT_PROMPT_MODEL
+  return candidate
 }
 
 function selectProfileForUsage(profiles: ProviderProfile[], selectedId: string | undefined, usage: ProviderUsage, fallbackId?: string): string {

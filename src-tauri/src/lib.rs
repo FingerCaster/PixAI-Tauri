@@ -1,6 +1,8 @@
-use serde::Serialize;
+use reqwest::Method;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -21,6 +23,21 @@ struct SecretReadResult {
     value: Option<String>,
     insecure_storage: bool,
     backend: String,
+}
+
+#[derive(Deserialize)]
+struct HttpProxyRequest {
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+}
+
+#[derive(Serialize)]
+struct HttpProxyResponse {
+    status: u16,
+    status_text: String,
+    body: String,
 }
 
 #[tauri::command]
@@ -100,6 +117,38 @@ fn delete_profile_secret(app: AppHandle, profile_id: String) -> Result<(), Strin
         let _ = entry.delete_credential();
     }
     remove_fallback_secret(&app, &profile_id)
+}
+
+#[tauri::command]
+async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, String> {
+    let url = reqwest::Url::parse(&request.url).map_err(|error| format!("接口地址无效：{error}"))?;
+    match url.scheme() {
+        "http" | "https" => {}
+        _ => return Err("仅支持 HTTP/HTTPS 接口地址。".to_string()),
+    }
+    let method = request
+        .method
+        .parse::<Method>()
+        .map_err(|error| format!("请求方法无效：{error}"))?;
+    let client = reqwest::Client::new();
+    let mut builder = client.request(method, url);
+    for (name, value) in request.headers {
+        builder = builder.header(name, value);
+    }
+    if let Some(body) = request.body {
+        builder = builder.body(body);
+    }
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| format!("请求接口失败：{error}"))?;
+    let status = response.status();
+    let body = response.text().await.map_err(|error| error.to_string())?;
+    Ok(HttpProxyResponse {
+        status: status.as_u16(),
+        status_text: status.canonical_reason().unwrap_or("").to_string(),
+        body,
+    })
 }
 
 fn app_data_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -187,7 +236,8 @@ pub fn run() {
             write_json_state,
             set_profile_secret,
             get_profile_secret,
-            delete_profile_secret
+            delete_profile_secret,
+            http_proxy
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

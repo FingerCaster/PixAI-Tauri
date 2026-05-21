@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { CircleHelp, Plus, Save, X } from 'lucide-react'
+import { CircleHelp, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import {
   DEFAULT_IMAGE_OUTPUT_FORMAT,
   DEFAULT_MODEL,
@@ -31,6 +31,7 @@ export function SettingsPanel() {
     settings,
     updateActiveConversation,
     updateSettings,
+    deleteProfile,
     upsertProfile
   } = useAppStore()
   const conversation = conversations.find((item) => item.id === activeConversationId) || null
@@ -41,8 +42,9 @@ export function SettingsPanel() {
   const [selectedPromptProfileId, setSelectedPromptProfileId] = useState(settings?.selectedPromptProfileId || '')
   const [imageModel, setImageModel] = useState(DEFAULT_MODEL)
   const [promptModel, setPromptModel] = useState(DEFAULT_PROMPT_MODEL)
-  const [newProfileDraft, setNewProfileDraft] = useState<ProviderProfile | null>(null)
-  const [newApiKey, setNewApiKey] = useState('')
+  const [profileDraft, setProfileDraft] = useState<ProviderProfile | null>(null)
+  const [profileDraftMode, setProfileDraftMode] = useState<'create' | 'edit'>('create')
+  const [profileApiKey, setProfileApiKey] = useState('')
 
   useEffect(() => {
     if (!settings) return
@@ -57,8 +59,34 @@ export function SettingsPanel() {
   if (!settings || !conversation) return <aside className="settings-panel" />
 
   const openNewProfileDialog = () => {
-    setNewApiKey('')
-    setNewProfileDraft(createProfileDraft())
+    setProfileApiKey('')
+    setProfileDraftMode('create')
+    setProfileDraft(createProfileDraft())
+  }
+  const openEditProfileDialog = (profile: ProviderProfile | null) => {
+    if (!profile) return
+    setProfileApiKey('')
+    setProfileDraftMode('edit')
+    setProfileDraft({ ...profile })
+  }
+  const closeProfileDialog = () => {
+    setProfileDraft(null)
+    setProfileApiKey('')
+  }
+  const saveProfileDraft = async () => {
+    if (!profileDraft) return
+    await upsertProfile({
+      ...profileDraft,
+      id: profileDraftMode === 'create' ? undefined : profileDraft.id,
+      apiKey: profileApiKey.trim() || undefined
+    })
+    closeProfileDialog()
+  }
+  const deleteProfileDraft = async () => {
+    if (!profileDraft || profileDraftMode !== 'edit') return
+    if (!window.confirm('删除此服务配置？')) return
+    await deleteProfile(profileDraft.id)
+    closeProfileDialog()
   }
   const imageSelectedProfile = profiles.find((profile) => profile.id === selectedImageProfileId) || imageProfiles[0] || null
   const promptSelectedProfile = profiles.find((profile) => profile.id === selectedPromptProfileId) || promptProfiles[0] || null
@@ -98,37 +126,47 @@ export function SettingsPanel() {
         </div>
         <label>
           图片生成
-          <select
-            value={selectedImageProfileId}
-            onChange={(event) => {
-              const profile = profiles.find((item) => item.id === event.target.value)
-              setSelectedImageProfileId(event.target.value)
-              setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
-            }}
-          >
-            {imageProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
+          <div className="provider-select-row">
+            <select
+              value={selectedImageProfileId}
+              onChange={(event) => {
+                const profile = profiles.find((item) => item.id === event.target.value)
+                setSelectedImageProfileId(event.target.value)
+                setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
+              }}
+            >
+              {imageProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+            <button className="icon-button" type="button" onClick={() => openEditProfileDialog(imageSelectedProfile)} title="编辑图片生成供应商" disabled={!imageSelectedProfile}>
+              <Pencil size={14} />
+            </button>
+          </div>
         </label>
         <label>
           提示词助手
-          <select
-            value={selectedPromptProfileId}
-            onChange={(event) => {
-              const profile = profiles.find((item) => item.id === event.target.value)
-              setSelectedPromptProfileId(event.target.value)
-              setPromptModel(profile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
-            }}
-          >
-            {promptProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
+          <div className="provider-select-row">
+            <select
+              value={selectedPromptProfileId}
+              onChange={(event) => {
+                const profile = profiles.find((item) => item.id === event.target.value)
+                setSelectedPromptProfileId(event.target.value)
+                setPromptModel(profile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
+              }}
+            >
+              {promptProfiles.map((profile) => (
+                <option key={profile.id} value={profile.id}>
+                  {profile.name}
+                </option>
+              ))}
+            </select>
+            <button className="icon-button" type="button" onClick={() => openEditProfileDialog(promptSelectedProfile)} title="编辑提示词供应商" disabled={!promptSelectedProfile}>
+              <Pencil size={14} />
+            </button>
+          </div>
         </label>
         <label>
           图片模型
@@ -398,12 +436,12 @@ export function SettingsPanel() {
           />
         </div>
       </section>
-      {newProfileDraft ? (
-        <div className="modal-backdrop" role="presentation" onMouseDown={() => setNewProfileDraft(null)}>
-          <section className="provider-modal" role="dialog" aria-modal="true" aria-label="新增供应商" onMouseDown={(event) => event.stopPropagation()}>
+      {profileDraft ? (
+        <div className="modal-backdrop" role="presentation" onMouseDown={closeProfileDialog}>
+          <section className="provider-modal" role="dialog" aria-modal="true" aria-label={profileDraftMode === 'create' ? '新增供应商' : '编辑供应商'} onMouseDown={(event) => event.stopPropagation()}>
             <div className="modal-head">
-              <h2>新增供应商</h2>
-              <button className="icon-button" type="button" onClick={() => setNewProfileDraft(null)} title="关闭">
+              <h2>{profileDraftMode === 'create' ? '新增供应商' : '编辑供应商'}</h2>
+              <button className="icon-button" type="button" onClick={closeProfileDialog} title="关闭">
                 <X size={16} />
               </button>
             </div>
@@ -412,23 +450,23 @@ export function SettingsPanel() {
                 <span>用途</span>
                 <div className="segmented provider-usage">
                   <button
-                    className={hasSameUsages(newProfileDraft, ['image']) ? 'on' : ''}
+                    className={hasSameUsages(profileDraft, ['image']) ? 'on' : ''}
                     type="button"
-                    onClick={() => setNewProfileDraft({ ...newProfileDraft, enabledUsages: ['image'] })}
+                    onClick={() => setProfileDraft({ ...profileDraft, enabledUsages: ['image'] })}
                   >
                     生图
                   </button>
                   <button
-                    className={hasSameUsages(newProfileDraft, ['prompt']) ? 'on' : ''}
+                    className={hasSameUsages(profileDraft, ['prompt']) ? 'on' : ''}
                     type="button"
-                    onClick={() => setNewProfileDraft({ ...newProfileDraft, enabledUsages: ['prompt'] })}
+                    onClick={() => setProfileDraft({ ...profileDraft, enabledUsages: ['prompt'] })}
                   >
                     提示词
                   </button>
                   <button
-                    className={hasSameUsages(newProfileDraft, ['image', 'prompt']) ? 'on' : ''}
+                    className={hasSameUsages(profileDraft, ['image', 'prompt']) ? 'on' : ''}
                     type="button"
-                    onClick={() => setNewProfileDraft({ ...newProfileDraft, enabledUsages: ['image', 'prompt'] })}
+                    onClick={() => setProfileDraft({ ...profileDraft, enabledUsages: ['image', 'prompt'] })}
                   >
                     二者都可
                   </button>
@@ -436,45 +474,46 @@ export function SettingsPanel() {
               </div>
               <label>
                 配置名称
-                <input value={newProfileDraft.name} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, name: event.target.value })} />
+                <input value={profileDraft.name} onChange={(event) => setProfileDraft({ ...profileDraft, name: event.target.value })} />
               </label>
               <label>
                 接口地址
-                <input value={newProfileDraft.baseUrl} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, baseUrl: event.target.value })} />
+                <input value={profileDraft.baseUrl} onChange={(event) => setProfileDraft({ ...profileDraft, baseUrl: event.target.value })} />
               </label>
               <label>
                 API 密钥
-                <input value={newApiKey} type="password" placeholder="sk-..." onChange={(event) => setNewApiKey(event.target.value)} />
+                <input value={profileApiKey} type="password" placeholder={profileDraftMode === 'edit' && profileDraft.apiKeyStored ? '留空保持不变' : 'sk-...'} onChange={(event) => setProfileApiKey(event.target.value)} />
               </label>
-              {newProfileDraft.enabledUsages.includes('image') ? (
+              {profileDraft.enabledUsages.includes('image') ? (
                 <label>
                   图片默认模型
-                  <input value={newProfileDraft.defaultImageModel} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, defaultImageModel: event.target.value })} />
+                  <input value={profileDraft.defaultImageModel} onChange={(event) => setProfileDraft({ ...profileDraft, defaultImageModel: event.target.value })} />
                 </label>
               ) : null}
-              {newProfileDraft.enabledUsages.includes('prompt') ? (
+              {profileDraft.enabledUsages.includes('prompt') ? (
                 <label>
                   提示词助手模型
-                  <input value={newProfileDraft.defaultPromptModel} onChange={(event) => setNewProfileDraft({ ...newProfileDraft, defaultPromptModel: event.target.value })} />
+                  <input value={profileDraft.defaultPromptModel} onChange={(event) => setProfileDraft({ ...profileDraft, defaultPromptModel: event.target.value })} />
                 </label>
               ) : null}
             </div>
             <div className="button-row modal-actions">
-              <button type="button" onClick={() => setNewProfileDraft(null)}>
+              {profileDraftMode === 'edit' && settings.profiles.length > 1 ? (
+                <button className="danger-button" type="button" onClick={() => void deleteProfileDraft()}>
+                  <Trash2 size={15} />
+                  删除
+                </button>
+              ) : null}
+              <button type="button" onClick={closeProfileDialog}>
                 取消
               </button>
               <button
                 className="primary-button"
                 type="button"
-                onClick={() =>
-                  void upsertProfile({ ...newProfileDraft, id: undefined, apiKey: newApiKey || undefined }).then(() => {
-                    setNewProfileDraft(null)
-                    setNewApiKey('')
-                  })
-                }
+                onClick={() => void saveProfileDraft()}
               >
-                <Plus size={15} />
-                添加供应商
+                {profileDraftMode === 'create' ? <Plus size={15} /> : <Save size={15} />}
+                {profileDraftMode === 'create' ? '添加供应商' : '保存供应商'}
               </button>
             </div>
           </section>

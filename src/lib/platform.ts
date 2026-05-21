@@ -11,11 +11,34 @@ type SecretReadResult = {
   backend: string
 }
 
+type HttpProxyResponse = {
+  status: number
+  status_text: string
+  body: string
+}
+
 const memoryStorage = new Map<string, string>()
 const memorySecrets = new Map<string, string>()
 
-function isTauriRuntime(): boolean {
+export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
+}
+
+export async function fetchJsonThroughPlatform(url: string, init: RequestInit): Promise<Response> {
+  if (!isTauriRuntime()) return fetch(url, init)
+  const headers = Object.fromEntries(new Headers(init.headers).entries())
+  const result = await invoke<HttpProxyResponse>('http_proxy', {
+    request: {
+      url,
+      method: init.method || 'GET',
+      headers,
+      body: typeof init.body === 'string' ? init.body : undefined
+    }
+  })
+  return new Response(result.body, {
+    status: result.status,
+    statusText: result.status_text
+  })
 }
 
 export async function readJsonState(name: string): Promise<string | null> {

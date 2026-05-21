@@ -6,6 +6,7 @@ import {
   supportsImageInputFidelity,
   trimBaseUrl
 } from '../shared/image-options'
+import { fetchJsonThroughPlatform } from '../lib/platform'
 import type { ImageApiData } from '../shared/types'
 import type { ImageGenerationRequest, ProviderAdapter, ProviderRuntimeProfile } from './types'
 
@@ -17,6 +18,8 @@ type ImageApiResponse = {
     code?: string
     param?: string
   }
+  error_code?: string
+  message?: string
 }
 
 type ResponsesApiPayload = {
@@ -32,6 +35,8 @@ type ResponsesApiPayload = {
   error?: {
     message?: string
   }
+  error_code?: string
+  message?: string
 }
 
 export const openAiCompatibleAdapter: ProviderAdapter = {
@@ -51,7 +56,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     }
 
     try {
-      const response = await fetch(endpoint, {
+      const response = await fetchJsonThroughPlatform(endpoint, {
         method: 'POST',
         headers: buildHeaders(profile.apiKey),
         signal,
@@ -69,7 +74,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
         endpoint,
         status: response.status,
         latencyMs: Date.now() - startedAt,
-        message: response.ok ? '连接测试成功。' : payload.error?.message || `连接失败，HTTP 状态码 ${response.status}。`
+        message: response.ok ? '连接测试成功。' : getProviderErrorMessage(payload, `连接失败，HTTP 状态码 ${response.status}。`)
       }
     } catch (error) {
       return {
@@ -91,7 +96,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     const text = await response.text()
     const payload = parseImagePayload(text)
     if (!response.ok) {
-      throw new ProviderHttpError(payload.error?.message || `图片请求失败，HTTP 状态码 ${response.status}。`, {
+      throw new ProviderHttpError(getProviderErrorMessage(payload, `图片请求失败，HTTP 状态码 ${response.status}。`), {
         endpoint,
         status: response.status,
         statusText: response.statusText,
@@ -138,7 +143,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
 
 async function requestImageGeneration(endpoint: string, profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Promise<Response> {
   const { input } = request
-  return fetch(endpoint, {
+  return fetchJsonThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
     signal: request.signal,
@@ -191,7 +196,7 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
 async function requestPrompt(profile: ProviderRuntimeProfile, instruction: string, signal?: AbortSignal): Promise<string> {
   if (!profile.apiKey) throw new Error('API Key 尚未配置。')
   const endpoint = buildResponsesEndpoint(profile.baseUrl)
-  const response = await fetch(endpoint, {
+  const response = await fetchJsonThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey),
     signal,
@@ -213,7 +218,7 @@ async function requestPrompt(profile: ProviderRuntimeProfile, instruction: strin
   const text = await response.text()
   const payload = parseResponsesPayload(text)
   if (!response.ok) {
-    throw new ProviderHttpError(payload.error?.message || `提示词生成失败，HTTP 状态码 ${response.status}。`, {
+    throw new ProviderHttpError(getProviderErrorMessage(payload, `提示词生成失败，HTTP 状态码 ${response.status}。`), {
       endpoint,
       status: response.status,
       statusText: response.statusText,
@@ -261,6 +266,13 @@ function extractResponseText(payload: ResponsesApiPayload): string {
     }
   }
   return payload.choices?.find((choice) => typeof choice.message?.content === 'string')?.message?.content || ''
+}
+
+function getProviderErrorMessage(payload: ImageApiResponse | ResponsesApiPayload, fallback: string): string {
+  const message = payload.error?.message || payload.message || fallback
+  return payload.error_code && !message.includes(payload.error_code)
+    ? `${message}（${payload.error_code}）`
+    : message
 }
 
 function sanitizePromptText(value: string): string {

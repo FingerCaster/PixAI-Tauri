@@ -8,7 +8,7 @@ import type {
 } from './types'
 
 export const DEFAULT_MODEL = 'gpt-image-2'
-export const DEFAULT_PROMPT_MODEL = 'gpt-4.1-mini'
+export const DEFAULT_PROMPT_MODEL = 'gpt-5.4-mini'
 export const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = 'png'
 export const DEFAULT_IMAGE_MAX_RETRIES = 0
 export const MAX_IMAGE_MAX_RETRIES = 10

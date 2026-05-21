@@ -8,7 +8,7 @@ const profile: ProviderRuntimeProfile = {
   type: 'openai-compatible',
   baseUrl: 'http://127.0.0.1:37123',
   defaultImageModel: 'gpt-image-1',
-  defaultPromptModel: 'gpt-4.1-mini',
+  defaultPromptModel: 'gpt-5.4-mini',
   enabledUsages: ['image', 'prompt'],
   capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test'],
   apiKeyStored: true,
