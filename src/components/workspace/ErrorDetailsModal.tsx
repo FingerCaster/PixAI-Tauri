@@ -38,18 +38,26 @@ export function ErrorDetailsModal({ item, onClose }: { item: ImageHistoryItem; o
   return createPortal(
     <div
       className="modal-backdrop error-details-backdrop"
-      onClick={(event) => {
+      onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose()
       }}
+      onClick={(event) => event.stopPropagation()}
     >
-      <div className="provider-modal error-details-panel">
+      <div
+        className="provider-modal error-details-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="错误详情"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="modal-head">
           <strong>{item.errorMessage || '生成失败'}</strong>
           <div className="mini-controls">
-            <button type="button" title="复制全部错误信息" onClick={() => void copyError()}>
+            <button className="icon-button" type="button" title="复制全部错误信息" onClick={() => void copyError()}>
               <Copy size={15} />
             </button>
-            <button type="button" title="关闭" onClick={onClose}>
+            <button className="icon-button" type="button" title="关闭" onClick={onClose}>
               <X size={15} />
             </button>
           </div>
