@@ -30,14 +30,19 @@ export function isTauriRuntime(): boolean {
 export async function fetchJsonThroughPlatform(url: string, init: RequestInit): Promise<Response> {
   if (!isTauriRuntime()) return fetch(url, init)
   const headers = Object.fromEntries(new Headers(init.headers).entries())
-  const result = await invoke<HttpProxyResponse>('http_proxy', {
-    request: {
-      url,
-      method: init.method || 'GET',
-      headers,
-      body: typeof init.body === 'string' ? init.body : undefined
-    }
-  })
+  let result: HttpProxyResponse
+  try {
+    result = await invoke<HttpProxyResponse>('http_proxy', {
+      request: {
+        url,
+        method: init.method || 'GET',
+        headers,
+        body: typeof init.body === 'string' ? init.body : undefined
+      }
+    })
+  } catch (error) {
+    throw PlatformHttpProxyError.fromInvokeError(url, init.method || 'GET', error)
+  }
   return new Response(result.body, {
     status: result.status,
     statusText: result.status_text
@@ -132,4 +137,58 @@ export function __resetPlatformStateForTests(): void {
   memoryStorage.clear()
   memorySecrets.clear()
   globalThis.localStorage?.clear()
+}
+
+export class PlatformHttpProxyError extends Error {
+  constructor(
+    message: string,
+    readonly details: Record<string, unknown>
+  ) {
+    super(message)
+    this.name = 'PlatformHttpProxyError'
+  }
+
+  static fromInvokeError(endpoint: string, method: string, error: unknown): PlatformHttpProxyError {
+    const diagnostics = parsePlatformError(error)
+    const stage = typeof diagnostics.stage === 'string' ? diagnostics.stage : 'transport'
+    const message = typeof diagnostics.message === 'string' && diagnostics.message.trim()
+      ? diagnostics.message
+      : error instanceof Error
+        ? error.message
+        : String(error || '平台代理请求失败。')
+    return new PlatformHttpProxyError(message, {
+      endpoint,
+      method,
+      stage,
+      diagnostics
+    })
+  }
+}
+
+function parsePlatformError(error: unknown): Record<string, unknown> {
+  if (error instanceof Error) {
+    return {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    }
+  }
+  if (typeof error !== 'string') return { value: String(error) }
+  try {
+    const parsed = JSON.parse(error)
+    return isRecord(parsed) ? parsed : { value: error }
+  } catch {
+    return { message: error, stage: inferPlainPlatformErrorStage(error) }
+  }
+}
+
+function inferPlainPlatformErrorStage(message: string): string {
+  if (message.startsWith('接口地址无效') || message.startsWith('仅支持 HTTP/HTTPS') || message.startsWith('请求方法无效')) {
+    return 'configuration'
+  }
+  return 'transport'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }

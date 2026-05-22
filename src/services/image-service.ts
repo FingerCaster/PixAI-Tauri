@@ -2,6 +2,7 @@ import { getAdapter } from '../adapters/registry'
 import { ProviderHttpError } from '../adapters/openai-compatible'
 import { createErrorDetails, serializeError } from '../lib/errors'
 import { createId } from '../lib/ids'
+import { PlatformHttpProxyError } from '../lib/platform'
 import { elapsedMs, nowIso } from '../lib/time'
 import { getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds, normalizeRetryCount } from '../shared/image-options'
 import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageHistoryItem } from '../shared/types'
@@ -191,8 +192,12 @@ export class ImageService {
           retryFailures: {
             ...(nextRun?.retryFailures || {}),
             [requestIndex]: {
-              errorMessage: error instanceof Error ? error.message : '图片生成失败。',
-              errorDetails: createErrorDetails({ ...input, model }, 'retry', { retryAttempt, requestIndex, error: serializeError(error) }),
+              errorMessage: getGenerationErrorMessage(error),
+              errorDetails: createErrorDetails({ ...input, model }, getFailureStage(error, 'retry'), {
+                retryAttempt,
+                requestIndex,
+                error: getFailureDetails(error)
+              }),
               createdAt: nowIso()
             }
           }
@@ -237,10 +242,10 @@ export class ImageService {
   }
 
   private async createFailureItem(input: GenerateImageInput, run: GenerationRun, model: string, requestIndex: number, retryAttempt: number, error: unknown, durationMs: number): Promise<ImageHistoryItem> {
-    const errorMessage = error instanceof Error ? error.message : '图片生成失败。'
-    const details = error instanceof ProviderHttpError ? error.details : serializeError(error)
+    const errorMessage = getGenerationErrorMessage(error)
+    const details = getFailureDetails(error)
     const conversation = await this.database.getConversation(input.conversationId)
-    const errorDetails = conversation?.keepFailureDetails === false ? null : createErrorDetails({ ...input, model }, 'request-failed', { requestIndex, retryAttempt, details })
+    const errorDetails = conversation?.keepFailureDetails === false ? null : createErrorDetails({ ...input, model }, getFailureStage(error, 'request-failed'), { requestIndex, retryAttempt, details })
     return this.database.insertHistory({
       id: createId('history'),
       conversationId: input.conversationId,
@@ -290,4 +295,31 @@ function imageDataToDataUrl(image: ImageApiData, outputFormat: string): string |
 function estimateImageBytes(image: ImageApiData): number | null {
   if (!image.b64_json) return null
   return Math.floor((image.b64_json.length * 3) / 4)
+}
+
+function getGenerationErrorMessage(error: unknown): string {
+  if (error instanceof PlatformHttpProxyError) {
+    return isUnconfirmedTransportError(error) ? `响应未确认：${error.message}` : error.message
+  }
+  return error instanceof Error ? error.message : '图片生成失败。'
+}
+
+function getFailureStage(error: unknown, fallback: string): string {
+  if (error instanceof PlatformHttpProxyError) return isUnconfirmedTransportError(error) ? 'transport' : 'configuration'
+  if (error instanceof ProviderHttpError) return 'http'
+  if (error instanceof DOMException && error.name === 'TimeoutError') return 'timeout'
+  return fallback
+}
+
+function getFailureDetails(error: unknown): Record<string, unknown> {
+  if (error instanceof ProviderHttpError) return error.details
+  if (error instanceof PlatformHttpProxyError) return {
+    ...error.details,
+    note: '上游可能已收到请求并完成生成，但客户端没有收到完整响应。请在服务端日志或历史结果中复核。'
+  }
+  return serializeError(error)
+}
+
+function isUnconfirmedTransportError(error: PlatformHttpProxyError): boolean {
+  return error.details.stage !== 'configuration'
 }

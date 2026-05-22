@@ -1,8 +1,9 @@
-use reqwest::Method;
+use reqwest::{Client, Method};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
+    error::Error,
     env, fs,
     io::{Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
@@ -23,6 +24,7 @@ const MAX_CODEX_BRIDGE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 const CODEX_BRIDGE_REQUEST_EVENT: &str = "pixai://codex-bridge/request";
 static KEYRING_READY: OnceLock<bool> = OnceLock::new();
 static CODEX_BRIDGE_STARTED: OnceLock<()> = OnceLock::new();
+static HTTP_PROXY_CLIENT: OnceLock<Client> = OnceLock::new();
 static CODEX_BRIDGE_READY: AtomicBool = AtomicBool::new(false);
 static CODEX_BRIDGE_NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static CODEX_BRIDGE_PENDING: OnceLock<
@@ -207,11 +209,12 @@ async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
         "http" | "https" => {}
         _ => return Err("仅支持 HTTP/HTTPS 接口地址。".to_string()),
     }
+    let request_url = url.as_str().to_string();
     let method = request
         .method
         .parse::<Method>()
         .map_err(|error| format!("请求方法无效：{error}"))?;
-    let client = reqwest::Client::new();
+    let client = http_proxy_client()?;
     let mut builder = client.request(method, url);
     for (name, value) in request.headers {
         builder = builder.header(name, value);
@@ -222,14 +225,58 @@ async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
     let response = builder
         .send()
         .await
-        .map_err(|error| format!("请求接口失败：{error}"))?;
+        .map_err(|error| format_http_proxy_error("send", request_url.as_str(), &error))?;
     let status = response.status();
-    let body = response.text().await.map_err(|error| error.to_string())?;
+    let body = response
+        .text()
+        .await
+        .map_err(|error| format_http_proxy_error("read-body", request_url.as_str(), &error))?;
     Ok(HttpProxyResponse {
         status: status.as_u16(),
         status_text: status.canonical_reason().unwrap_or("").to_string(),
         body,
     })
+}
+
+fn http_proxy_client() -> Result<&'static Client, String> {
+    if let Some(client) = HTTP_PROXY_CLIENT.get() {
+        return Ok(client);
+    }
+    let client = Client::builder()
+        .http1_only()
+        .connect_timeout(Duration::from_secs(30))
+        .pool_max_idle_per_host(0)
+        .build()
+        .map_err(|error| format_http_proxy_error("client-build", "", &error))?;
+    let _ = HTTP_PROXY_CLIENT.set(client);
+    HTTP_PROXY_CLIENT
+        .get()
+        .ok_or_else(|| "无法初始化 HTTP 客户端。".to_string())
+}
+
+fn format_http_proxy_error(stage: &str, url: &str, error: &reqwest::Error) -> String {
+    let chain = error_chain(error);
+    let payload = serde_json::json!({
+        "stage": stage,
+        "message": format!("请求接口失败：{error}"),
+        "url": url,
+        "isTimeout": error.is_timeout(),
+        "isConnect": error.is_connect(),
+        "isRequest": error.is_request(),
+        "isBody": error.is_body(),
+        "sourceChain": chain
+    });
+    serde_json::to_string(&payload).unwrap_or_else(|_| format!("请求接口失败：{error}"))
+}
+
+fn error_chain(error: &dyn Error) -> Vec<String> {
+    let mut sources = Vec::new();
+    let mut current = error.source();
+    while let Some(source) = current {
+        sources.push(source.to_string());
+        current = source.source();
+    }
+    sources
 }
 
 #[tauri::command]
@@ -964,6 +1011,41 @@ mod tests {
 
         assert!(error.contains(".."));
         let _ = fs::remove_dir_all(skills_dir);
+    }
+
+    #[test]
+    fn formats_http_proxy_errors_as_diagnostic_json() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind test port");
+        let url = format!("http://{}", listener.local_addr().expect("test port"));
+        drop(listener);
+        let error = tauri::async_runtime::block_on(async {
+            reqwest::Client::builder()
+                .build()
+                .unwrap()
+                .get(&url)
+                .send()
+                .await
+                .unwrap_err()
+        });
+
+        let formatted = format_http_proxy_error(
+            "send",
+            "https://ai-pixel.online/v1/images/generations",
+            &error,
+        );
+        let payload: Value = serde_json::from_str(&formatted).expect("diagnostic json");
+
+        assert_eq!(payload["stage"], "send");
+        assert_eq!(
+            payload["url"],
+            "https://ai-pixel.online/v1/images/generations"
+        );
+        assert!(payload["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("请求接口失败"));
+        assert!(payload["isRequest"].is_boolean());
+        assert!(payload["sourceChain"].is_array());
     }
 }
 
