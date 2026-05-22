@@ -113,6 +113,36 @@ describe('codex bridge', () => {
     expect(fileResponse.bodyBase64).toBe(btoa('bridge-image'))
   })
 
+  it('returns a preflight error without workspace records when image profile has no API key', async () => {
+    const api = createPixaiApi()
+    const settings = await api.settings.upsertProfile({
+      name: 'No key image',
+      baseUrl: 'http://127.0.0.1:37123',
+      enabledUsages: ['image']
+    })
+    const profile = settings.profiles.at(-1)
+    await api.settings.update({ selectedImageProfileId: profile?.id })
+
+    const response = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '桥接生成测试',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const payload = JSON.parse(response.body || '{}')
+    const conversations = await api.conversation.list()
+
+    expect(response.status).toBe(400)
+    expect(payload.error).toBe('API Key 尚未配置。')
+    expect(await api.conversation.runs(conversations[0].id)).toHaveLength(0)
+    expect(await api.history.list()).toHaveLength(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('routes prompt assistant endpoints through the selected prompt provider', async () => {
     const api = createPixaiApi()
     const settings = await api.settings.upsertProfile({

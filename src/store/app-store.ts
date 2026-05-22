@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { pixaiApi } from '../services/app-api'
+import { ImageGenerationPreflightError } from '../services/image-service'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
 import { formatDuration } from '../lib/time'
 import type {
@@ -393,7 +394,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
       get().notify(result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`)
     } catch (error) {
-      get().notify(error instanceof Error ? `生成失败：${error.message}` : '生成失败')
+      get().notify(error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `生成失败：${error.message}` : '生成失败')
     } finally {
       const endedGenerationState = endConversationGeneration(conversation.id, {
         generatingByConversation: get().generatingByConversation,

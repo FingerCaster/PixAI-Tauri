@@ -3,6 +3,7 @@ import { DEFAULT_IMAGE_MAX_RETRIES, DEFAULT_MODEL, getDefaultImageSize, isImageS
 import { isTauriRuntime, markCodexBridgeReady, readLocalImageFile, respondCodexBridge, writeDataUrlFile } from '../lib/platform'
 import type { PixaiApi } from './app-api'
 import { pixaiApi } from './app-api'
+import { ImageGenerationPreflightError } from './image-service'
 import type {
   CodexBridgeRequest,
   CodexBridgeResponse,
@@ -68,7 +69,7 @@ export async function handleCodexBridgeRequest(api: PixaiApi, request: CodexBrid
     })
     return toBridgeResponse(request.id, result)
   } catch (error) {
-    const status = error instanceof BridgeHttpError ? error.status : 500
+    const status = error instanceof BridgeHttpError ? error.status : error instanceof ImageGenerationPreflightError ? 400 : 500
     return toBridgeResponse(request.id, {
       status,
       body: {

@@ -1,9 +1,13 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { pixaiApi } from '../services/app-api'
 import type { GenerateImageResult, GenerationRun } from '../shared/types'
 import { useAppStore } from './app-store'
 
 describe('useAppStore', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('loads settings, templates, and creates an initial conversation', async () => {
     await useAppStore.getState().load()
     const state = useAppStore.getState()
@@ -82,5 +86,17 @@ describe('useAppStore', () => {
       generating: false,
       activeCount: 0
     })
+  })
+
+  it('shows preflight generation errors as direct toast messages', async () => {
+    await useAppStore.getState().load()
+    await useAppStore.getState().updateActiveConversation({ draftPrompt: '一座玻璃城市' })
+    const conversation = useAppStore.getState().conversations[0]
+
+    await useAppStore.getState().generate()
+
+    expect(useAppStore.getState().toast).toBe('API Key 尚未配置。')
+    expect(useAppStore.getState().runsByConversation[conversation.id] || []).toHaveLength(0)
+    expect(await pixaiApi.history.list()).toHaveLength(0)
   })
 })

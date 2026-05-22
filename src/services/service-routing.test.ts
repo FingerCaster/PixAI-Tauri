@@ -86,6 +86,34 @@ describe('service routing', () => {
     expect(history).toHaveLength(0)
   })
 
+  it('shows missing API keys as preflight errors without creating workspace records', async () => {
+    const providers = new ProviderSettingsStore()
+    const settings = await providers.upsertProfile({
+      name: 'Image provider',
+      baseUrl: 'http://127.0.0.1:37123',
+      enabledUsages: ['image']
+    })
+    const imageProfile = settings.profiles.at(-1)
+    await providers.update({ selectedImageProfileId: imageProfile?.id })
+
+    const database = new AppDatabase()
+    const conversation = await database.createConversation()
+    const imageService = new ImageService(database, providers)
+
+    await expect(imageService.generate({
+      conversationId: conversation.id,
+      prompt: 'a luminous city',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'high',
+      n: 1
+    })).rejects.toThrow('API Key 尚未配置。')
+
+    await expect(database.listRuns(conversation.id)).resolves.toHaveLength(0)
+    await expect(database.listHistory()).resolves.toHaveLength(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('normalizes incompatible generation sizes to the selected ratio presets', async () => {
     const providers = new ProviderSettingsStore()
     const settings = await providers.upsertProfile({

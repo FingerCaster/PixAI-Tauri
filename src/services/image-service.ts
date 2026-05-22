@@ -31,6 +31,13 @@ export class ImageService {
     const referenceImages = (conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id))
     const generationMode: GenerationMode = referenceImages.length > 0 ? 'image-to-image' : 'text-to-image'
     const maxRetries = normalizeRetryCount(input.maxRetries)
+
+    if (!prompt) throw new ImageGenerationPreflightError('请先输入提示词。', 'validation', { reason: 'Prompt is required.' })
+    if (!runtimeProfile.apiKey) throw new ImageGenerationPreflightError('API Key 尚未配置。', 'configuration', { profileId: runtimeProfile.id })
+    if (generationMode === 'image-to-image' && !adapter.capabilities.includes('image-to-image')) {
+      throw new ImageGenerationPreflightError('当前服务不支持图生图。', 'capability', { profileId: runtimeProfile.id })
+    }
+
     const createdAt = nowIso()
     const run = await this.database.insertRun({
       id: createId('run'),
@@ -52,12 +59,6 @@ export class ImageService {
       referenceImages,
       createdAt
     })
-
-    if (!prompt) return this.saveFailure(input, run, model, '请先输入提示词。', 'validation', { reason: 'Prompt is required.' }, createdAt, elapsedMs(startedAt))
-    if (!runtimeProfile.apiKey) return this.saveFailure(input, run, model, 'API Key 尚未配置。', 'configuration', { profileId: runtimeProfile.id }, createdAt, elapsedMs(startedAt))
-    if (generationMode === 'image-to-image' && !adapter.capabilities.includes('image-to-image')) {
-      return this.saveFailure(input, run, model, '当前服务不支持图生图。', 'capability', { profileId: runtimeProfile.id }, createdAt, elapsedMs(startedAt))
-    }
 
     const count = Math.min(10, Math.max(1, input.n || 1))
     const controllers = Array.from({ length: count }, () => new AbortController())
@@ -212,35 +213,6 @@ export class ImageService {
     throw new Error('图片生成重试流程异常退出。')
   }
 
-  private async saveFailure(input: GenerateImageInput, run: GenerationRun, model: string, errorMessage: string, stage: string, details: Record<string, unknown>, createdAt: string, durationMs: number): Promise<GenerateImageResult> {
-    const conversation = await this.database.getConversation(input.conversationId)
-    const errorDetails = conversation?.keepFailureDetails === false ? null : createErrorDetails({ ...input, model }, stage, details)
-    const item = await this.database.insertHistory({
-      id: createId('history'),
-      conversationId: input.conversationId,
-      runId: run.id,
-      prompt: input.prompt.trim(),
-      model,
-      ratio: input.ratio,
-      size: input.size || getDefaultImageSize(input.ratio),
-      quality: input.quality,
-      requestIndex: null,
-      durationMs,
-      dataUrl: null,
-      fileSizeBytes: null,
-      status: 'failed',
-      errorMessage,
-      errorDetails,
-      retryAttempt: 0,
-      globalVisible: conversation?.autoSaveHistory !== false,
-      generationMode: run.generationMode,
-      referenceImages: run.referenceImages,
-      createdAt
-    })
-    const failed = await this.database.updateRun(run.id, { status: 'failed', errorMessage, errorDetails, durationMs })
-    return { run: { ...failed, items: [item] }, items: [item], errorMessage, errorDetails: errorDetails || undefined }
-  }
-
   private async createFailureItem(input: GenerateImageInput, run: GenerationRun, model: string, requestIndex: number, retryAttempt: number, error: unknown, durationMs: number): Promise<ImageHistoryItem> {
     const errorMessage = getGenerationErrorMessage(error)
     const details = getFailureDetails(error)
@@ -268,6 +240,17 @@ export class ImageService {
       referenceImages: run.referenceImages,
       createdAt: nowIso()
     })
+  }
+}
+
+export class ImageGenerationPreflightError extends Error {
+  constructor(
+    message: string,
+    readonly stage: 'validation' | 'configuration' | 'capability',
+    readonly details: Record<string, unknown>
+  ) {
+    super(message)
+    this.name = 'ImageGenerationPreflightError'
   }
 }
 
