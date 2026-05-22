@@ -242,6 +242,7 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
 }
 
 async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, request: ImageGenerationRequest, timeoutMs: number): Promise<ResponsesImageStreamResult> {
+  const failOnEmptyImages = request.input.conversationId !== 'connection-test'
   const endpoint = buildResponsesEndpoint(profile.baseUrl)
   const input = request.input
   const hasReferences = request.referenceImages.length > 0
@@ -283,6 +284,14 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
   const result = extractResponsesImageStreamResult(text)
   if (result.images.length > 0) return result
   const fallbackImages = extractResponsesImages(payload)
+  if (fallbackImages.length === 0 && failOnEmptyImages) {
+    throw new ProviderHttpError('Responses 图像工具没有返回可识别的图片。', {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+      responseSummary: summarizeResponsesImageResponse(text, payload, result.eventCount)
+    })
+  }
   return {
     images: fallbackImages,
     eventCount: result.eventCount
@@ -412,6 +421,30 @@ function extractResponsesImages(payload: ResponsesApiPayload): ImageApiData[] {
   return dedupeImages(images)
 }
 
+function summarizeResponsesImageResponse(text: string, payload: ResponsesApiPayload, eventCount: number): Record<string, unknown> {
+  const payloads = parseSsePayloads(text)
+  return {
+    eventCount,
+    payloadCount: payloads.length,
+    payloadSamples: payloads.slice(-6).map(summarizeUnknown),
+    finalPayload: summarizeUnknown(payload)
+  }
+}
+
+function summarizeUnknown(value: unknown, depth = 0): unknown {
+  if (typeof value === 'string') {
+    return isLikelyBase64Image(value) ? `[base64:${value.length}]` : value.slice(0, 240)
+  }
+  if (!isRecord(value)) {
+    if (Array.isArray(value)) return value.slice(0, 6).map((item) => summarizeUnknown(item, depth + 1))
+    return value
+  }
+  if (depth >= 4) return `[object:${Object.keys(value).join(',')}]`
+  return Object.fromEntries(
+    Object.entries(value).slice(0, 20).map(([key, nested]) => [key, summarizeUnknown(nested, depth + 1)])
+  )
+}
+
 function extractImageApiData(value: unknown): ImageApiData[] {
   if (typeof value === 'string') return isLikelyBase64Image(value) ? [{ b64_json: value }] : []
   if (!isRecord(value)) return []
@@ -424,7 +457,7 @@ function extractImageApiData(value: unknown): ImageApiData[] {
     const candidate = value[key]
     if (typeof candidate === 'string' && candidate) images.push({ url: candidate })
   }
-  for (const key of ['image', 'data'] as const) {
+  for (const key of ['image', 'data', 'item', 'response'] as const) {
     images.push(...extractImageApiData(value[key]))
   }
   for (const key of ['images', 'output', 'content'] as const) {

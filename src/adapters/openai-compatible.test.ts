@@ -166,6 +166,42 @@ describe('openAiCompatibleAdapter', () => {
     expect(images[0].b64_json).toBe('d'.repeat(120))
   })
 
+  it('extracts responses image results nested inside output item stream events', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: response.output_item.done',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.done',
+          item: {
+            type: 'image_generation_call',
+            status: 'completed',
+            result: 'e'.repeat(120)
+          }
+        })}`,
+        '',
+        'event: response.completed',
+        'data: {"type":"response.completed"}',
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    const images = await openAiCompatibleAdapter.generateImage({ ...profile, imageGenerationEndpoint: 'responses-api' }, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true
+      },
+      referenceImages: []
+    })
+
+    expect(images[0].b64_json).toBe('e'.repeat(120))
+  })
+
   it('detects responses image-generation support through stream output', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
       [
