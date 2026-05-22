@@ -1,10 +1,15 @@
+import { useState } from 'react'
 import { Copy, Download, Edit3, Heart, ImageDown, Trash2 } from 'lucide-react'
 import type { ImageHistoryItem } from '../../shared/types'
 import { formatDuration } from '../../lib/time'
 import { useAppStore } from '../../store/app-store'
+import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
+import { ErrorDetailsModal } from './ErrorDetailsModal'
 
 export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const { addHistoryAsReference, deleteHistory, notify, toggleFavorite } = useAppStore()
+  const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
+  const showFailedRetryChip = shouldShowFailedImageRetryChip(item.retryAttempt)
   const copyPrompt = async () => {
     await navigator.clipboard.writeText(item.prompt)
     notify('提示词已复制')
@@ -34,13 +39,49 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
     notify('图片下载已开始')
   }
 
+  if (item.status === 'failed') {
+    return (
+      <article
+        className="image-tile failed error-tile"
+        role="button"
+        tabIndex={0}
+        title="点击查看错误详情"
+        onClick={() => setErrorDetailsOpen(true)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return
+          event.preventDefault()
+          setErrorDetailsOpen(true)
+        }}
+      >
+        <div className="image-frame fail-content">
+          <strong>{item.errorMessage || '生成失败'}</strong>
+          {showFailedRetryChip ? <span className="retry-chip">{`重试第 ${item.retryAttempt} 次`}</span> : null}
+          <span>点击查看错误详情</span>
+        </div>
+        <div className="tile-actions">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void deleteHistory(item.id)
+            }}
+            title="删除"
+          >
+            <Trash2 size={15} />
+          </button>
+        </div>
+        {errorDetailsOpen ? <ErrorDetailsModal item={item} onClose={() => setErrorDetailsOpen(false)} /> : null}
+      </article>
+    )
+  }
+
   return (
-    <article className={item.status === 'failed' ? 'image-tile failed' : 'image-tile'}>
+    <article className="image-tile">
       <div className="image-frame">
-        {item.dataUrl ? <img src={item.dataUrl} alt={item.prompt} /> : <pre>{item.errorDetails || item.errorMessage}</pre>}
+        {item.dataUrl ? <img src={item.dataUrl} alt={item.prompt} /> : null}
       </div>
       <div className="tile-body">
-        <strong>{item.status === 'failed' ? item.errorMessage || '生成失败' : item.prompt}</strong>
+        <strong>{item.prompt}</strong>
         <span>
           {item.model} · {item.size || item.ratio}
           {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}

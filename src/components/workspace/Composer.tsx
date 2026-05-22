@@ -4,7 +4,7 @@ import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 
-export function Composer({ conversation }: { conversation: Conversation }) {
+export function Composer({ conversation, generating }: { conversation: Conversation; generating: boolean }) {
   const {
     enrichPrompt,
     generate,
@@ -78,9 +78,9 @@ export function Composer({ conversation }: { conversation: Conversation }) {
           <div className="hint">
             {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
           </div>
-          <button className="generate-button" type="button" onClick={() => void generate()}>
-            <WandSparkles size={16} />
-            生成图片
+          <button className="generate-button" type="button" onClick={() => void generate()} disabled={!conversation.draftPrompt.trim()}>
+            {generating ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+            {generating ? '继续生成' : '生成图片'}
           </button>
         </div>
       </div>

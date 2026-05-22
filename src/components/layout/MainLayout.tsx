@@ -16,7 +16,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
     settings,
     toggleSettings,
     toggleTheme,
-    view
+    view,
+    generatingByConversation
   } = useAppStore()
   const imageProfile = settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId)
   const endpoint = imageProfile ? buildImageEndpoint(imageProfile.baseUrl) : ''
@@ -62,39 +63,45 @@ export function MainLayout({ children }: { children: ReactNode }) {
         <aside className="sidebar">
         <div className="section-title">会话</div>
         <div className="session-list">
-          {conversations.map((conversation) => (
-            <button
-              key={conversation.id}
-              className={conversation.id === activeConversationId ? 'session active' : 'session'}
-              type="button"
-              onClick={() => void setActiveConversation(conversation.id)}
-            >
-              <span className="session-text">
-                <strong>{conversation.title}</strong>
-                <span>{conversation.draftPrompt || `${conversation.ratio} · ${IMAGE_QUALITY_LABELS[conversation.quality]}`}</span>
-              </span>
-              {conversations.length > 1 ? (
-                <span
-                  className="session-delete"
-                  role="button"
-                  tabIndex={0}
-                  title="删除会话"
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void deleteConversation(conversation.id)
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Enter' && event.key !== ' ') return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    void deleteConversation(conversation.id)
-                  }}
-                >
-                  <Trash2 size={14} />
+          {conversations.map((conversation) => {
+            const generating = Boolean(generatingByConversation[conversation.id])
+            return (
+              <button
+                key={conversation.id}
+                className={`${conversation.id === activeConversationId ? 'session active' : 'session'}${generating ? ' generating' : ''}`}
+                type="button"
+                onClick={() => void setActiveConversation(conversation.id)}
+              >
+                <span className="session-text">
+                  <strong>{conversation.title}</strong>
+                  <span>{conversation.draftPrompt || `${conversation.ratio} · ${IMAGE_QUALITY_LABELS[conversation.quality]}`}</span>
                 </span>
-              ) : null}
-            </button>
-          ))}
+                <span className="session-loading-slot">
+                  {generating ? <span className="session-loading-indicator" aria-label="生成中" /> : null}
+                </span>
+                {conversations.length > 1 ? (
+                  <span
+                    className="session-delete"
+                    role="button"
+                    tabIndex={0}
+                    title="删除会话"
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void deleteConversation(conversation.id)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return
+                      event.preventDefault()
+                      event.stopPropagation()
+                      void deleteConversation(conversation.id)
+                    }}
+                  >
+                    <Trash2 size={14} />
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
         </div>
         <div className="sidebar-footer">
           <div className="version-line">

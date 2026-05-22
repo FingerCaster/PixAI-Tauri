@@ -2,8 +2,8 @@ export function nowIso(): string {
   return new Date().toISOString()
 }
 
-export function elapsedMs(startedAt: number): number {
-  return Math.max(0, Date.now() - startedAt)
+export function elapsedMs(startedAt: number, nowMs = Date.now()): number {
+  return Math.max(0, nowMs - startedAt)
 }
 
 export function formatDuration(ms: number): string {

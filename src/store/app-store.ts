@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { pixaiApi } from '../services/app-api'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
+import { formatDuration } from '../lib/time'
 import type {
   CodexSkillStatus,
   Conversation,
@@ -16,6 +17,13 @@ import type {
   ProviderSettings,
   ProviderSettingsUpdate
 } from '../shared/types'
+import {
+  beginConversationGeneration,
+  endConversationGeneration,
+  getConversationGenerationState as getConversationGenerationStateForId,
+  markGenerationRequestRemoved,
+  pruneRemovedGenerationIndexesByRunId
+} from './generation-state'
 
 type View = 'workspace' | 'gallery' | 'prompts'
 
@@ -34,8 +42,13 @@ type AppState = {
   query: string
   favoritesOnly: boolean
   loading: boolean
+  generationClockMs: number
+  generatingByConversation: Record<string, number>
+  generationStartedAtByConversation: Record<string, number>
+  removedGenerationIndexesByRunId: Record<string, number[]>
   promptAssistantRunning: { inspire: boolean; enrich: boolean }
   toast: string | null
+  getConversationGenerationState: (conversationId: string) => { generating: boolean; startedAt: number | null; activeCount: number }
   load: () => Promise<void>
   setView: (view: View) => void
   toggleSettings: () => void
@@ -63,6 +76,7 @@ type AppState = {
   refreshConversationResults: (conversationId: string) => Promise<void>
   reloadHistory: (options?: Partial<HistoryListOptions>) => Promise<void>
   deleteHistory: (id: string) => Promise<void>
+  deleteHistoryItems: (ids: string[]) => Promise<void>
   toggleFavorite: (item: ImageHistoryItem) => Promise<void>
   reuseHistory: (item: ImageHistoryItem) => Promise<void>
   loadTemplates: () => Promise<void>
@@ -70,6 +84,26 @@ type AppState = {
   deleteTemplate: (id: string) => Promise<void>
   applyPromptTemplate: (template: PromptTemplate) => Promise<void>
   notify: (message: string | null) => void
+}
+
+let generationClockTimer: number | null = null
+
+function startGenerationClock(): void {
+  if (generationClockTimer != null || typeof window === 'undefined') return
+  generationClockTimer = window.setInterval(() => {
+    useAppStore.setState({ generationClockMs: Date.now() })
+  }, 1000)
+}
+
+function stopGenerationClock(): void {
+  if (generationClockTimer == null) return
+  window.clearInterval(generationClockTimer)
+  generationClockTimer = null
+}
+
+function collectRunningRunIds(runsByConversation: Record<string, GenerationRun[]>): string[] {
+  return Object.values(runsByConversation)
+    .flatMap((runs) => runs.filter((run) => run.status === 'running').map((run) => run.id))
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -87,8 +121,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   query: '',
   favoritesOnly: false,
   loading: false,
+  generationClockMs: Date.now(),
+  generatingByConversation: {},
+  generationStartedAtByConversation: {},
+  removedGenerationIndexesByRunId: {},
   promptAssistantRunning: { inspire: false, enrich: false },
   toast: null,
+  getConversationGenerationState: (conversationId) =>
+    getConversationGenerationStateForId(conversationId, get().generatingByConversation, get().generationStartedAtByConversation),
   load: async () => {
     set({ loading: true })
     const settings = await pixaiApi.settings.get()
@@ -290,13 +330,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   generate: async () => {
-    const conversation = getActiveConversation(get())
+    const state = get()
+    const conversation = getActiveConversation(state)
     if (!conversation) return
+    const generationStartedAt = Date.now()
+    set({ generationClockMs: generationStartedAt })
+    startGenerationClock()
     const prompt = conversation.draftPrompt.trim()
     const input: GenerateImageInput = {
       conversationId: conversation.id,
       prompt,
-      model: conversation.model || getSelectedImageProfile(get().settings)?.defaultImageModel || DEFAULT_MODEL,
+      model: conversation.model || getSelectedImageProfile(state.settings)?.defaultImageModel || DEFAULT_MODEL,
       ratio: conversation.ratio,
       size: isImageSizeCompatible(conversation.ratio, conversation.size) ? conversation.size : getDefaultImageSize(conversation.ratio),
       quality: conversation.quality,
@@ -312,25 +356,94 @@ export const useAppStore = create<AppState>((set, get) => ({
       generationTimeoutSeconds: normalizeImageGenerationTimeoutSeconds(conversation.generationTimeoutSeconds),
       referenceImageIds: conversation.referenceImages.map((reference) => reference.id)
     }
-    if (conversation.title === '新会话' && prompt) {
-      await get().updateActiveConversation({ title: prompt.length > 18 ? `${prompt.slice(0, 18)}...` : prompt })
-    }
+    const nextGenerationState = beginConversationGeneration(conversation.id, {
+      generatingByConversation: state.generatingByConversation,
+      startedAtByConversation: state.generationStartedAtByConversation,
+      removedIndexesByRunId: state.removedGenerationIndexesByRunId
+    }, generationStartedAt)
+    set({
+      generatingByConversation: nextGenerationState.generatingByConversation,
+      generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
+      removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+    })
+    const titlePatch = conversation.title === '新会话' && prompt ? { title: prompt.length > 18 ? `${prompt.slice(0, 18)}...` : prompt } : null
     try {
-      const result = await pixaiApi.image.generate(input)
-      await get().refreshConversationResults(conversation.id)
-      await get().reloadHistory()
-      get().notify(result.errorMessage ? `生成失败：${result.errorMessage}` : '生成完成')
+      if (titlePatch) await get().updateActiveConversation(titlePatch)
+      const resultPromise = pixaiApi.image.generate(input)
+      void get().refreshConversationResults(conversation.id)
+      const result = await resultPromise
+      const runs = await pixaiApi.conversation.runs(conversation.id)
+      const history = await pixaiApi.history.list({
+        query: state.query,
+        favoritesOnly: state.favoritesOnly,
+        sort: 'newest'
+      })
+      const runsByConversation = { ...get().runsByConversation, [conversation.id]: runs }
+      const runningRunIds = collectRunningRunIds(runsByConversation)
+      const prunedGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
+        generatingByConversation: get().generatingByConversation,
+        startedAtByConversation: get().generationStartedAtByConversation,
+        removedIndexesByRunId: get().removedGenerationIndexesByRunId
+      })
+      set({
+        runsByConversation,
+        history,
+        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
+      })
+      const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
+      get().notify(result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`)
     } catch (error) {
       get().notify(error instanceof Error ? `生成失败：${error.message}` : '生成失败')
+    } finally {
+      const endedGenerationState = endConversationGeneration(conversation.id, {
+        generatingByConversation: get().generatingByConversation,
+        startedAtByConversation: get().generationStartedAtByConversation,
+        removedIndexesByRunId: get().removedGenerationIndexesByRunId
+      })
+      set({
+        generatingByConversation: endedGenerationState.generatingByConversation,
+        generationStartedAtByConversation: endedGenerationState.startedAtByConversation,
+        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId
+      })
+      if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
     }
   },
   cancelGeneration: async (runId, requestIndex) => {
     if (!runId) return
+    if (typeof requestIndex === 'number') {
+      const nextGenerationState = markGenerationRequestRemoved(runId, requestIndex, {
+        generatingByConversation: get().generatingByConversation,
+        startedAtByConversation: get().generationStartedAtByConversation,
+        removedIndexesByRunId: get().removedGenerationIndexesByRunId
+      })
+      set({
+        generatingByConversation: nextGenerationState.generatingByConversation,
+        generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
+        removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+      })
+    }
     await pixaiApi.image.cancel(runId, requestIndex)
   },
   refreshConversationResults: async (conversationId) => {
+    const state = get()
     const runs = await pixaiApi.conversation.runs(conversationId)
-    set({ runsByConversation: { ...get().runsByConversation, [conversationId]: runs } })
+    const history = await pixaiApi.history.list({
+      query: state.query,
+      favoritesOnly: state.favoritesOnly,
+      sort: 'newest'
+    })
+    const runsByConversation = { ...get().runsByConversation, [conversationId]: runs }
+    const runningRunIds = collectRunningRunIds(runsByConversation)
+    const nextGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
+      generatingByConversation: get().generatingByConversation,
+      startedAtByConversation: get().generationStartedAtByConversation,
+      removedIndexesByRunId: get().removedGenerationIndexesByRunId
+    })
+    set({
+      runsByConversation,
+      history,
+      removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+    })
   },
   reloadHistory: async (options = {}) => {
     const state = get()
@@ -342,9 +455,84 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ history })
   },
   deleteHistory: async (id) => {
+    const item = findHistoryItem(get(), id)
+    if (item?.conversationId && item.runId && typeof item.requestIndex === 'number') {
+      const activeRun = get().runsByConversation[item.conversationId]?.find((run) => run.id === item.runId && run.status === 'running')
+      if (activeRun) {
+        const nextGenerationState = markGenerationRequestRemoved(item.runId, item.requestIndex, {
+          generatingByConversation: get().generatingByConversation,
+          startedAtByConversation: get().generationStartedAtByConversation,
+          removedIndexesByRunId: get().removedGenerationIndexesByRunId
+        })
+        set({
+          generatingByConversation: nextGenerationState.generatingByConversation,
+          generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
+          removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+        })
+      }
+    }
     await pixaiApi.history.delete(id)
     await get().reloadHistory()
+    if (item?.conversationId) {
+      const runs = await pixaiApi.conversation.runs(item.conversationId)
+      set({ runsByConversation: { ...get().runsByConversation, [item.conversationId]: runs } })
+    }
     get().notify('已删除历史项')
+  },
+  deleteHistoryItems: async (ids) => {
+    const selectedIds = new Set(ids)
+    if (selectedIds.size === 0) return
+    const state = get()
+    const affectedConversationIds = new Set(
+      Array.from(selectedIds)
+        .map((id) => findHistoryItem(state, id))
+        .filter((entry): entry is ImageHistoryItem => Boolean(entry?.conversationId))
+        .map((entry) => entry.conversationId as string)
+    )
+    const itemsById = new Map(
+      Array.from(selectedIds)
+        .map((id) => findHistoryItem(state, id))
+        .filter((entry): entry is ImageHistoryItem => Boolean(entry))
+        .map((entry) => [entry.id, entry])
+    )
+    const selectedHistoryItems = Array.from(itemsById.values())
+    const activeItems = selectedHistoryItems.filter((entry) => entry.conversationId && entry.runId && typeof entry.requestIndex === 'number')
+    let nextRemovedIndexesByRunId = { ...state.removedGenerationIndexesByRunId }
+    let nextGeneratingByConversation = { ...state.generatingByConversation }
+    let nextStartedAtByConversation = { ...state.generationStartedAtByConversation }
+    let removedStateChanged = false
+
+    for (const item of activeItems) {
+      const activeRun = state.runsByConversation[item.conversationId as string]?.find((run) => run.id === item.runId && run.status === 'running')
+      if (activeRun) {
+        const nextGenerationState = markGenerationRequestRemoved(item.runId as string, item.requestIndex as number, {
+          generatingByConversation: nextGeneratingByConversation,
+          startedAtByConversation: nextStartedAtByConversation,
+          removedIndexesByRunId: nextRemovedIndexesByRunId
+        })
+        nextGeneratingByConversation = nextGenerationState.generatingByConversation
+        nextStartedAtByConversation = nextGenerationState.startedAtByConversation
+        nextRemovedIndexesByRunId = nextGenerationState.removedIndexesByRunId
+        removedStateChanged = true
+      }
+    }
+    if (removedStateChanged) {
+      set({
+        generatingByConversation: nextGeneratingByConversation,
+        generationStartedAtByConversation: nextStartedAtByConversation,
+        removedGenerationIndexesByRunId: nextRemovedIndexesByRunId
+      })
+    }
+    for (const id of selectedIds) {
+      await pixaiApi.history.delete(id)
+    }
+    await get().reloadHistory()
+    const runsByConversation = { ...get().runsByConversation }
+    for (const conversationId of affectedConversationIds) {
+      runsByConversation[conversationId] = await pixaiApi.conversation.runs(conversationId)
+    }
+    set({ runsByConversation })
+    get().notify(`已删除 ${selectedIds.size} 条历史项`)
   },
   toggleFavorite: async (item) => {
     await pixaiApi.history.favorite(item.id, !item.favorite)
@@ -408,6 +596,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 function getActiveConversation(state: AppState): Conversation | null {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || null
+}
+
+function findHistoryItem(state: AppState, id: string): ImageHistoryItem | null {
+  return state.history.find((item) => item.id === id)
+    || Object.values(state.runsByConversation).flatMap((runs) => runs.flatMap((run) => run.items)).find((item) => item.id === id)
+    || null
 }
 
 function getSelectedImageProfile(settings: ProviderSettings | null) {
