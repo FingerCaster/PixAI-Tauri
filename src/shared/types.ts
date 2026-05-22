@@ -9,6 +9,7 @@ export type GenerationRunStatus = 'running' | ImageStatus
 export type GenerationMode = 'text-to-image' | 'image-to-image'
 export type ProviderType = 'openai-compatible'
 export type ProviderUsage = 'image' | 'prompt'
+export type ImageGenerationEndpoint = 'images-api' | 'responses-api'
 export type AdapterCapability =
   | 'text-to-image'
   | 'image-to-image'
@@ -33,6 +34,7 @@ export type ProviderProfile = {
   baseUrl: string
   defaultImageModel: string
   defaultPromptModel: string
+  imageGenerationEndpoint: ImageGenerationEndpoint
   enabledUsages: ProviderUsage[]
   capabilities: AdapterCapability[]
   apiKeyStored: boolean
@@ -51,6 +53,7 @@ export type ProviderProfileInput = Partial<
     | 'baseUrl'
     | 'defaultImageModel'
     | 'defaultPromptModel'
+    | 'imageGenerationEndpoint'
     | 'enabledUsages'
     | 'capabilities'
   >
@@ -74,6 +77,7 @@ export type LegacyProviderSettingsUpdate = ProviderSettingsUpdate & {
   apiKey?: string | null
   defaultModel?: string
   promptModel?: string
+  imageGenerationEndpoint?: ImageGenerationEndpoint
 }
 
 export type ConnectionTestResult = {

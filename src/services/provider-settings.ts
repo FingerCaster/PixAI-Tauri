@@ -10,7 +10,7 @@ import {
 } from '../lib/platform'
 import { nowIso } from '../lib/time'
 import { DEFAULT_MODEL, DEFAULT_PROMPT_MODEL, trimBaseUrl } from '../shared/image-options'
-import type { ConnectionTestResult, ProviderProfile, ProviderProfileInput, ProviderSettings, ProviderSettingsUpdate, ProviderUsage } from '../shared/types'
+import type { ConnectionTestResult, ImageGenerationEndpoint, ProviderProfile, ProviderProfileInput, ProviderSettings, ProviderSettingsUpdate, ProviderUsage } from '../shared/types'
 
 const STATE_NAME = 'provider-settings'
 const LEGACY_DEFAULT_PROMPT_MODELS = new Set(['gpt-4.1-mini'])
@@ -75,6 +75,7 @@ export class ProviderSettingsStore {
       baseUrl: trimBaseUrl(input.baseUrl || existing?.baseUrl || 'https://api.openai.com'),
       defaultImageModel: input.defaultImageModel?.trim() || existing?.defaultImageModel || DEFAULT_MODEL,
       defaultPromptModel: normalizePromptModel(input.defaultPromptModel?.trim() || existing?.defaultPromptModel),
+      imageGenerationEndpoint: normalizeImageGenerationEndpoint(input.imageGenerationEndpoint || existing?.imageGenerationEndpoint),
       enabledUsages: input.enabledUsages || existing?.enabledUsages || ['image', 'prompt'],
       capabilities: input.capabilities || existing?.capabilities || adapter.capabilities,
       apiKeyStored,
@@ -157,6 +158,7 @@ function createDefaultSettings(): ProviderSettings {
     baseUrl: 'http://127.0.0.1:37123',
     defaultImageModel: DEFAULT_MODEL,
     defaultPromptModel: DEFAULT_PROMPT_MODEL,
+    imageGenerationEndpoint: 'images-api',
     enabledUsages: ['image', 'prompt'],
     capabilities: adapter.capabilities,
     apiKeyStored: false,
@@ -183,8 +185,13 @@ function normalizeSettings(settings: ProviderSettings, fallback?: ProviderSettin
 function normalizeProfile(profile: ProviderProfile): ProviderProfile {
   return {
     ...profile,
+    imageGenerationEndpoint: normalizeImageGenerationEndpoint(profile.imageGenerationEndpoint),
     defaultPromptModel: normalizePromptModel(profile.defaultPromptModel)
   }
+}
+
+function normalizeImageGenerationEndpoint(endpoint?: ImageGenerationEndpoint): ImageGenerationEndpoint {
+  return endpoint === 'responses-api' ? 'responses-api' : 'images-api'
 }
 
 function normalizePromptModel(model?: string): string {

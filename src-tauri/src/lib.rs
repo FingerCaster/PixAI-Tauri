@@ -50,6 +50,35 @@ struct HttpProxyRequest {
     method: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    #[serde(rename = "timeoutMs")]
+    timeout_ms: Option<u64>,
+    #[serde(rename = "firstByteTimeoutMs")]
+    first_byte_timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct HttpProxyStreamRequest {
+    #[serde(rename = "streamId")]
+    stream_id: String,
+    url: String,
+    method: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+    #[serde(rename = "timeoutMs")]
+    timeout_ms: Option<u64>,
+    #[serde(rename = "firstByteTimeoutMs")]
+    first_byte_timeout_ms: Option<u64>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HttpProxyStreamEvent {
+    stream_id: String,
+    kind: String,
+    status: Option<u16>,
+    status_text: Option<String>,
+    chunk_base64: Option<String>,
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -222,6 +251,10 @@ async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
     if let Some(body) = request.body {
         builder = builder.body(body);
     }
+    let timeout_ms = request.timeout_ms.or(request.first_byte_timeout_ms);
+    if let Some(timeout_ms) = timeout_ms {
+        builder = builder.timeout(Duration::from_millis(timeout_ms.clamp(1_000, 1_800_000)));
+    }
     let response = builder
         .send()
         .await
@@ -236,6 +269,134 @@ async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
         status_text: status.canonical_reason().unwrap_or("").to_string(),
         body,
     })
+}
+
+#[tauri::command]
+async fn http_proxy_stream(app: AppHandle, request: HttpProxyStreamRequest) -> Result<(), String> {
+    let request_url =
+        reqwest::Url::parse(&request.url).map_err(|error| format!("接口地址无效：{error}"))?;
+    match request_url.scheme() {
+        "http" | "https" => {}
+        _ => return Err("仅支持 HTTP/HTTPS 接口地址。".to_string()),
+    }
+    let method = request
+        .method
+        .parse::<Method>()
+        .map_err(|error| format!("请求方法无效：{error}"))?;
+    let url_string = request_url.as_str().to_string();
+    let client = http_proxy_client()?;
+    let mut builder = client.request(method, request_url);
+    for (name, value) in request.headers {
+        builder = builder.header(name, value);
+    }
+    if let Some(body) = request.body {
+        builder = builder.body(body);
+    }
+    if let Some(timeout_ms) = request.timeout_ms {
+        builder = builder.timeout(Duration::from_millis(timeout_ms.clamp(1_000, 1_800_000)));
+    }
+    let response = builder
+        .send()
+        .await
+        .map_err(|error| format_http_proxy_error("send", url_string.as_str(), &error))?;
+    let status = response.status();
+    let status_text = status.canonical_reason().unwrap_or("").to_string();
+    let stream_id = request.stream_id;
+    let first_byte_timeout = Duration::from_millis(
+        request
+            .first_byte_timeout_ms
+            .unwrap_or(20_000)
+            .clamp(1_000, 1_800_000),
+    );
+    let chunk_timeout = Duration::from_millis(
+        request.timeout_ms.unwrap_or(300_000).clamp(1_000, 1_800_000),
+    );
+    let mut saw_chunk = false;
+    let mut response = response;
+
+    loop {
+        let timeout = if saw_chunk {
+            chunk_timeout
+        } else {
+            first_byte_timeout
+        };
+        let chunk = match tokio::time::timeout(timeout, response.chunk()).await {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                emit_http_proxy_stream_error(
+                    &app,
+                    &stream_id,
+                    Some(status.as_u16()),
+                    Some(status_text.clone()),
+                    format_http_proxy_error("read-chunk", url_string.as_str(), &error),
+                );
+                return Ok(());
+            }
+            Err(_) => {
+                emit_http_proxy_stream_error(
+                    &app,
+                    &stream_id,
+                    Some(status.as_u16()),
+                    Some(status_text.clone()),
+                    if saw_chunk {
+                        "流式响应长时间没有新输出。".to_string()
+                    } else {
+                        "流式响应已连接但长时间没有输出。".to_string()
+                    },
+                );
+                return Ok(());
+            }
+        };
+        let Some(chunk) = chunk else {
+            let _ = app.emit(
+                "pixai://http-proxy-stream",
+                HttpProxyStreamEvent {
+                    stream_id,
+                    kind: "done".to_string(),
+                    status: Some(status.as_u16()),
+                    status_text: Some(status_text),
+                    chunk_base64: None,
+                    error: None,
+                },
+            );
+            return Ok(());
+        };
+        saw_chunk = true;
+        let _ = app.emit(
+            "pixai://http-proxy-stream",
+            HttpProxyStreamEvent {
+                stream_id: stream_id.clone(),
+                kind: "chunk".to_string(),
+                status: Some(status.as_u16()),
+                status_text: Some(status_text.clone()),
+                chunk_base64: Some(base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    chunk.as_ref(),
+                )),
+                error: None,
+            },
+        );
+    }
+}
+
+fn emit_http_proxy_stream_error(
+    app: &AppHandle,
+    stream_id: &str,
+    status: Option<u16>,
+    status_text: Option<String>,
+    error: String,
+) {
+    let _ = app.emit(
+        "pixai://http-proxy-stream",
+        HttpProxyStreamEvent {
+            stream_id: stream_id.to_string(),
+            kind: "error".to_string(),
+            status,
+            status_text,
+            chunk_base64: None,
+            error: Some(error),
+        },
+    );
 }
 
 fn http_proxy_client() -> Result<&'static Client, String> {
@@ -1065,6 +1226,7 @@ pub fn run() {
             get_profile_secret,
             delete_profile_secret,
             http_proxy,
+            http_proxy_stream,
             read_local_image_file,
             write_data_url_file,
             codex_skill_status,

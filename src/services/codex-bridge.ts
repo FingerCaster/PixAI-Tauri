@@ -189,6 +189,12 @@ async function updateSettings(api: PixaiApi, body: unknown): Promise<BridgeResul
     if (!promptProfile) throw new BridgeHttpError(404, '未找到提示词服务配置。')
     next = await api.settings.upsertProfile({ id: promptProfile.id, defaultPromptModel: promptModel })
   }
+  const imageGenerationEndpoint = readEnum(input.imageGenerationEndpoint, ['images-api', 'responses-api'] as const, 'imageGenerationEndpoint', true)
+  if (imageGenerationEndpoint) {
+    const imageProfile = next.profiles.find((profile) => profile.id === selectedImageProfileId)
+    if (!imageProfile) throw new BridgeHttpError(404, '未找到图片服务配置。')
+    next = await api.settings.upsertProfile({ id: imageProfile.id, imageGenerationEndpoint })
+  }
 
   await notifyBridgeChange('settings')
   return { body: withCompatibilitySettings(next) }
@@ -702,6 +708,7 @@ function withCompatibilitySettings(settings: ProviderSettings): ProviderSettings
     baseUrl: imageProfile?.baseUrl,
     defaultModel: imageProfile?.defaultImageModel,
     promptModel: promptProfile?.defaultPromptModel,
+    imageGenerationEndpoint: imageProfile?.imageGenerationEndpoint,
     apiKeyStored: Boolean(imageProfile?.apiKeyStored),
     imageProfile,
     promptProfile

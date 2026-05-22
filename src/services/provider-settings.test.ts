@@ -11,6 +11,7 @@ describe('ProviderSettingsStore', () => {
     expect(settings.profiles).toHaveLength(1)
     expect(settings.profiles[0].type).toBe('openai-compatible')
     expect(settings.profiles[0].baseUrl).toBe('http://127.0.0.1:37123')
+    expect(settings.profiles[0].imageGenerationEndpoint).toBe('images-api')
     expect(settings.selectedImageProfileId).toBe(settings.profiles[0].id)
     expect(settings.selectedPromptProfileId).toBe(settings.profiles[0].id)
   })
@@ -61,6 +62,18 @@ describe('ProviderSettingsStore', () => {
 
     expect(profile?.defaultPromptModel).toBe(DEFAULT_PROMPT_MODEL)
     expect(profile?.defaultPromptModel).toBe('gpt-5.4-mini')
+  })
+
+  it('stores the selected image generation endpoint per provider profile', async () => {
+    const store = new ProviderSettingsStore()
+    const settings = await store.upsertProfile({
+      name: 'Responses image provider',
+      enabledUsages: ['image'],
+      imageGenerationEndpoint: 'responses-api'
+    })
+    const profile = settings.profiles.at(-1)
+
+    expect(profile?.imageGenerationEndpoint).toBe('responses-api')
   })
 
   it('allows image and prompt selections to differ', async () => {

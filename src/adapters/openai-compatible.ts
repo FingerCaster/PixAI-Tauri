@@ -6,7 +6,7 @@ import {
   supportsImageInputFidelity,
   trimBaseUrl
 } from '../shared/image-options'
-import { fetchJsonThroughPlatform } from '../lib/platform'
+import { fetchJsonThroughPlatform, fetchTextStreamThroughPlatform } from '../lib/platform'
 import type { ImageApiData } from '../shared/types'
 import type { ImageGenerationRequest, ProviderAdapter, ProviderRuntimeProfile } from './types'
 
@@ -24,9 +24,7 @@ type ImageApiResponse = {
 
 type ResponsesApiPayload = {
   output_text?: string
-  output?: Array<{
-    content?: Array<{ text?: string } | string> | string
-  }>
+  output?: Array<ResponsesOutputItem>
   choices?: Array<{
     message?: {
       content?: string
@@ -38,6 +36,23 @@ type ResponsesApiPayload = {
   error_code?: string
   message?: string
 }
+
+type ResponsesOutputItem = {
+  type?: string
+  status?: string
+  content?: Array<{ text?: string } | string> | string
+  result?: string
+  image?: ImageApiData | string
+  images?: Array<ImageApiData | string>
+}
+
+type ResponsesImageStreamResult = {
+  images: ImageApiData[]
+  eventCount: number
+}
+
+const RESPONSES_IMAGE_TEST_TIMEOUT_MS = 20000
+const RESPONSES_IMAGE_GENERATION_TIMEOUT_BUFFER_MS = 5000
 
 export const openAiCompatibleAdapter: ProviderAdapter = {
   type: 'openai-compatible',
@@ -56,6 +71,32 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
     }
 
     try {
+      if (profile.enabledUsages.includes('image') && profile.imageGenerationEndpoint === 'responses-api') {
+        const result = await requestResponsesImageGeneration(profile, {
+          input: {
+            conversationId: 'connection-test',
+            prompt: '生成一张极简纯色测试图。',
+            model: profile.defaultImageModel,
+            ratio: '1:1',
+            size: '1024x1024',
+            quality: 'low',
+            n: 1,
+            stream: true,
+            partialImages: 0
+          },
+          referenceImages: [],
+          signal
+        }, RESPONSES_IMAGE_TEST_TIMEOUT_MS)
+        return {
+          ok: result.images.length > 0,
+          checkedAt: new Date().toISOString(),
+          endpoint,
+          latencyMs: Date.now() - startedAt,
+          message: result.images.length > 0
+            ? 'Responses 图像工具检测成功。'
+            : `Responses 图像工具已连接，但没有返回图片事件（事件数 ${result.eventCount}）。`
+        }
+      }
       const response = await fetchJsonThroughPlatform(endpoint, {
         method: 'POST',
         headers: buildHeaders(profile.apiKey),
@@ -89,6 +130,13 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   async generateImage(profile, request) {
     if (!profile.apiKey) throw new Error('API Key 尚未配置。')
     const hasReferences = request.referenceImages.length > 0
+    if (!hasReferences && profile.imageGenerationEndpoint === 'responses-api') {
+      return (await requestResponsesImageGeneration(
+        profile,
+        request,
+        Math.max(1000, (request.input.generationTimeoutSeconds || 300) * 1000 + RESPONSES_IMAGE_GENERATION_TIMEOUT_BUFFER_MS)
+      )).images
+    }
     const endpoint = hasReferences ? buildImageEditEndpoint(profile.baseUrl) : buildImageEndpoint(profile.baseUrl)
     const response = hasReferences
       ? await requestImageEdit(endpoint, profile, request)
@@ -193,6 +241,53 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
   })
 }
 
+async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, request: ImageGenerationRequest, timeoutMs: number): Promise<ResponsesImageStreamResult> {
+  const endpoint = buildResponsesEndpoint(profile.baseUrl)
+  const input = request.input
+  const response = await fetchTextStreamThroughPlatform(endpoint, {
+    method: 'POST',
+    headers: buildHeaders(profile.apiKey || ''),
+    signal: request.signal,
+    body: JSON.stringify({
+      model: profile.defaultPromptModel,
+      input: input.prompt.trim(),
+      stream: true,
+      tools: [
+        {
+          type: 'image_generation',
+          action: 'generate',
+          model: input.model || profile.defaultImageModel,
+          size: input.size || getDefaultImageSize(input.ratio),
+          quality: input.quality,
+          ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
+          ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
+          ...(input.background ? { background: input.background } : {}),
+          ...(input.moderation ? { moderation: input.moderation } : {}),
+          ...(input.partialImages ? { partial_images: input.partialImages } : {})
+        }
+      ]
+    })
+  }, { timeoutMs, firstByteTimeoutMs: Math.min(timeoutMs, RESPONSES_IMAGE_TEST_TIMEOUT_MS) })
+  const text = response.text
+  const payload = parseResponsesPayload(text)
+  if (response.status < 200 || response.status >= 300) {
+    throw new ProviderHttpError(getProviderErrorMessage(payload, `Responses 图像工具请求失败，HTTP 状态码 ${response.status}。`), {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+      responseBody: text,
+      responseError: payload.error
+    })
+  }
+  const result = extractResponsesImageStreamResult(text)
+  if (result.images.length > 0) return result
+  const fallbackImages = extractResponsesImages(payload)
+  return {
+    images: fallbackImages,
+    eventCount: result.eventCount
+  }
+}
+
 async function requestPrompt(profile: ProviderRuntimeProfile, instruction: string, signal?: AbortSignal): Promise<string> {
   if (!profile.apiKey) throw new Error('API Key 尚未配置。')
   const endpoint = buildResponsesEndpoint(profile.baseUrl)
@@ -249,11 +344,97 @@ function parseImagePayload(text: string): ImageApiResponse {
 
 function parseResponsesPayload(text: string): ResponsesApiPayload {
   if (!text.trim()) return {}
+  const ssePayloads = parseSsePayloads(text)
+  if (ssePayloads.length) return ssePayloads.at(-1) as ResponsesApiPayload
   try {
     return JSON.parse(text) as ResponsesApiPayload
   } catch {
     return {}
   }
+}
+
+function extractResponsesImageStreamResult(text: string): ResponsesImageStreamResult {
+  const payloads = parseSsePayloads(text)
+  const images: ImageApiData[] = []
+  for (const payload of payloads) {
+    images.push(...extractImageApiData(payload))
+  }
+  return {
+    images: dedupeImages(images),
+    eventCount: payloads.length
+  }
+}
+
+function parseSsePayloads(text: string): Record<string, unknown>[] {
+  const payloads: Record<string, unknown>[] = []
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const data = block
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trimStart())
+      .join('\n')
+      .trim()
+    if (!data || data === '[DONE]') continue
+    try {
+      const payload = JSON.parse(data) as unknown
+      if (isRecord(payload)) payloads.push(payload)
+    } catch {
+      // Ignore non-JSON stream keepalives.
+    }
+  }
+  return payloads
+}
+
+function extractResponsesImages(payload: ResponsesApiPayload): ImageApiData[] {
+  const images: ImageApiData[] = []
+  for (const output of payload.output || []) {
+    images.push(...extractImageApiData(output))
+  }
+  images.push(...extractImageApiData(payload))
+  return dedupeImages(images)
+}
+
+function extractImageApiData(value: unknown): ImageApiData[] {
+  if (typeof value === 'string') return isLikelyBase64Image(value) ? [{ b64_json: value }] : []
+  if (!isRecord(value)) return []
+  const images: ImageApiData[] = []
+  for (const key of ['b64_json', 'image_base64', 'partial_image_b64', 'partial_image', 'result'] as const) {
+    const candidate = value[key]
+    if (typeof candidate === 'string' && isLikelyBase64Image(candidate)) images.push({ b64_json: candidate })
+  }
+  for (const key of ['url', 'image_url'] as const) {
+    const candidate = value[key]
+    if (typeof candidate === 'string' && candidate) images.push({ url: candidate })
+  }
+  for (const key of ['image', 'data'] as const) {
+    images.push(...extractImageApiData(value[key]))
+  }
+  for (const key of ['images', 'output', 'content'] as const) {
+    const candidate = value[key]
+    if (Array.isArray(candidate)) {
+      for (const item of candidate) images.push(...extractImageApiData(item))
+    } else {
+      images.push(...extractImageApiData(candidate))
+    }
+  }
+  return images
+}
+
+function dedupeImages(images: ImageApiData[]): ImageApiData[] {
+  const seen = new Set<string>()
+  const result: ImageApiData[] = []
+  for (const image of images) {
+    const key = image.b64_json ? `b64:${image.b64_json}` : image.url ? `url:${image.url}` : ''
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    result.push(image)
+  }
+  return result
+}
+
+function isLikelyBase64Image(value: string): boolean {
+  const compact = value.trim()
+  return compact.length > 80 && /^[A-Za-z0-9+/=_-]+$/.test(compact)
 }
 
 function extractResponseText(payload: ResponsesApiPayload): string {
@@ -279,6 +460,10 @@ function sanitizePromptText(value: string): string {
   const trimmed = value.trim()
   const fenceMatch = trimmed.match(/^```(?:\w+)?\s*([\s\S]*?)\s*```$/)
   return (fenceMatch?.[1] || trimmed).trim()
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
 }
 
 function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {

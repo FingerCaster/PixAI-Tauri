@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import type { CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
 
 type SecretWriteResult = {
@@ -18,6 +19,17 @@ type HttpProxyResponse = {
   body: string
 }
 
+export type PlatformFetchOptions = {
+  timeoutMs?: number
+  firstByteTimeoutMs?: number
+}
+
+export type PlatformStreamResponse = {
+  status: number
+  statusText: string
+  text: string
+}
+
 type LocalImageReadResult = ReferenceImageFilePayload
 
 const memoryStorage = new Map<string, string>()
@@ -27,7 +39,7 @@ export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
-export async function fetchJsonThroughPlatform(url: string, init: RequestInit): Promise<Response> {
+export async function fetchJsonThroughPlatform(url: string, init: RequestInit, options: PlatformFetchOptions = {}): Promise<Response> {
   if (!isTauriRuntime()) return fetch(url, init)
   const headers = Object.fromEntries(new Headers(init.headers).entries())
   let result: HttpProxyResponse
@@ -37,7 +49,9 @@ export async function fetchJsonThroughPlatform(url: string, init: RequestInit): 
         url,
         method: init.method || 'GET',
         headers,
-        body: typeof init.body === 'string' ? init.body : undefined
+        body: typeof init.body === 'string' ? init.body : undefined,
+        timeoutMs: options.timeoutMs,
+        firstByteTimeoutMs: options.firstByteTimeoutMs
       }
     })
   } catch (error) {
@@ -47,6 +61,71 @@ export async function fetchJsonThroughPlatform(url: string, init: RequestInit): 
     status: result.status,
     statusText: result.status_text
   })
+}
+
+export async function fetchTextStreamThroughPlatform(url: string, init: RequestInit, options: PlatformFetchOptions = {}): Promise<PlatformStreamResponse> {
+  if (!isTauriRuntime()) {
+    const response = await fetch(url, init)
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      text: await response.text()
+    }
+  }
+
+  const headers = Object.fromEntries(new Headers(init.headers).entries())
+  const streamId = globalThis.crypto?.randomUUID?.() || `stream-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const chunks: Uint8Array[] = []
+  const decoder = new TextDecoder()
+  let status = 0
+  let statusText = ''
+  let settled = false
+
+  const streamPromise = new Promise<PlatformStreamResponse>((resolve, reject) => {
+    void listen<PlatformStreamEvent>('pixai://http-proxy-stream', (event) => {
+      const payload = event.payload
+      if (payload.streamId !== streamId) return
+      if (payload.kind === 'chunk') {
+        if (payload.chunkBase64) chunks.push(base64ToBytes(payload.chunkBase64))
+        return
+      }
+      if (typeof payload.status === 'number') status = payload.status
+      if (typeof payload.statusText === 'string') statusText = payload.statusText
+      if (payload.kind === 'error') {
+        settled = true
+        reject(new Error(payload.error || '平台代理流式请求失败。'))
+        return
+      }
+      if (payload.kind === 'done') {
+        settled = true
+        try {
+          const text = decodeUtf8Chunks(chunks, decoder)
+          resolve({ status, statusText, text })
+        } catch (error) {
+          reject(error instanceof Error ? error : new Error(String(error)))
+        }
+      }
+    }).catch((error) => {
+      if (!settled) reject(error)
+    })
+  })
+
+  try {
+    await invoke('http_proxy_stream', {
+      request: {
+        streamId,
+        url,
+        method: init.method || 'GET',
+        headers,
+        body: typeof init.body === 'string' ? init.body : undefined,
+        timeoutMs: options.timeoutMs,
+        firstByteTimeoutMs: options.firstByteTimeoutMs
+      }
+    })
+    return await streamPromise
+  } catch (error) {
+    throw PlatformHttpProxyError.fromInvokeError(url, init.method || 'GET', error)
+  }
 }
 
 export async function readJsonState(name: string): Promise<string | null> {
@@ -165,6 +244,15 @@ export class PlatformHttpProxyError extends Error {
   }
 }
 
+type PlatformStreamEvent = {
+  streamId: string
+  kind: 'chunk' | 'done' | 'error'
+  status?: number
+  statusText?: string
+  chunkBase64?: string
+  error?: string
+}
+
 function parsePlatformError(error: unknown): Record<string, unknown> {
   if (error instanceof Error) {
     return {
@@ -180,6 +268,24 @@ function parsePlatformError(error: unknown): Record<string, unknown> {
   } catch {
     return { message: error, stage: inferPlainPlatformErrorStage(error) }
   }
+}
+
+function decodeUtf8Chunks(chunks: Uint8Array[], decoder: TextDecoder): string {
+  let text = ''
+  for (const chunk of chunks) {
+    text += decoder.decode(chunk, { stream: true })
+  }
+  text += decoder.decode()
+  return text
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index)
+  }
+  return bytes
 }
 
 function inferPlainPlatformErrorStage(message: string): string {

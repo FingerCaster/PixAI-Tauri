@@ -47,7 +47,8 @@ describe('codex bridge', () => {
       api,
       bridgeRequest('/settings', 'PATCH', {
         defaultModel: 'gpt-image-2-fast',
-        promptModel: 'gpt-5.4-mini'
+        promptModel: 'gpt-5.4-mini',
+        imageGenerationEndpoint: 'responses-api'
       })
     )
     const payload = JSON.parse(response.body || '{}')
@@ -56,6 +57,8 @@ describe('codex bridge', () => {
 
     expect(response.status).toBe(200)
     expect(imageProfile.defaultImageModel).toBe('gpt-image-2-fast')
+    expect(imageProfile.imageGenerationEndpoint).toBe('responses-api')
+    expect(payload.imageGenerationEndpoint).toBe('responses-api')
     expect(promptProfile.defaultPromptModel).toBe('gpt-5.4-mini')
   })
 

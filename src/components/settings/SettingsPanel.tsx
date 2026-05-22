@@ -21,7 +21,7 @@ import {
   supportsImageInputFidelity
 } from '../../shared/image-options'
 import { pixaiApi } from '../../services/app-api'
-import type { ImageBackground, ImageInputFidelity, ImageModeration, ImageOutputFormat, ProviderProfile } from '../../shared/types'
+import type { ImageBackground, ImageGenerationEndpoint, ImageInputFidelity, ImageModeration, ImageOutputFormat, ProviderProfile } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 import { GallerySelect } from '../common/GallerySelect'
 
@@ -533,10 +533,27 @@ export function SettingsPanel() {
                 <input value={profileApiKey} type="password" placeholder={profileDraftMode === 'edit' && profileDraft.apiKeyStored ? '留空保持不变' : 'sk-...'} onChange={(event) => setProfileApiKey(event.target.value)} />
               </label>
               {profileDraft.enabledUsages.includes('image') ? (
-                <label>
-                  图片默认模型
-                  <input value={profileDraft.defaultImageModel} onChange={(event) => setProfileDraft({ ...profileDraft, defaultImageModel: event.target.value })} />
-                </label>
+                <>
+                  <label>
+                    图片默认模型
+                    <input value={profileDraft.defaultImageModel} onChange={(event) => setProfileDraft({ ...profileDraft, defaultImageModel: event.target.value })} />
+                  </label>
+                  <div className="field">
+                    <span>生图端点</span>
+                    <GallerySelect
+                      value={profileDraft.imageGenerationEndpoint}
+                      options={[
+                        { value: 'images-api', label: 'Images API' },
+                        { value: 'responses-api', label: 'Responses 图像工具' }
+                      ]}
+                      ariaLabel="生图端点"
+                      className="settings-select"
+                      onChange={(imageGenerationEndpoint) =>
+                        setProfileDraft({ ...profileDraft, imageGenerationEndpoint: imageGenerationEndpoint as ImageGenerationEndpoint })
+                      }
+                    />
+                  </div>
+                </>
               ) : null}
               {profileDraft.enabledUsages.includes('prompt') ? (
                 <label>
@@ -580,6 +597,7 @@ function createProfileDraft(): ProviderProfile {
     baseUrl: 'http://127.0.0.1:37123',
     defaultImageModel: DEFAULT_MODEL,
     defaultPromptModel: DEFAULT_PROMPT_MODEL,
+    imageGenerationEndpoint: 'images-api',
     enabledUsages: ['image', 'prompt'],
     capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test', 'streaming', 'input-fidelity'],
     apiKeyStored: false,
