@@ -5,10 +5,12 @@ import { formatDuration } from '../../lib/time'
 import { useAppStore } from '../../store/app-store'
 import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
+import { ImagePreviewModal } from './ImagePreviewModal'
 
 export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const { addHistoryAsReference, deleteHistory, notify, toggleFavorite } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
+  const [previewOpen, setPreviewOpen] = useState(false)
   const showFailedRetryChip = shouldShowFailedImageRetryChip(item.retryAttempt)
   const copyPrompt = async () => {
     await navigator.clipboard.writeText(item.prompt)
@@ -37,6 +39,9 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
     link.download = `${item.id}.${extensionFromDataUrl(item.dataUrl)}`
     link.click()
     notify('图片下载已开始')
+  }
+  const openPreview = () => {
+    if (item.dataUrl) setPreviewOpen(true)
   }
 
   if (item.status === 'failed') {
@@ -77,9 +82,9 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
 
   return (
     <article className="image-tile">
-      <div className="image-frame">
+      <button className="image-frame image-preview-trigger" type="button" title="查看大图" onClick={openPreview}>
         {item.dataUrl ? <img src={item.dataUrl} alt={item.prompt} /> : null}
-      </div>
+      </button>
       <div className="tile-body">
         <strong>{item.prompt}</strong>
         <span>
@@ -111,6 +116,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           <Trash2 size={15} />
         </button>
       </div>
+      {previewOpen ? <ImagePreviewModal item={item} onClose={() => setPreviewOpen(false)} /> : null}
     </article>
   )
 }

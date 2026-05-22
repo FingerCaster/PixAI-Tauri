@@ -739,6 +739,20 @@ textarea {
   place-items: center;
 }
 
+.image-preview-trigger {
+  width: 100%;
+  height: auto;
+  min-height: 220px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  cursor: zoom-in;
+}
+
+.image-preview-trigger:hover {
+  background: #eaf5ef;
+}
+
 .image-frame img {
   display: block;
   width: 100%;
@@ -1117,6 +1131,68 @@ select {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.image-preview-backdrop {
+  z-index: 25;
+  padding: 26px;
+}
+
+.image-preview-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(1180px, calc(100vw - 52px));
+  height: min(880px, calc(100vh - 52px));
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 28px 80px rgb(47 85 66 / 24%);
+  padding: 14px;
+}
+
+.image-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+}
+
+.image-preview-head div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.image-preview-head strong,
+.image-preview-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-preview-head span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.image-preview-stage {
+  display: grid;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #111814;
+  place-items: center;
+}
+
+.image-preview-stage img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
 }
 
 .segmented {
