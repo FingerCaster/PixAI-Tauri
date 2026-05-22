@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { pixaiApi } from '../services/app-api'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
 import type {
+  CodexSkillStatus,
   Conversation,
   ConversationCreateInput,
   ConversationUpdate,
@@ -28,6 +29,8 @@ type AppState = {
   runsByConversation: Record<string, GenerationRun[]>
   history: ImageHistoryItem[]
   templates: PromptTemplate[]
+  codexSkillStatus: CodexSkillStatus | null
+  codexSkillInstalling: boolean
   query: string
   favoritesOnly: boolean
   loading: boolean
@@ -47,6 +50,8 @@ type AppState = {
   upsertProfile: (input: ProviderProfileInput) => Promise<void>
   deleteProfile: (id: string) => Promise<void>
   testProfile: (id: string) => Promise<void>
+  loadCodexSkillStatus: () => Promise<void>
+  installCodexSkill: () => Promise<void>
   importReferenceFiles: (files: File[]) => Promise<void>
   addHistoryAsReference: (historyId: string) => Promise<void>
   removeReferenceImage: (referenceImageId: string) => Promise<void>
@@ -77,6 +82,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   runsByConversation: {},
   history: [],
   templates: [],
+  codexSkillStatus: null,
+  codexSkillInstalling: false,
   query: '',
   favoritesOnly: false,
   loading: false,
@@ -187,6 +194,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ settings })
     const profile = settings.profiles.find((item) => item.id === id)
     get().notify(profile?.lastTest?.message || '连接测试完成')
+  },
+  loadCodexSkillStatus: async () => {
+    try {
+      set({ codexSkillStatus: await pixaiApi.codexSkill.status() })
+    } catch (error) {
+      get().notify(error instanceof Error ? `技能状态读取失败：${error.message}` : '技能状态读取失败')
+    }
+  },
+  installCodexSkill: async () => {
+    if (get().codexSkillInstalling) return
+    set({ codexSkillInstalling: true })
+    try {
+      const codexSkillStatus = await pixaiApi.codexSkill.install()
+      set({ codexSkillStatus })
+      get().notify('Codex 技能已安装到全局')
+    } catch (error) {
+      get().notify(error instanceof Error ? `技能安装失败：${error.message}` : '技能安装失败')
+    } finally {
+      set({ codexSkillInstalling: false })
+    }
   },
   importReferenceFiles: async (files) => {
     const id = get().activeConversationId

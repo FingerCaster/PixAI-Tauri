@@ -68,6 +68,14 @@ export type ProviderSettingsUpdate = Partial<
   Pick<ProviderSettings, 'selectedImageProfileId' | 'selectedPromptProfileId'>
 >
 
+export type LegacyProviderSettingsUpdate = ProviderSettingsUpdate & {
+  baseURL?: string
+  baseUrl?: string
+  apiKey?: string | null
+  defaultModel?: string
+  promptModel?: string
+}
+
 export type ConnectionTestResult = {
   ok: boolean
   checkedAt: string
@@ -100,6 +108,13 @@ export type GenerateImageInput = {
 export type PromptAssistInput = {
   prompt?: string
   hasReferenceImages?: boolean
+}
+
+export type ReferenceImageFilePayload = {
+  name: string
+  mimeType: string
+  dataUrl: string
+  fileSizeBytes: number
 }
 
 export type Conversation = {
@@ -148,6 +163,7 @@ export type ConversationUpdate = Partial<
     | 'generationTimeoutSeconds'
     | 'autoSaveHistory'
     | 'keepFailureDetails'
+    | 'referenceImages'
   >
 >
 
@@ -239,4 +255,55 @@ export type PromptTemplateInput = Partial<Omit<PromptTemplate, 'id' | 'createdAt
 export type ImageApiData = {
   b64_json?: string
   url?: string
+}
+
+export type CodexBridgeChangeType = 'settings' | 'conversation' | 'history' | 'generation' | 'prompt'
+
+export type CodexBridgeRequest = {
+  id: string
+  method: string
+  path: string
+  body: string | null
+  headers: Record<string, string>
+  port: number
+}
+
+export type CodexBridgeResponse = {
+  requestId: string
+  status: number
+  headers?: Record<string, string>
+  body?: string
+  bodyBase64?: string
+}
+
+export type CodexSkillFile = {
+  relativePath: string
+  content: string
+}
+
+export type CodexSkillInstallRequest = {
+  name: string
+  files: CodexSkillFile[]
+}
+
+export type CodexSkillStatus = {
+  name: string
+  installed: boolean
+  path: string
+  skillMdPath: string
+}
+
+export type CodexGenerateImageInput = Partial<Omit<GenerateImageInput, 'conversationId' | 'referenceImageIds'>> & {
+  prompt: string
+  conversationId?: string
+  title?: string
+  referenceImageIds?: string[]
+  referenceHistoryIds?: string[]
+  referenceImagePaths?: string[]
+  useConversationReferences?: boolean
+  clearReferences?: boolean
+}
+
+export type CodexReeditImageInput = Partial<CodexGenerateImageInput> & {
+  prompt?: string
 }

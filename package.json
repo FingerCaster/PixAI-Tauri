@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "tsc --noEmit && vitest run",
-    "dist": "pnpm tauri build"
+    "dist": "pnpm tauri build",
+    "codex": "node scripts/pixai-codex.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

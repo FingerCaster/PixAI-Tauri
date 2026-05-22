@@ -10,6 +10,7 @@ PixAI rebuilt as a Tauri 2 desktop app. The old Electron repository at `D:\UGit\
 - Local app data for conversations, generation runs, history, reference images, and prompt templates.
 - Tauri-side secret boundary using system keyring when available, with a documented app-data fallback for local/dev environments.
 - Workspace, gallery, prompt library, prompt assistant, retries, timeout, cancellation hooks, reference image management, and error details.
+- Local Codex Bridge for same-machine automation over `http://127.0.0.1:43117`.
 
 ## Local test provider
 
@@ -30,6 +31,27 @@ pnpm test
 pnpm build
 pnpm tauri dev
 pnpm dist
+pnpm codex -- health
+```
+
+## Codex Bridge
+
+When the Tauri app is running it starts a local bridge at:
+
+```text
+http://127.0.0.1:43117
+```
+
+Set `PIXAI_CODEX_PORT` before launch to change the port, or `PIXAI_CODEX_BRIDGE=0` to disable it. The bridge binds to `127.0.0.1` only and is intended for local Codex automation.
+
+Useful commands:
+
+```bash
+pnpm codex -- health
+pnpm codex -- generate --prompt "一座清晨玻璃温室，自然光，干净摄影风格" --ratio 1:1 --n 1
+pnpm codex -- history --limit 5
+pnpm codex -- inspire
+pnpm codex -- enrich --prompt "清爽产品摄影"
 ```
 
 ## Data and migration

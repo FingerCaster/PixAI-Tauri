@@ -3,14 +3,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
+    io::{Read, Write},
+    net::{Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc, Mutex, OnceLock,
+    },
+    thread,
+    time::Duration,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 const SECRET_SERVICE: &str = "PixAI-Tauri";
+const CODEX_BRIDGE_HOST: &str = "127.0.0.1";
+const CODEX_BRIDGE_PORT: u16 = 43117;
+const MAX_CODEX_BRIDGE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const CODEX_BRIDGE_REQUEST_EVENT: &str = "pixai://codex-bridge/request";
 static KEYRING_READY: OnceLock<bool> = OnceLock::new();
+static CODEX_BRIDGE_STARTED: OnceLock<()> = OnceLock::new();
+static CODEX_BRIDGE_READY: AtomicBool = AtomicBool::new(false);
+static CODEX_BRIDGE_NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static CODEX_BRIDGE_PENDING: OnceLock<
+    Mutex<HashMap<String, mpsc::Sender<CodexBridgeTransportResponse>>>,
+> = OnceLock::new();
 
 #[derive(Serialize)]
 struct SecretWriteResult {
@@ -40,6 +57,67 @@ struct HttpProxyResponse {
     body: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LocalImageReadResult {
+    name: String,
+    mime_type: String,
+    data_url: String,
+    file_size_bytes: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexSkillInstallRequest {
+    name: String,
+    files: Vec<CodexSkillFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexSkillFile {
+    relative_path: String,
+    content: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexSkillStatus {
+    name: String,
+    installed: bool,
+    path: String,
+    skill_md_path: String,
+}
+
+#[derive(Clone, Serialize)]
+struct CodexBridgeTransportRequest {
+    id: String,
+    method: String,
+    path: String,
+    body: Option<String>,
+    headers: HashMap<String, String>,
+    port: u16,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CodexBridgeTransportResponse {
+    request_id: String,
+    status: u16,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    body_base64: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct CodexBridgeHttpResponse {
+    status: u16,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    body_base64: Option<String>,
+    cors_origin: Option<String>,
+}
+
 #[tauri::command]
 fn app_data_dir(app: AppHandle) -> Result<String, String> {
     Ok(app_data_path(&app)?.to_string_lossy().to_string())
@@ -51,7 +129,9 @@ fn read_json_state(app: AppHandle, name: String) -> Result<Option<String>, Strin
     if !path.exists() {
         return Ok(None);
     }
-    fs::read_to_string(path).map(Some).map_err(|error| error.to_string())
+    fs::read_to_string(path)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -121,7 +201,8 @@ fn delete_profile_secret(app: AppHandle, profile_id: String) -> Result<(), Strin
 
 #[tauri::command]
 async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, String> {
-    let url = reqwest::Url::parse(&request.url).map_err(|error| format!("接口地址无效：{error}"))?;
+    let url =
+        reqwest::Url::parse(&request.url).map_err(|error| format!("接口地址无效：{error}"))?;
     match url.scheme() {
         "http" | "https" => {}
         _ => return Err("仅支持 HTTP/HTTPS 接口地址。".to_string()),
@@ -149,6 +230,110 @@ async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
         status_text: status.canonical_reason().unwrap_or("").to_string(),
         body,
     })
+}
+
+#[tauri::command]
+fn read_local_image_file(path: String) -> Result<LocalImageReadResult, String> {
+    let resolved = PathBuf::from(&path);
+    if !resolved.is_file() {
+        return Err(format!("参考图不存在：{path}"));
+    }
+    let data = fs::read(&resolved).map_err(|error| error.to_string())?;
+    let mime_type = mime_type_from_path(&resolved);
+    let name = resolved
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("reference.png")
+        .to_string();
+    Ok(LocalImageReadResult {
+        name,
+        mime_type: mime_type.to_string(),
+        data_url: format!(
+            "data:{};base64,{}",
+            mime_type,
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data)
+        ),
+        file_size_bytes: fs::metadata(&resolved)
+            .map_err(|error| error.to_string())?
+            .len(),
+    })
+}
+
+#[tauri::command]
+fn write_data_url_file(
+    directory: String,
+    filename: String,
+    data_url: String,
+) -> Result<String, String> {
+    let bytes = decode_data_url(&data_url)?;
+    let directory = PathBuf::from(directory);
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = directory.join(sanitize_export_filename(&filename));
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn codex_skill_status(name: String) -> Result<CodexSkillStatus, String> {
+    let skill_name = sanitize_skill_name(&name)?;
+    codex_skill_status_in(&codex_skills_dir()?, skill_name)
+}
+
+#[tauri::command]
+fn install_codex_skill(request: CodexSkillInstallRequest) -> Result<CodexSkillStatus, String> {
+    install_codex_skill_in(&codex_skills_dir()?, request)
+}
+
+fn install_codex_skill_in(
+    skills_dir: &Path,
+    request: CodexSkillInstallRequest,
+) -> Result<CodexSkillStatus, String> {
+    let skill_name = sanitize_skill_name(&request.name)?;
+    if request.files.is_empty() {
+        return Err("Skill 文件列表不能为空。".to_string());
+    }
+
+    let skill_path = skills_dir.join(&skill_name);
+    fs::create_dir_all(&skill_path).map_err(|error| error.to_string())?;
+    for file in request.files {
+        let relative_path = sanitize_skill_relative_path(&file.relative_path)?;
+        let output_path = skill_path.join(relative_path);
+        if let Some(parent) = output_path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        fs::write(output_path, file.content).map_err(|error| error.to_string())?;
+    }
+
+    codex_skill_status_in(skills_dir, skill_name)
+}
+
+fn codex_skill_status_in(skills_dir: &Path, skill_name: String) -> Result<CodexSkillStatus, String> {
+    let path = skills_dir.join(&skill_name);
+    let skill_md_path = path.join("SKILL.md");
+    Ok(CodexSkillStatus {
+        name: skill_name,
+        installed: skill_md_path.is_file(),
+        path: path.to_string_lossy().to_string(),
+        skill_md_path: skill_md_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+fn codex_bridge_respond(response: CodexBridgeTransportResponse) -> Result<(), String> {
+    let pending = CODEX_BRIDGE_PENDING.get_or_init(|| Mutex::new(HashMap::new()));
+    let sender = pending
+        .lock()
+        .map_err(|_| "Codex Bridge response queue is unavailable.".to_string())?
+        .remove(&response.request_id)
+        .ok_or_else(|| "Codex Bridge request is no longer pending.".to_string())?;
+    sender
+        .send(response)
+        .map_err(|_| "Codex Bridge request listener is closed.".to_string())
+}
+
+#[tauri::command]
+fn codex_bridge_ready() {
+    CODEX_BRIDGE_READY.store(true, Ordering::Release);
 }
 
 fn app_data_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -203,12 +388,15 @@ fn read_fallback_secrets(app: &AppHandle) -> Result<Map<String, Value>, String> 
     }
     let value = fs::read_to_string(path)
         .map_err(|error| error.to_string())
-        .and_then(|payload| serde_json::from_str::<Value>(&payload).map_err(|error| error.to_string()))?;
+        .and_then(|payload| {
+            serde_json::from_str::<Value>(&payload).map_err(|error| error.to_string())
+        })?;
     Ok(value.as_object().cloned().unwrap_or_default())
 }
 
 fn write_fallback_secrets(app: &AppHandle, secrets: Map<String, Value>) -> Result<(), String> {
-    let payload = serde_json::to_string_pretty(&Value::Object(secrets)).map_err(|error| error.to_string())?;
+    let payload =
+        serde_json::to_string_pretty(&Value::Object(secrets)).map_err(|error| error.to_string())?;
     fs::write(secrets_file_path(app)?, format!("{payload}\n")).map_err(|error| error.to_string())
 }
 
@@ -226,10 +414,567 @@ fn sanitize_name(name: &str) -> Result<String, String> {
     Ok(candidate)
 }
 
+fn start_codex_bridge(app: AppHandle) {
+    if env::var("PIXAI_CODEX_BRIDGE").ok().as_deref() == Some("0") {
+        return;
+    }
+    if CODEX_BRIDGE_STARTED.set(()).is_err() {
+        return;
+    }
+
+    let port = env::var("PIXAI_CODEX_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(CODEX_BRIDGE_PORT);
+
+    thread::spawn(move || {
+        let listener = match TcpListener::bind((CODEX_BRIDGE_HOST, port)) {
+            Ok(listener) => listener,
+            Err(error) => {
+                eprintln!(
+                    "[PixAI Codex] Bridge failed to bind {CODEX_BRIDGE_HOST}:{port}: {error}"
+                );
+                return;
+            }
+        };
+        eprintln!("[PixAI Codex] Bridge listening on http://{CODEX_BRIDGE_HOST}:{port}");
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let app = app.clone();
+                    thread::spawn(move || handle_codex_bridge_stream(app, stream, port));
+                }
+                Err(error) => eprintln!("[PixAI Codex] Bridge connection failed: {error}"),
+            }
+        }
+    });
+}
+
+fn handle_codex_bridge_stream(app: AppHandle, mut stream: TcpStream, port: u16) {
+    let response = match read_http_request(&mut stream) {
+        Ok(request) => match bridge_cors_origin(request.headers.get("origin"), port) {
+            Ok(cors_origin) => {
+                let mut response =
+                    dispatch_codex_bridge_request(app, request, port).into_http_response();
+                response.cors_origin = cors_origin;
+                response
+            }
+            Err(()) => CodexBridgeHttpResponse {
+                status: 403,
+                headers: None,
+                body: Some(json_error("Codex Bridge 只接受本机来源请求。")),
+                body_base64: None,
+                cors_origin: None,
+            },
+        },
+        Err(error) => CodexBridgeHttpResponse {
+            status: error.status,
+            headers: None,
+            body: Some(json_error(&error.message)),
+            body_base64: None,
+            cors_origin: None,
+        },
+    };
+    let _ = write_http_response(&mut stream, response);
+    let _ = stream.flush();
+    let _ = stream.shutdown(Shutdown::Both);
+}
+
+fn dispatch_codex_bridge_request(
+    app: AppHandle,
+    request: ParsedHttpRequest,
+    port: u16,
+) -> CodexBridgeTransportResponse {
+    if request.method == "OPTIONS" {
+        return CodexBridgeTransportResponse {
+            request_id: String::new(),
+            status: 204,
+            headers: None,
+            body: Some(String::new()),
+            body_base64: None,
+        };
+    }
+    let route_path = request.path.split('?').next().unwrap_or(&request.path);
+    if request.method == "GET" && route_path == "/health" {
+        return CodexBridgeTransportResponse {
+            request_id: String::new(),
+            status: 200,
+            headers: None,
+            body: Some(
+                serde_json::json!({
+                    "ok": true,
+                    "app": "PixAI",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "bridge": "codex",
+                    "host": CODEX_BRIDGE_HOST,
+                    "port": port,
+                    "rendererReady": CODEX_BRIDGE_READY.load(Ordering::Acquire),
+                    "endpoints": [
+                        "GET /health",
+                        "GET /settings",
+                        "PATCH /settings",
+                        "GET /conversations",
+                        "POST /conversations",
+                        "GET /history",
+                        "GET /images/:id",
+                        "GET /images/:id/file",
+                        "DELETE /images/:id",
+                        "PATCH /images/:id/favorite",
+                        "POST /images/:id/reedit",
+                        "POST /generate",
+                        "POST /prompt/inspire",
+                        "POST /prompt/enrich"
+                    ]
+                })
+                .to_string(),
+            ),
+            body_base64: None,
+        };
+    }
+    if !CODEX_BRIDGE_READY.load(Ordering::Acquire) {
+        return CodexBridgeTransportResponse {
+            request_id: String::new(),
+            status: 503,
+            headers: None,
+            body: Some(json_error("Codex Bridge 前端处理器尚未就绪。")),
+            body_base64: None,
+        };
+    }
+
+    let id = format!(
+        "bridge-{}",
+        CODEX_BRIDGE_NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    );
+    let payload = CodexBridgeTransportRequest {
+        id: id.clone(),
+        method: request.method,
+        path: request.path,
+        body: request.body,
+        headers: request.headers,
+        port,
+    };
+    let (sender, receiver) = mpsc::channel();
+    if let Ok(mut pending) = CODEX_BRIDGE_PENDING
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+    {
+        pending.insert(id.clone(), sender);
+    }
+
+    if let Err(error) = app.emit_to("main", CODEX_BRIDGE_REQUEST_EVENT, payload) {
+        remove_pending_codex_bridge_request(&id);
+        return CodexBridgeTransportResponse {
+            request_id: id,
+            status: 503,
+            headers: None,
+            body: Some(json_error(&format!(
+                "Codex Bridge 前端处理器不可用：{error}"
+            ))),
+            body_base64: None,
+        };
+    }
+
+    match receiver.recv_timeout(Duration::from_secs(60 * 30)) {
+        Ok(response) => response,
+        Err(_) => {
+            remove_pending_codex_bridge_request(&id);
+            CodexBridgeTransportResponse {
+                request_id: id,
+                status: 504,
+                headers: None,
+                body: Some(json_error("Codex Bridge 请求超时。")),
+                body_base64: None,
+            }
+        }
+    }
+}
+
+fn remove_pending_codex_bridge_request(id: &str) {
+    if let Some(pending) = CODEX_BRIDGE_PENDING.get() {
+        if let Ok(mut pending) = pending.lock() {
+            pending.remove(id);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ParsedHttpRequest {
+    method: String,
+    path: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+}
+
+#[derive(Debug)]
+struct HttpParseError {
+    status: u16,
+    message: String,
+}
+
+fn read_http_request(stream: &mut TcpStream) -> Result<ParsedHttpRequest, HttpParseError> {
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .map_err(|error| HttpParseError {
+            status: 500,
+            message: error.to_string(),
+        })?;
+    let mut buffer = Vec::new();
+    let mut chunk = [0_u8; 8192];
+    let header_end = loop {
+        let size = stream.read(&mut chunk).map_err(|error| HttpParseError {
+            status: 400,
+            message: error.to_string(),
+        })?;
+        if size == 0 {
+            return Err(HttpParseError {
+                status: 400,
+                message: "请求为空。".to_string(),
+            });
+        }
+        buffer.extend_from_slice(&chunk[..size]);
+        if buffer.len() > MAX_CODEX_BRIDGE_REQUEST_BYTES {
+            return Err(HttpParseError {
+                status: 413,
+                message: "请求体过大。".to_string(),
+            });
+        }
+        if let Some(index) = find_header_end(&buffer) {
+            break index;
+        }
+    };
+
+    let header_bytes = &buffer[..header_end];
+    let header_text = String::from_utf8(header_bytes.to_vec()).map_err(|_| HttpParseError {
+        status: 400,
+        message: "HTTP 头不是有效 UTF-8。".to_string(),
+    })?;
+    let mut lines = header_text.split("\r\n");
+    let request_line = lines.next().ok_or_else(|| HttpParseError {
+        status: 400,
+        message: "请求行为空。".to_string(),
+    })?;
+    let mut request_parts = request_line.split_whitespace();
+    let method = request_parts.next().unwrap_or("").to_ascii_uppercase();
+    let path = request_parts.next().unwrap_or("").to_string();
+    if method.is_empty() || path.is_empty() {
+        return Err(HttpParseError {
+            status: 400,
+            message: "请求行无效。".to_string(),
+        });
+    }
+
+    let mut headers = HashMap::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((name, value)) = line.split_once(':') {
+            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+        }
+    }
+    let content_length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if content_length > MAX_CODEX_BRIDGE_REQUEST_BYTES {
+        return Err(HttpParseError {
+            status: 413,
+            message: "请求体过大。".to_string(),
+        });
+    }
+
+    let body_start = header_end + 4;
+    while buffer.len().saturating_sub(body_start) < content_length {
+        let size = stream.read(&mut chunk).map_err(|error| HttpParseError {
+            status: 400,
+            message: error.to_string(),
+        })?;
+        if size == 0 {
+            break;
+        }
+        buffer.extend_from_slice(&chunk[..size]);
+        if buffer.len() > MAX_CODEX_BRIDGE_REQUEST_BYTES + body_start {
+            return Err(HttpParseError {
+                status: 413,
+                message: "请求体过大。".to_string(),
+            });
+        }
+    }
+
+    let body = if content_length > 0 {
+        Some(
+            String::from_utf8(buffer[body_start..body_start + content_length].to_vec()).map_err(
+                |_| HttpParseError {
+                    status: 400,
+                    message: "请求体不是有效 UTF-8。".to_string(),
+                },
+            )?,
+        )
+    } else {
+        None
+    };
+
+    Ok(ParsedHttpRequest {
+        method,
+        path,
+        headers,
+        body,
+    })
+}
+
+fn write_http_response(
+    stream: &mut TcpStream,
+    response: CodexBridgeHttpResponse,
+) -> std::io::Result<()> {
+    let mut headers = response.headers.unwrap_or_default();
+    let body = if let Some(body_base64) = response.body_base64 {
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, body_base64)
+            .unwrap_or_else(|_| Vec::new())
+    } else {
+        if !headers.contains_key("Content-Type") {
+            headers.insert(
+                "Content-Type".to_string(),
+                "application/json; charset=utf-8".to_string(),
+            );
+        }
+        response.body.unwrap_or_default().into_bytes()
+    };
+    if let Some(cors_origin) = response.cors_origin {
+        headers.insert("Access-Control-Allow-Origin".to_string(), cors_origin);
+    }
+    headers.insert(
+        "Access-Control-Allow-Headers".to_string(),
+        "Content-Type".to_string(),
+    );
+    headers.insert(
+        "Access-Control-Allow-Methods".to_string(),
+        "GET,POST,PATCH,DELETE,OPTIONS".to_string(),
+    );
+    headers.insert("Content-Length".to_string(), body.len().to_string());
+
+    let reason = status_reason(response.status);
+    write!(stream, "HTTP/1.1 {} {}\r\n", response.status, reason)?;
+    for (name, value) in headers {
+        write!(stream, "{name}: {value}\r\n")?;
+    }
+    write!(stream, "\r\n")?;
+    stream.write_all(&body)
+}
+
+fn find_header_end(buffer: &[u8]) -> Option<usize> {
+    buffer.windows(4).position(|window| window == b"\r\n\r\n")
+}
+
+fn bridge_cors_origin(origin: Option<&String>, port: u16) -> Result<Option<String>, ()> {
+    let Some(origin) = origin else {
+        return Ok(None);
+    };
+    if origin == "null"
+        || origin == &format!("http://{CODEX_BRIDGE_HOST}:{port}")
+        || origin == &format!("http://localhost:{port}")
+        || origin.starts_with("http://127.0.0.1:")
+        || origin.starts_with("http://localhost:")
+        || origin.starts_with("https://127.0.0.1:")
+        || origin.starts_with("https://localhost:")
+    {
+        Ok(Some(origin.clone()))
+    } else {
+        Err(())
+    }
+}
+
+fn json_error(message: &str) -> String {
+    serde_json::json!({
+        "ok": false,
+        "error": message
+    })
+    .to_string()
+}
+
+fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
+    let (_, base64_payload) = data_url
+        .split_once(";base64,")
+        .ok_or_else(|| "图片数据必须是 base64 data URL。".to_string())?;
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64_payload)
+        .map_err(|error| error.to_string())
+}
+
+fn mime_type_from_path(path: &Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "jpg" | "jpeg" => "image/jpeg",
+        "webp" => "image/webp",
+        _ => "image/png",
+    }
+}
+
+fn sanitize_export_filename(filename: &str) -> String {
+    let candidate = filename
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    if candidate.is_empty() {
+        "pixai-image.png".to_string()
+    } else {
+        candidate
+    }
+}
+
+fn codex_skills_dir() -> Result<PathBuf, String> {
+    let codex_home = env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".codex")))
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+        .ok_or_else(|| "无法定位 Codex 全局目录。".to_string())?;
+    Ok(codex_home.join("skills"))
+}
+
+fn sanitize_skill_name(name: &str) -> Result<String, String> {
+    let is_valid = !name.is_empty()
+        && name.len() < 64
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        && !name.starts_with('-')
+        && !name.ends_with('-');
+    if is_valid {
+        Ok(name.to_string())
+    } else {
+        Err("Skill 名称只能包含小写字母、数字和连字符。".to_string())
+    }
+}
+
+fn sanitize_skill_relative_path(relative_path: &str) -> Result<PathBuf, String> {
+    let path = Path::new(relative_path);
+    if path.is_absolute() || relative_path.trim().is_empty() {
+        return Err("Skill 文件路径必须是相对路径。".to_string());
+    }
+    let mut output = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(value) => output.push(value),
+            _ => return Err("Skill 文件路径不能包含 .. 或特殊路径段。".to_string()),
+        }
+    }
+    if output.as_os_str().is_empty() {
+        Err("Skill 文件路径不能为空。".to_string())
+    } else {
+        Ok(output)
+    }
+}
+
+fn status_reason(status: u16) -> &'static str {
+    match status {
+        200 => "OK",
+        201 => "Created",
+        202 => "Accepted",
+        204 => "No Content",
+        400 => "Bad Request",
+        403 => "Forbidden",
+        404 => "Not Found",
+        413 => "Payload Too Large",
+        500 => "Internal Server Error",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        _ => "OK",
+    }
+}
+
+impl CodexBridgeTransportResponse {
+    fn into_http_response(self) -> CodexBridgeHttpResponse {
+        CodexBridgeHttpResponse {
+            status: self.status,
+            headers: self.headers,
+            body: self.body,
+            body_base64: self.body_base64,
+            cors_origin: None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installs_codex_skill_files_under_the_selected_skills_directory() {
+        let skills_dir = env::temp_dir().join(format!(
+            "pixai-skill-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let request = CodexSkillInstallRequest {
+            name: "pixai-image-workbench".to_string(),
+            files: vec![
+                CodexSkillFile {
+                    relative_path: "SKILL.md".to_string(),
+                    content: "---\nname: pixai-image-workbench\ndescription: test\n---\n".to_string(),
+                },
+                CodexSkillFile {
+                    relative_path: "scripts/pixai-codex.mjs".to_string(),
+                    content: "#!/usr/bin/env node\n".to_string(),
+                },
+            ],
+        };
+
+        let status = install_codex_skill_in(&skills_dir, request).expect("skill installs");
+
+        assert!(status.installed);
+        assert_eq!(status.name, "pixai-image-workbench");
+        assert!(skills_dir
+            .join("pixai-image-workbench")
+            .join("SKILL.md")
+            .is_file());
+        assert!(skills_dir
+            .join("pixai-image-workbench")
+            .join("scripts")
+            .join("pixai-codex.mjs")
+            .is_file());
+
+        let _ = fs::remove_dir_all(skills_dir);
+    }
+
+    #[test]
+    fn rejects_codex_skill_path_traversal() {
+        let skills_dir = env::temp_dir().join("pixai-skill-path-traversal-test");
+        let request = CodexSkillInstallRequest {
+            name: "pixai-image-workbench".to_string(),
+            files: vec![CodexSkillFile {
+                relative_path: "../outside.md".to_string(),
+                content: "bad".to_string(),
+            }],
+        };
+
+        let error = install_codex_skill_in(&skills_dir, request).expect_err("path is rejected");
+
+        assert!(error.contains(".."));
+        let _ = fs::remove_dir_all(skills_dir);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            start_codex_bridge(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             app_data_dir,
             read_json_state,
@@ -237,7 +982,13 @@ pub fn run() {
             set_profile_secret,
             get_profile_secret,
             delete_profile_secret,
-            http_proxy
+            http_proxy,
+            read_local_image_file,
+            write_data_url_file,
+            codex_skill_status,
+            install_codex_skill,
+            codex_bridge_respond,
+            codex_bridge_ready
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { pixaiApi } from '../services/app-api'
 import { useAppStore } from './app-store'
 
 describe('useAppStore', () => {
@@ -10,6 +11,16 @@ describe('useAppStore', () => {
     expect(state.templates.length).toBeGreaterThan(0)
     expect(state.conversations).toHaveLength(1)
     expect(state.activeConversationId).toBe(state.conversations[0].id)
+  })
+
+  it('does not install or query the Codex Skill during normal app load', async () => {
+    const statusSpy = vi.spyOn(pixaiApi.codexSkill, 'status')
+    const installSpy = vi.spyOn(pixaiApi.codexSkill, 'install')
+
+    await useAppStore.getState().load()
+
+    expect(statusSpy).not.toHaveBeenCalled()
+    expect(installSpy).not.toHaveBeenCalled()
   })
 
   it('applies prompt templates to the active conversation', async () => {
