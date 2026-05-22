@@ -130,7 +130,7 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
   async generateImage(profile, request) {
     if (!profile.apiKey) throw new Error('API Key 尚未配置。')
     const hasReferences = request.referenceImages.length > 0
-    if (!hasReferences && profile.imageGenerationEndpoint === 'responses-api') {
+    if (profile.imageGenerationEndpoint === 'responses-api') {
       return (await requestResponsesImageGeneration(
         profile,
         request,
@@ -244,18 +244,19 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
 async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, request: ImageGenerationRequest, timeoutMs: number): Promise<ResponsesImageStreamResult> {
   const endpoint = buildResponsesEndpoint(profile.baseUrl)
   const input = request.input
+  const hasReferences = request.referenceImages.length > 0
   const response = await fetchTextStreamThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
     signal: request.signal,
     body: JSON.stringify({
       model: profile.defaultPromptModel,
-      input: input.prompt.trim(),
+      input: buildResponsesImageInput(input.prompt, request.referenceImages),
       stream: true,
       tools: [
         {
           type: 'image_generation',
-          action: 'generate',
+          action: hasReferences ? 'edit' : 'generate',
           model: input.model || profile.defaultImageModel,
           size: input.size || getDefaultImageSize(input.ratio),
           quality: input.quality,
@@ -286,6 +287,23 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
     images: fallbackImages,
     eventCount: result.eventCount
   }
+}
+
+function buildResponsesImageInput(prompt: string, referenceImages: ImageGenerationRequest['referenceImages']): string | Array<Record<string, unknown>> {
+  const text = prompt.trim()
+  if (referenceImages.length === 0) return text
+  return [
+    {
+      role: 'user',
+      content: [
+        { type: 'input_text', text },
+        ...referenceImages.map((reference) => ({
+          type: 'input_image',
+          image_url: reference.dataUrl
+        }))
+      ]
+    }
+  ]
 }
 
 async function requestPrompt(profile: ProviderRuntimeProfile, instruction: string, signal?: AbortSignal): Promise<string> {
