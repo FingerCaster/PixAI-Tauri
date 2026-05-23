@@ -4,7 +4,7 @@ import { createPortal } from 'react-dom'
 import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
 import { imageSourceForDisplay } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
-import type { Conversation } from '../../shared/types'
+import type { Conversation, ReferenceImage } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 
 export function Composer({ conversation, generating }: { conversation: Conversation; generating: boolean }) {
@@ -19,6 +19,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   } = useAppStore()
   const [referenceSources, setReferenceSources] = useState<Record<string, string>>({})
   const [promptExpanded, setPromptExpanded] = useState(false)
+  const [previewReference, setPreviewReference] = useState<ReferenceImage | null>(null)
 
   useEffect(() => {
     let canceled = false
@@ -71,8 +72,10 @@ export function Composer({ conversation, generating }: { conversation: Conversat
         <div className="reference-row">
           {conversation.referenceImages.map((reference) => (
             <div className="reference-thumb" key={reference.id}>
-              <img src={referenceSources[reference.id] || reference.dataUrl} alt={reference.name} />
-              <button type="button" onClick={() => void removeReferenceImage(reference.id)} title="移除参考图">
+              <button className="reference-preview-button" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
+                <img src={referenceSources[reference.id] || reference.dataUrl} alt={reference.name} />
+              </button>
+              <button className="reference-remove-button" type="button" onClick={() => void removeReferenceImage(reference.id)} title="移除参考图">
                 <X size={14} />
               </button>
             </div>
@@ -118,8 +121,67 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           onPromptChange={(draftPrompt) => void updateActiveConversation({ draftPrompt })}
         />
       ) : null}
+      {previewReference ? (
+        <ReferencePreviewModal
+          reference={previewReference}
+          source={referenceSources[previewReference.id] || previewReference.dataUrl}
+          onClose={() => setPreviewReference(null)}
+        />
+      ) : null}
     </section>
   )
+}
+
+function ReferencePreviewModal({ reference, source, onClose }: { reference: ReferenceImage; source: string; onClose: () => void }) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <div
+      className="modal-backdrop image-preview-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        className="image-preview-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="参考图预览"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="image-preview-head">
+          <div>
+            <strong>{reference.name}</strong>
+            <span>
+              {reference.mimeType} · {formatFileSize(reference.fileSizeBytes)}
+            </span>
+          </div>
+          <button className="icon-button image-preview-close" type="button" title="关闭" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </div>
+        <div className="image-preview-stage">
+          <img src={source} alt={reference.name} />
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '未知大小'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
 function PromptExpandModal({
