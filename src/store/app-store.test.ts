@@ -121,7 +121,7 @@ describe('useAppStore', () => {
     expect(__getSentNotificationsForTests()).toHaveLength(0)
   })
 
-  it('sends one system notification per successful image while unfocused', async () => {
+  it('sends one completion system notification while unfocused', async () => {
     await prepareSuccessfulGeneration()
     __setNotificationPermissionForTests('granted')
     await useAppStore.getState().updatePreferences({ notifyOnImageSuccess: true, notificationPermission: 'granted' })
@@ -129,7 +129,9 @@ describe('useAppStore', () => {
 
     await useAppStore.getState().generate()
 
-    expect(__getSentNotificationsForTests()).toHaveLength(2)
+    expect(__getSentNotificationsForTests()).toEqual([
+      expect.objectContaining({ title: 'PixAI 图片生成完成' })
+    ])
   })
 
   it('keeps the existing completion toast when notification permission is unavailable', async () => {
@@ -144,7 +146,7 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().toast).toContain('生成完成')
   })
 
-  it('does not send a system notification for failed image generation', async () => {
+  it('sends a system notification for failed image generation while unfocused', async () => {
     await prepareSuccessfulGeneration()
     __setNotificationPermissionForTests('granted')
     await useAppStore.getState().updatePreferences({ notifyOnImageSuccess: true, notificationPermission: 'granted' })
@@ -153,7 +155,9 @@ describe('useAppStore', () => {
 
     await useAppStore.getState().generate()
 
-    expect(__getSentNotificationsForTests()).toHaveLength(0)
+    expect(__getSentNotificationsForTests()).toEqual([
+      expect.objectContaining({ title: 'PixAI 图片生成失败' })
+    ])
     expect(useAppStore.getState().toast).toContain('生成失败')
   })
 

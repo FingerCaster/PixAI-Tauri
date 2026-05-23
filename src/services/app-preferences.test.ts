@@ -3,22 +3,24 @@ import { __setNotificationPermissionForTests } from '../lib/platform'
 import { AppPreferencesStore } from './app-preferences'
 
 describe('AppPreferencesStore', () => {
-  it('defaults successful image notifications to disabled', async () => {
+  it('defaults successful image notifications to disabled and close-to-tray to enabled', async () => {
     const store = new AppPreferencesStore()
 
     const preferences = await store.get()
 
     expect(preferences.notifyOnImageSuccess).toBe(false)
+    expect(preferences.closeToTray).toBe(true)
     expect(preferences.notificationPermission).toBe('unsupported')
   })
 
   it('persists successful image notification preference changes', async () => {
     const store = new AppPreferencesStore()
 
-    await store.update({ notifyOnImageSuccess: true })
+    await store.update({ notifyOnImageSuccess: true, closeToTray: false })
 
     await expect(new AppPreferencesStore().get()).resolves.toMatchObject({
-      notifyOnImageSuccess: true
+      notifyOnImageSuccess: true,
+      closeToTray: false
     })
   })
 

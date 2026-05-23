@@ -1,11 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import {
-  isPermissionGranted as isNotificationPermissionGranted,
-  requestPermission as requestNotificationPermission,
-  sendNotification as sendPlatformNotification
-} from '@tauri-apps/plugin-notification'
 import type { CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
 
 type SecretWriteResult = {
@@ -54,6 +49,8 @@ type StoredDataUrlFileResult = {
   mimeType: string
   fileSizeBytes: number
 }
+
+type CloseRequestAction = 'hide' | 'quit' | false
 
 const memoryStorage = new Map<string, string>()
 const memorySecrets = new Map<string, string>()
@@ -267,23 +264,34 @@ export async function watchWindowFocus(onChange: (focused: boolean) => void): Pr
   return unlisten
 }
 
+export async function watchCloseRequested(onCloseRequested: () => CloseRequestAction | Promise<CloseRequestAction>): Promise<() => void> {
+  if (!isTauriRuntime()) return () => undefined
+  const currentWindow = getCurrentWindow()
+  return currentWindow.onCloseRequested(async (event) => {
+    const action = await onCloseRequested()
+    if (!action) return
+    event.preventDefault()
+    if (action === 'quit') {
+      await invoke('quit_app')
+      return
+    }
+    await invoke('hide_main_window')
+  })
+}
+
 export async function getSystemNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
   if (mockNotificationPermission) return mockNotificationPermission
+  if (isTauriRuntime()) return 'granted'
   if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
-  if (!isTauriRuntime()) return window.Notification.permission
-  try {
-    if (await isNotificationPermissionGranted()) return 'granted'
-    return window.Notification.permission || 'default'
-  } catch {
-    return window.Notification.permission || 'unsupported'
-  }
+  return window.Notification.permission
 }
 
 export async function requestSystemNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
   if (mockNotificationPermission) return mockNotificationPermission
+  if (isTauriRuntime()) return 'granted'
   if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
   try {
-    return await requestNotificationPermission()
+    return await window.Notification.requestPermission()
   } catch {
     return getSystemNotificationPermission()
   }
@@ -298,7 +306,33 @@ export async function sendSystemNotification(title: string, body?: string): Prom
   if (!isTauriRuntime() && !mockNotificationPermission && typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission !== 'granted') {
     throw new Error('系统通知权限不可用。')
   }
-  sendPlatformNotification({ title, body })
+  if (isTauriRuntime()) {
+    await invoke('send_system_notification', { request: { title, body } })
+    return
+  }
+  const notification = new Notification(title, body ? { body } : undefined)
+  notification.onclick = () => {
+    void activateMainWindow()
+    window.dispatchEvent(new Event('pixai:system-notification-activated'))
+  }
+}
+
+export async function notifyWindowSentToTray(): Promise<void> {
+  if (!isTauriRuntime()) return
+  await invoke('send_system_notification', {
+    request: {
+      title: 'PixAI 已最小化到系统托盘',
+      body: '点击托盘图标可恢复窗口，右键可退出。'
+    }
+  })
+}
+
+export async function activateMainWindow(): Promise<void> {
+  if (!isTauriRuntime()) {
+    window.focus()
+    return
+  }
+  await invoke('activate_main_window')
 }
 
 export async function readLocalImageFile(path: string): Promise<ReferenceImageFilePayload> {

@@ -129,15 +129,10 @@ button:disabled {
 }
 
 .brand-mark {
-  display: grid;
   width: 34px;
   height: 34px;
-  place-items: center;
   border-radius: 10px;
-  background: linear-gradient(135deg, #7be1ba, #6ba8ff 58%, #ffc3aa);
-  color: #fff;
-  font-size: 17px;
-  font-weight: 900;
+  object-fit: cover;
   box-shadow: 0 10px 22px rgb(39 155 118 / 18%);
 }
 
@@ -400,9 +395,16 @@ label {
 }
 
 .main-surface {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+.main-surface > * {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .workspace {
@@ -522,7 +524,7 @@ textarea {
 
 .prompt-foot {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 32px minmax(0, 1fr) 32px auto;
   align-items: center;
   gap: 10px;
   padding: 6px 10px 7px 16px;
@@ -574,6 +576,24 @@ textarea {
   padding: 0 11px;
   font-size: 12px;
   font-weight: 850;
+}
+
+.prompt-expand-button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: rgb(36 94 76 / 72%);
+  padding: 0;
+  box-shadow: none;
+}
+
+.prompt-expand-button:hover {
+  background: rgb(24 125 93 / 10%);
+  color: var(--mint-dark);
 }
 
 .reference-row {
@@ -1153,17 +1173,84 @@ select {
   word-break: break-word;
 }
 
+.prompt-expand-backdrop {
+  z-index: 26;
+}
+
+.prompt-expand-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  width: min(980px, calc(100vw - 36px));
+  height: min(740px, calc(100vh - 36px));
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 28px 80px rgb(47 85 66 / 24%);
+  padding: 14px;
+}
+
+.prompt-expand-head,
+.prompt-expand-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.prompt-expand-head div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.prompt-expand-head strong,
+.prompt-expand-head span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-expand-head span,
+.prompt-expand-actions span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.prompt-expand-close {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+}
+
+.prompt-expand-textarea {
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--paper-soft);
+  padding: 16px;
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+.prompt-expand-actions {
+  flex-wrap: wrap;
+}
+
 .image-preview-backdrop {
   z-index: 25;
-  padding: 26px;
+  padding: 18px;
 }
 
 .image-preview-panel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
-  width: min(1180px, calc(100vw - 52px));
-  height: min(880px, calc(100vh - 52px));
+  width: min(1440px, calc(100vw - 36px));
+  height: min(1040px, calc(100vh - 36px));
   min-height: 0;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -1199,19 +1286,28 @@ select {
   font-weight: 750;
 }
 
+.image-preview-close {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+}
+
 .image-preview-stage {
   display: grid;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   border-radius: 8px;
   background: #111814;
   place-items: center;
+  padding: 10px;
 }
 
 .image-preview-stage img {
   display: block;
   max-width: 100%;
-  max-height: 100%;
+  max-height: min(920px, calc(100vh - 160px));
+  width: auto;
+  height: auto;
   object-fit: contain;
 }
 

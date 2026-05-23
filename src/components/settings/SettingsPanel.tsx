@@ -155,15 +155,21 @@ export function SettingsPanel() {
         </div>
         <div className="toggle-stack">
           <ToggleRow
-            label="生图成功通知"
-            help="开启后，PixAI 失焦时每张成功生成的图片都会发送系统通知。"
+            label="关闭到系统托盘"
+            help="开启后点击窗口关闭按钮会隐藏到托盘，托盘图标可恢复窗口或退出应用。"
+            checked={preferences.closeToTray}
+            onChange={() => void updatePreferences({ closeToTray: !preferences.closeToTray })}
+          />
+          <ToggleRow
+            label="生图完成通知"
+            help="开启后，PixAI 失焦时每次生图结束都会发送系统通知，成功或失败都会提示。"
             checked={preferences.notifyOnImageSuccess}
             onChange={() => void updatePreferences({ notifyOnImageSuccess: !preferences.notifyOnImageSuccess })}
           />
         </div>
         {showNotificationPermissionWarning ? (
           <div className="settings-warning">
-            <span>系统通知权限未开启，生成成功时会退回应用内提示。</span>
+            <span>系统通知权限未开启，生成结束时会退回应用内提示。</span>
             <button type="button" onClick={() => void requestNotificationPermission()}>
               开启权限
             </button>

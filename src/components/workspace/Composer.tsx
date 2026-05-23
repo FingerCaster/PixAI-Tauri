@@ -1,6 +1,7 @@
 import type { ChangeEvent, DragEvent } from 'react'
 import { useEffect, useState } from 'react'
-import { Image, Loader2, Sparkles, WandSparkles, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
 import { imageSourceForDisplay } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation } from '../../shared/types'
@@ -17,6 +18,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     updateActiveConversation
   } = useAppStore()
   const [referenceSources, setReferenceSources] = useState<Record<string, string>>({})
+  const [promptExpanded, setPromptExpanded] = useState(false)
 
   useEffect(() => {
     let canceled = false
@@ -79,6 +81,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
       ) : null}
       <div className="prompt-box">
         <textarea
+          className="prompt-textarea"
           value={conversation.draftPrompt}
           placeholder="描述你想生成的画面..."
           onChange={(event) => void updateActiveConversation({ draftPrompt: event.target.value })}
@@ -97,12 +100,100 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           <div className="hint">
             {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
           </div>
+          <button className="prompt-expand-button" type="button" onClick={() => setPromptExpanded(true)} title="放大查看提示词" aria-label="放大查看提示词">
+            <Maximize2 size={16} />
+          </button>
           <button className="generate-button" type="button" onClick={() => void generate()} disabled={!conversation.draftPrompt.trim()}>
             {generating ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
             {generating ? '继续生成' : '生成图片'}
           </button>
         </div>
       </div>
+      {promptExpanded ? (
+        <PromptExpandModal
+          conversation={conversation}
+          generating={generating}
+          onClose={() => setPromptExpanded(false)}
+          onGenerate={() => void generate()}
+          onPromptChange={(draftPrompt) => void updateActiveConversation({ draftPrompt })}
+        />
+      ) : null}
     </section>
+  )
+}
+
+function PromptExpandModal({
+  conversation,
+  generating,
+  onClose,
+  onGenerate,
+  onPromptChange
+}: {
+  conversation: Conversation
+  generating: boolean
+  onClose: () => void
+  onGenerate: () => void
+  onPromptChange: (draftPrompt: string) => void
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <div
+      className="modal-backdrop prompt-expand-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        className="prompt-expand-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="提示词放大编辑"
+        onMouseDown={(event) => event.stopPropagation()}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="prompt-expand-head">
+          <div>
+            <strong>提示词</strong>
+            <span>
+              {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
+            </span>
+          </div>
+          <button className="icon-button prompt-expand-close" type="button" title="关闭" onClick={onClose}>
+            <X size={20} />
+          </button>
+        </div>
+        <textarea
+          className="prompt-expand-textarea"
+          value={conversation.draftPrompt}
+          placeholder="描述你想生成的画面..."
+          autoFocus
+          onChange={(event) => onPromptChange(event.target.value)}
+        />
+        <div className="prompt-expand-actions">
+          <span>{conversation.draftPrompt.trim().length} 字符</span>
+          <button
+            className="generate-button"
+            type="button"
+            onClick={() => {
+              onClose()
+              onGenerate()
+            }}
+            disabled={!conversation.draftPrompt.trim()}
+          >
+            {generating ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+            {generating ? '继续生成' : '生成图片'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
   )
 }

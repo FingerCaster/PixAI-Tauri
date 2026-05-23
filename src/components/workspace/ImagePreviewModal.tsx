@@ -50,8 +50,8 @@ export function ImagePreviewModal({ item, onClose }: { item: ImageHistoryItem; o
               {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
             </span>
           </div>
-          <button className="icon-button" type="button" title="关闭" onClick={onClose}>
-            <X size={16} />
+          <button className="icon-button image-preview-close" type="button" title="关闭" onClick={onClose}>
+            <X size={20} />
           </button>
         </div>
         <div className="image-preview-stage">

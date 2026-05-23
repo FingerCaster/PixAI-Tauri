@@ -49,6 +49,7 @@ export class AppPreferencesStore {
 function createDefaultPreferences(notificationPermission: NotificationPermissionState = 'default'): AppPreferences {
   return {
     notifyOnImageSuccess: false,
+    closeToTray: true,
     notificationPermission
   }
 }
@@ -56,6 +57,7 @@ function createDefaultPreferences(notificationPermission: NotificationPermission
 function normalizePreferences(preferences: AppPreferencesFile): AppPreferences {
   return {
     notifyOnImageSuccess: preferences.notifyOnImageSuccess === true,
+    closeToTray: preferences.closeToTray !== false,
     notificationPermission: normalizePermission(preferences.notificationPermission)
   }
 }

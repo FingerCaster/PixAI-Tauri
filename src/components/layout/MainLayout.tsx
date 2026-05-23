@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { BookOpen, GalleryHorizontalEnd, ImagePlus, Moon, PanelRightClose, PanelRightOpen, Plus, Settings, Sun, Trash2 } from 'lucide-react'
+import appLogo from '../../assets/app-logo.png'
 import { IMAGE_QUALITY_LABELS, buildImageEndpoint } from '../../shared/image-options'
 import { useAppStore } from '../../store/app-store'
 
@@ -26,7 +27,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
     <div className="shell app-frame">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark">P</div>
+          <img className="brand-mark" src={appLogo} alt="" />
           <div>
             <strong>PixAI</strong>
           </div>

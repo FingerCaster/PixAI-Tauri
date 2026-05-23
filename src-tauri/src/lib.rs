@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
+    env,
     error::Error,
-    env, fs,
+    fs,
     io::{Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
@@ -15,13 +16,24 @@ use std::{
     thread,
     time::Duration,
 };
+use tauri::{
+    menu::{Menu, MenuItem},
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+};
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(not(target_os = "windows"))]
+use tauri_plugin_notification::NotificationExt;
+#[cfg(target_os = "windows")]
+use tauri_winrt_notification::{Duration as ToastDuration, Toast};
 
 const SECRET_SERVICE: &str = "PixAI-Tauri";
 const CODEX_BRIDGE_HOST: &str = "127.0.0.1";
 const CODEX_BRIDGE_PORT: u16 = 43117;
 const MAX_CODEX_BRIDGE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 const CODEX_BRIDGE_REQUEST_EVENT: &str = "pixai://codex-bridge/request";
+const SYSTEM_NOTIFICATION_ACTIVATED_EVENT: &str = "pixai://system-notification/activated";
+const TRAY_MENU_SHOW_ID: &str = "show";
+const TRAY_MENU_QUIT_ID: &str = "quit";
 static KEYRING_READY: OnceLock<bool> = OnceLock::new();
 static CODEX_BRIDGE_STARTED: OnceLock<()> = OnceLock::new();
 static HTTP_PROXY_CLIENT: OnceLock<Client> = OnceLock::new();
@@ -90,6 +102,12 @@ struct HttpProxyResponse {
     status: u16,
     status_text: String,
     body: String,
+}
+
+#[derive(Deserialize)]
+struct SystemNotificationRequest {
+    title: String,
+    body: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -182,6 +200,29 @@ fn read_json_state(app: AppHandle, name: String) -> Result<Option<String>, Strin
 fn write_json_state(app: AppHandle, name: String, payload: String) -> Result<(), String> {
     let path = data_file_path(&app, &name)?;
     fs::write(path, payload).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn activate_main_window(app: AppHandle) -> Result<(), String> {
+    activate_main_window_for(&app)
+}
+
+#[tauri::command]
+fn hide_main_window(app: AppHandle) -> Result<(), String> {
+    hide_main_window_for(&app)
+}
+
+#[tauri::command]
+fn quit_app(app: AppHandle) {
+    app.exit(0);
+}
+
+#[tauri::command]
+fn send_system_notification(
+    app: AppHandle,
+    request: SystemNotificationRequest,
+) -> Result<(), String> {
+    send_system_notification_for(app, request)
 }
 
 #[tauri::command]
@@ -330,7 +371,10 @@ async fn http_proxy_stream(app: AppHandle, request: HttpProxyStreamRequest) -> R
             .clamp(1_000, 1_800_000),
     );
     let chunk_timeout = Duration::from_millis(
-        request.timeout_ms.unwrap_or(300_000).clamp(1_000, 1_800_000),
+        request
+            .timeout_ms
+            .unwrap_or(300_000)
+            .clamp(1_000, 1_800_000),
     );
     let mut saw_chunk = false;
     let mut response = response;
@@ -582,7 +626,10 @@ fn install_codex_skill_in(
     codex_skill_status_in(skills_dir, skill_name)
 }
 
-fn codex_skill_status_in(skills_dir: &Path, skill_name: String) -> Result<CodexSkillStatus, String> {
+fn codex_skill_status_in(
+    skills_dir: &Path,
+    skill_name: String,
+) -> Result<CodexSkillStatus, String> {
     let path = skills_dir.join(&skill_name);
     let skill_md_path = path.join("SKILL.md");
     Ok(CodexSkillStatus {
@@ -623,6 +670,122 @@ fn app_data_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn data_file_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     let safe_name = sanitize_name(name)?;
     Ok(app_data_path(app)?.join(format!("{safe_name}.json")))
+}
+
+fn activate_main_window_for(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found.".to_string())?;
+    let _ = window.show();
+    let _ = window.unminimize();
+    window.set_focus().map_err(|error| error.to_string())
+}
+
+fn hide_main_window_for(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "Main window not found.".to_string())?;
+    window.hide().map_err(|error| error.to_string())
+}
+
+fn setup_system_tray(app: &mut tauri::App) -> Result<(), Box<dyn Error>> {
+    let show = MenuItem::with_id(app, TRAY_MENU_SHOW_ID, "打开 PixAI", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, TRAY_MENU_QUIT_ID, "退出 PixAI", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    let mut builder = TrayIconBuilder::new()
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .tooltip("PixAI")
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            }
+            | TrayIconEvent::DoubleClick {
+                button: MouseButton::Left,
+                ..
+            } => {
+                let _ = activate_main_window_for(tray.app_handle());
+            }
+            _ => {}
+        })
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            TRAY_MENU_SHOW_ID => {
+                let _ = activate_main_window_for(app);
+            }
+            TRAY_MENU_QUIT_ID => app.exit(0),
+            _ => {}
+        });
+    if let Some(icon) = app.default_window_icon() {
+        builder = builder.icon(icon.clone());
+    }
+    builder.build(app)?;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn send_system_notification_for(
+    app: AppHandle,
+    request: SystemNotificationRequest,
+) -> Result<(), String> {
+    let app_id = notification_app_id(&app);
+    let mut toast = Toast::new(&app_id)
+        .title(&request.title)
+        .duration(ToastDuration::Short)
+        .on_activated(move |_| {
+            let _ = activate_main_window_for(&app);
+            let _ = app.emit(SYSTEM_NOTIFICATION_ACTIVATED_EVENT, ());
+            Ok(())
+        });
+    if let Some(body) = request
+        .body
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        toast = toast.text2(body);
+    }
+    toast.show().map_err(|error| error.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn send_system_notification_for(
+    app: AppHandle,
+    request: SystemNotificationRequest,
+) -> Result<(), String> {
+    let mut builder = app.notification().builder().title(request.title);
+    if let Some(body) = request.body {
+        builder = builder.body(body);
+    }
+    builder.show().map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn notification_app_id(app: &AppHandle) -> String {
+    let identifier = app.config().identifier.clone();
+    let installed = env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+        .map(|path| {
+            let current = path.display().to_string();
+            let release_suffix = format!(
+                "{}target{}release",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            );
+            let debug_suffix = format!(
+                "{}target{}debug",
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            );
+            !current.ends_with(&release_suffix) && !current.ends_with(&debug_suffix)
+        })
+        .unwrap_or(false);
+    if installed {
+        identifier
+    } else {
+        Toast::POWERSHELL_APP_ID.to_string()
+    }
 }
 
 fn secrets_file_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1101,8 +1264,14 @@ fn unique_file_path(directory: &Path, filename: &str) -> PathBuf {
         return candidate;
     }
     let path = Path::new(filename);
-    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("image");
-    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("png");
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("image");
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("png");
     for index in 1.. {
         let candidate = directory.join(format!("{stem}-{index}.{extension}"));
         if !candidate.exists() {
@@ -1226,7 +1395,8 @@ mod tests {
             files: vec![
                 CodexSkillFile {
                     relative_path: "SKILL.md".to_string(),
-                    content: "---\nname: pixai-image-workbench\ndescription: test\n---\n".to_string(),
+                    content: "---\nname: pixai-image-workbench\ndescription: test\n---\n"
+                        .to_string(),
                 },
                 CodexSkillFile {
                     relative_path: "scripts/pixai-codex.mjs".to_string(),
@@ -1311,11 +1481,16 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            setup_system_tray(app)?;
             start_codex_bridge(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             app_data_dir,
+            activate_main_window,
+            hide_main_window,
+            quit_app,
+            send_system_notification,
             read_json_state,
             write_json_state,
             set_profile_secret,

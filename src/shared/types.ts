@@ -76,6 +76,7 @@ export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'un
 
 export type AppPreferences = {
   notifyOnImageSuccess: boolean
+  closeToTray: boolean
   notificationPermission: NotificationPermissionState
 }
 

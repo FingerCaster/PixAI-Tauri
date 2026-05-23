@@ -6,12 +6,14 @@ import { PromptLibraryPage } from './components/prompts/PromptLibraryPage'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { Workspace } from './components/workspace/Workspace'
 import { registerCodexBridgeHandler } from './services/codex-bridge'
-import { isTauriRuntime, watchWindowFocus } from './lib/platform'
+import { isTauriRuntime, notifyWindowSentToTray, watchCloseRequested, watchWindowFocus } from './lib/platform'
 import { useAppStore } from './store/app-store'
 import './styles.css'
 
 function App() {
-  const { darkMode, load, loading, reloadHistory, setWindowFocused, settingsVisible, toast, view } = useAppStore()
+  const { darkMode, load, loading, reloadHistory, setView, setWindowFocused, settingsVisible, toast, view } = useAppStore()
+
+  const closeToTray = useAppStore((state) => state.preferences?.closeToTray ?? true)
 
   useEffect(() => {
     void load()
@@ -48,6 +50,44 @@ function App() {
       if (unwatch) void unwatch()
     }
   }, [setWindowFocused])
+
+  useEffect(() => {
+    let disposed = false
+    let unwatch: (() => void) | null = null
+    void watchCloseRequested(() => {
+      const { preferences } = useAppStore.getState()
+      if (!preferences?.closeToTray) return false
+      void notifyWindowSentToTray().catch(() => undefined)
+      return 'hide'
+    }).then((nextUnwatch) => {
+      if (disposed) void nextUnwatch()
+      else unwatch = nextUnwatch
+    })
+    return () => {
+      disposed = true
+      if (unwatch) void unwatch()
+    }
+  }, [closeToTray])
+
+  useEffect(() => {
+    const onActivated = () => {
+      setView('workspace')
+    }
+    if (!isTauriRuntime()) {
+      window.addEventListener('pixai:system-notification-activated', onActivated)
+      return () => window.removeEventListener('pixai:system-notification-activated', onActivated)
+    }
+    let disposed = false
+    let unlisten: (() => void) | null = null
+    void listen('pixai://system-notification/activated', onActivated).then((nextUnwatch) => {
+      if (disposed) void nextUnwatch()
+      else unlisten = nextUnwatch
+    })
+    return () => {
+      disposed = true
+      if (unlisten) void unlisten()
+    }
+  }, [setView])
 
   return (
     <div className={darkMode ? 'app theme-dark' : 'app'}>

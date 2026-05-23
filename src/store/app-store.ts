@@ -145,7 +145,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loading: true })
     const [settings, preferences] = await Promise.all([
       pixaiApi.settings.get(),
-      pixaiApi.preferences.get()
+      pixaiApi.preferences.refreshNotificationPermission()
     ])
     let conversations = await pixaiApi.conversation.list()
     if (conversations.length === 0) conversations = [await pixaiApi.conversation.create()]
@@ -423,12 +423,13 @@ export const useAppStore = create<AppState>((set, get) => ({
         removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
       })
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
-      get().notify(result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`)
-      if (!result.canceled && !result.errorMessage) {
-        await notifySuccessfulImages(result.items, get, durationText)
-      }
+      const completionMessage = result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`
+      get().notify(completionMessage)
+      if (!result.canceled) await notifyGenerationFinished(result.items, result.errorMessage || null, get, durationText)
     } catch (error) {
-      get().notify(error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `生成失败：${error.message}` : '生成失败')
+      const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `生成失败：${error.message}` : '生成失败'
+      get().notify(message)
+      await notifyGenerationFinished([], message, get, '')
     } finally {
       const endedGenerationState = endConversationGeneration(conversation.id, {
         generatingByConversation: get().generatingByConversation,
@@ -641,15 +642,27 @@ function getSelectedImageProfile(settings: ProviderSettings | null) {
   return settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId) || settings?.profiles[0] || null
 }
 
-async function notifySuccessfulImages(items: ImageHistoryItem[], get: () => AppState, durationText: string): Promise<void> {
-  const successes = items.filter((item) => item.status === 'succeeded')
-  if (successes.length === 0) return
+async function notifyGenerationFinished(items: ImageHistoryItem[], errorMessage: string | null, get: () => AppState, durationText: string): Promise<void> {
   const state = get()
   if (!state.preferences?.notifyOnImageSuccess) return
   if (state.windowFocused) return
   if (state.preferences.notificationPermission !== 'granted') return
-  await Promise.all(successes.map((item, index) => sendSystemNotification(
-    successes.length > 1 ? `PixAI 图片生成完成 ${index + 1}/${successes.length}` : 'PixAI 图片生成完成',
-    `${item.ratio} · ${item.quality}${durationText}`
-  ).catch(() => undefined)))
+  const successes = items.filter((item) => item.status === 'succeeded')
+  const failures = items.filter((item) => item.status === 'failed')
+  const title = errorMessage ? 'PixAI 图片生成失败' : 'PixAI 图片生成完成'
+  const body = errorMessage
+    ? `${errorMessage}${durationText}`
+    : buildSuccessNotificationBody(successes, failures, durationText)
+  await sendSystemNotification(title, body).catch(() => undefined)
+}
+
+function buildSuccessNotificationBody(successes: ImageHistoryItem[], failures: ImageHistoryItem[], durationText: string): string {
+  const first = successes[0]
+  if (!first) return `生成完成${durationText}`
+  const resultText = failures.length > 0
+    ? `${successes.length} 张成功，${failures.length} 张失败`
+    : successes.length > 1
+      ? `${successes.length} 张图片`
+      : `${first.ratio} · ${first.quality}`
+  return `${resultText}${durationText}`
 }
