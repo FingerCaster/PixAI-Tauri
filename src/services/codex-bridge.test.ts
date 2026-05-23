@@ -14,6 +14,8 @@ function bridgeRequest(path: string, method = 'GET', body?: unknown) {
 }
 
 describe('codex bridge', () => {
+  const bridgeImageBase64 = btoa('bridge-image'.repeat(8))
+
   beforeEach(() => {
     vi.stubGlobal(
       'fetch',
@@ -24,7 +26,7 @@ describe('codex bridge', () => {
             headers: { 'content-type': 'application/json' }
           })
         }
-        return new Response(JSON.stringify({ data: [{ b64_json: btoa('bridge-image') }] }), {
+        return new Response(JSON.stringify({ data: [{ b64_json: bridgeImageBase64 }] }), {
           status: 200,
           headers: { 'content-type': 'application/json' }
         })
@@ -113,7 +115,7 @@ describe('codex bridge', () => {
     expect(generated.items[0].bridgeFileUrl).toContain(`/images/${historyId}/file`)
     expect(fileResponse.status).toBe(200)
     expect(fileResponse.headers?.['Content-Type']).toBe('image/png')
-    expect(fileResponse.bodyBase64).toBe(btoa('bridge-image'))
+    expect(fileResponse.bodyBase64).toBe(bridgeImageBase64)
   })
 
   it('returns a preflight error without workspace records when image profile has no API key', async () => {

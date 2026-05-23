@@ -121,6 +121,10 @@ function downloadDataUrl(dataUrl: string, id: string): void {
 }
 
 function extensionFromDataUrl(dataUrl: string): string {
+  if (!dataUrl.startsWith('data:')) {
+    const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(dataUrl)?.[1]?.toLowerCase()
+    return extension === 'jpg' || extension === 'jpeg' || extension === 'webp' ? extension : 'png'
+  }
   const mimeType = /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || ''
   if (mimeType.includes('jpeg')) return 'jpg'
   if (mimeType.includes('webp')) return 'webp'

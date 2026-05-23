@@ -30,8 +30,12 @@ export function SettingsPanel() {
     activeConversationId,
     conversations,
     settings,
+    preferences,
     updateActiveConversation,
     updateSettings,
+    updatePreferences,
+    requestNotificationPermission,
+    refreshNotificationPermission,
     deleteProfile,
     upsertProfile,
     codexSkillStatus,
@@ -66,7 +70,12 @@ export function SettingsPanel() {
     void loadCodexSkillStatus()
   }, [loadCodexSkillStatus])
 
-  if (!settings || !conversation) return <aside className="settings-panel" />
+  useEffect(() => {
+    if (!preferences?.notifyOnImageSuccess) return
+    void refreshNotificationPermission()
+  }, [preferences?.notifyOnImageSuccess, refreshNotificationPermission])
+
+  if (!settings || !preferences || !conversation) return <aside className="settings-panel" />
 
   const openNewProfileDialog = () => {
     setProfileApiKey('')
@@ -132,9 +141,36 @@ export function SettingsPanel() {
       notify(error instanceof Error ? `打开目录失败：${error.message}` : '打开目录失败')
     }
   }
+  const notificationPermissionLabel = getNotificationPermissionLabel(preferences.notificationPermission)
+  const showNotificationPermissionWarning = preferences.notifyOnImageSuccess && preferences.notificationPermission !== 'granted'
 
   return (
     <aside className="settings-panel">
+      <section className="settings-section">
+        <div className="section-title">
+          <h2>本地通知</h2>
+          <span className={`pill tiny ${preferences.notificationPermission === 'granted' ? 'good' : 'warn'}`}>
+            {notificationPermissionLabel}
+          </span>
+        </div>
+        <div className="toggle-stack">
+          <ToggleRow
+            label="生图成功通知"
+            help="开启后，PixAI 失焦时每张成功生成的图片都会发送系统通知。"
+            checked={preferences.notifyOnImageSuccess}
+            onChange={() => void updatePreferences({ notifyOnImageSuccess: !preferences.notifyOnImageSuccess })}
+          />
+        </div>
+        {showNotificationPermissionWarning ? (
+          <div className="settings-warning">
+            <span>系统通知权限未开启，生成成功时会退回应用内提示。</span>
+            <button type="button" onClick={() => void requestNotificationPermission()}>
+              开启权限
+            </button>
+          </div>
+        ) : null}
+      </section>
+
       <section className="settings-section">
         <div className="section-title">
           <h2>服务配置</h2>
@@ -609,6 +645,13 @@ function createProfileDraft(): ProviderProfile {
 
 function hasSameUsages(profile: ProviderProfile, usages: Array<'image' | 'prompt'>): boolean {
   return profile.enabledUsages.length === usages.length && usages.every((usage) => profile.enabledUsages.includes(usage))
+}
+
+function getNotificationPermissionLabel(permission: string): string {
+  if (permission === 'granted') return '系统已允许'
+  if (permission === 'denied') return '系统已拒绝'
+  if (permission === 'unsupported') return '不支持'
+  return '待授权'
 }
 
 function ToggleRow({

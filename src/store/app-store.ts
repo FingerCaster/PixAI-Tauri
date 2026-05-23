@@ -2,8 +2,11 @@ import { create } from 'zustand'
 import { pixaiApi } from '../services/app-api'
 import { ImageGenerationPreflightError } from '../services/image-service'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
+import { sendSystemNotification } from '../lib/platform'
 import { formatDuration } from '../lib/time'
 import type {
+  AppPreferences,
+  AppPreferencesUpdate,
   CodexSkillStatus,
   Conversation,
   ConversationCreateInput,
@@ -33,6 +36,8 @@ type AppState = {
   settingsVisible: boolean
   darkMode: boolean
   settings: ProviderSettings | null
+  preferences: AppPreferences | null
+  windowFocused: boolean
   conversations: Conversation[]
   activeConversationId: string | null
   runsByConversation: Record<string, GenerationRun[]>
@@ -61,6 +66,10 @@ type AppState = {
   deleteConversation: (id: string) => Promise<void>
   updateActiveConversation: (input: ConversationUpdate) => Promise<void>
   updateSettings: (input: ProviderSettingsUpdate) => Promise<void>
+  updatePreferences: (input: AppPreferencesUpdate) => Promise<void>
+  refreshNotificationPermission: () => Promise<void>
+  requestNotificationPermission: () => Promise<void>
+  setWindowFocused: (focused: boolean) => void
   upsertProfile: (input: ProviderProfileInput) => Promise<void>
   deleteProfile: (id: string) => Promise<void>
   testProfile: (id: string) => Promise<void>
@@ -112,6 +121,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   settingsVisible: true,
   darkMode: false,
   settings: null,
+  preferences: null,
+  windowFocused: true,
   conversations: [],
   activeConversationId: null,
   runsByConversation: {},
@@ -132,7 +143,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     getConversationGenerationStateForId(conversationId, get().generatingByConversation, get().generationStartedAtByConversation),
   load: async () => {
     set({ loading: true })
-    const settings = await pixaiApi.settings.get()
+    const [settings, preferences] = await Promise.all([
+      pixaiApi.settings.get(),
+      pixaiApi.preferences.get()
+    ])
     let conversations = await pixaiApi.conversation.list()
     if (conversations.length === 0) conversations = [await pixaiApi.conversation.create()]
     const activeConversationId = get().activeConversationId || conversations[0]?.id || null
@@ -141,6 +155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const templates = await pixaiApi.templates.list()
     set({
       settings,
+      preferences,
       conversations,
       activeConversationId,
       runsByConversation: activeConversationId ? { [activeConversationId]: runs } : {},
@@ -220,6 +235,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ settings })
     get().notify('设置已保存')
   },
+  updatePreferences: async (input) => {
+    const preferences = await pixaiApi.preferences.update(input)
+    set({ preferences })
+    if (preferences.notifyOnImageSuccess) void get().refreshNotificationPermission()
+    get().notify('设置已保存')
+  },
+  refreshNotificationPermission: async () => {
+    const preferences = await pixaiApi.preferences.refreshNotificationPermission()
+    set({ preferences })
+  },
+  requestNotificationPermission: async () => {
+    const preferences = await pixaiApi.preferences.requestNotificationPermission()
+    set({ preferences })
+    get().notify(preferences.notificationPermission === 'granted' ? '系统通知已启用' : '系统通知权限不可用，已保留应用内提示')
+  },
+  setWindowFocused: (focused) => set({ windowFocused: focused }),
   upsertProfile: async (input) => {
     const settings = await pixaiApi.settings.upsertProfile(input)
     set({ settings })
@@ -393,6 +424,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       })
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
       get().notify(result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`)
+      if (!result.canceled && !result.errorMessage) {
+        await notifySuccessfulImages(result.items, get, durationText)
+      }
     } catch (error) {
       get().notify(error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `生成失败：${error.message}` : '生成失败')
     } finally {
@@ -524,9 +558,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         removedGenerationIndexesByRunId: nextRemovedIndexesByRunId
       })
     }
-    for (const id of selectedIds) {
-      await pixaiApi.history.delete(id)
-    }
+    await pixaiApi.history.deleteMany(Array.from(selectedIds))
     await get().reloadHistory()
     const runsByConversation = { ...get().runsByConversation }
     for (const conversationId of affectedConversationIds) {
@@ -607,4 +639,17 @@ function findHistoryItem(state: AppState, id: string): ImageHistoryItem | null {
 
 function getSelectedImageProfile(settings: ProviderSettings | null) {
   return settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId) || settings?.profiles[0] || null
+}
+
+async function notifySuccessfulImages(items: ImageHistoryItem[], get: () => AppState, durationText: string): Promise<void> {
+  const successes = items.filter((item) => item.status === 'succeeded')
+  if (successes.length === 0) return
+  const state = get()
+  if (!state.preferences?.notifyOnImageSuccess) return
+  if (state.windowFocused) return
+  if (state.preferences.notificationPermission !== 'granted') return
+  await Promise.all(successes.map((item, index) => sendSystemNotification(
+    successes.length > 1 ? `PixAI 图片生成完成 ${index + 1}/${successes.length}` : 'PixAI 图片生成完成',
+    `${item.ratio} · ${item.quality}${durationText}`
+  ).catch(() => undefined)))
 }

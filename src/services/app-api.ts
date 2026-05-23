@@ -1,5 +1,7 @@
 import { openPath } from '@tauri-apps/plugin-opener'
+import { storeDataUrlFile } from '../lib/platform'
 import { AppDatabase } from './app-database'
+import { AppPreferencesStore } from './app-preferences'
 import { getPixaiCodexSkillStatus, installPixaiCodexSkill } from './codex-skill-installer'
 import { ImageService } from './image-service'
 import { PromptService } from './prompt-service'
@@ -15,14 +17,18 @@ import type {
   PromptTemplateInput,
   ProviderProfileInput,
   ProviderSettingsUpdate,
+  AppPreferencesUpdate,
   ReferenceImageFilePayload
 } from '../shared/types'
+
+type ReferenceImageImportPayload = ReferenceImageFilePayload & { storagePath?: string | null }
 
 export type PixaiApi = ReturnType<typeof createPixaiApi>
 
 export function createPixaiApi() {
   const database = new AppDatabase()
   const providers = new ProviderSettingsStore()
+  const preferences = new AppPreferencesStore()
   const images = new ImageService(database, providers)
   const prompts = new PromptService(providers)
   const templates = new PromptTemplateStore()
@@ -34,6 +40,12 @@ export function createPixaiApi() {
       upsertProfile: (input: ProviderProfileInput) => providers.upsertProfile(input),
       deleteProfile: (id: string) => providers.deleteProfile(id),
       testProfile: (id: string) => providers.testProfile(id)
+    },
+    preferences: {
+      get: () => preferences.get(),
+      update: (input: AppPreferencesUpdate) => preferences.update(input),
+      refreshNotificationPermission: () => preferences.refreshNotificationPermission(),
+      requestNotificationPermission: () => preferences.requestNotificationPermission()
     },
     conversation: {
       list: () => database.listConversations(),
@@ -53,7 +65,7 @@ export function createPixaiApi() {
     },
     reference: {
       importFiles: (conversationId: string, files: File[]) => importReferenceFiles(database, conversationId, files),
-      importPayloads: (conversationId: string, files: ReferenceImageFilePayload[]) => database.importReferenceImages(conversationId, files),
+      importPayloads: (conversationId: string, files: ReferenceImageImportPayload[]) => database.importReferenceImages(conversationId, files),
       addFromHistoryMany: (conversationId: string, historyIds: string[]) => importHistoryReferences(database, conversationId, historyIds),
       addFromHistory: (conversationId: string, historyId: string) => database.addHistoryImageAsReference(conversationId, historyId),
       remove: (conversationId: string, referenceImageId: string) => database.removeReference(conversationId, referenceImageId),
@@ -63,6 +75,7 @@ export function createPixaiApi() {
       list: (options?: HistoryListOptions) => database.listHistory(options),
       get: (id: string) => database.getHistory(id),
       delete: (id: string) => database.deleteHistory(id),
+      deleteMany: (ids: string[]) => database.deleteHistoryMany(ids),
       favorite: (id: string, favorite: boolean) => database.setFavorite(id, favorite)
     },
     templates: {
@@ -84,12 +97,17 @@ export const pixaiApi = createPixaiApi()
 
 async function importReferenceFiles(database: AppDatabase, conversationId: string, files: File[]) {
   const payload = await Promise.all(
-    files.map(async (file) => ({
-      name: file.name,
-      mimeType: file.type,
-      dataUrl: await fileToDataUrl(file),
-      fileSizeBytes: file.size
-    }))
+    files.map(async (file) => {
+      const dataUrl = await fileToDataUrl(file)
+      const stored = await storeDataUrlFile('references', file.name || 'reference.png', dataUrl)
+      return {
+        name: file.name,
+        mimeType: file.type || stored.mimeType,
+        dataUrl: stored.dataUrl,
+        fileSizeBytes: stored.fileSizeBytes || file.size,
+        storagePath: stored.path
+      }
+    })
   )
   return database.importReferenceImages(conversationId, payload)
 }
@@ -104,7 +122,7 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 async function importHistoryReferences(database: AppDatabase, conversationId: string, historyIds: string[]) {
-  const files: ReferenceImageFilePayload[] = []
+  const files: ReferenceImageImportPayload[] = []
   for (const historyId of historyIds) {
     const item = await database.getHistory(historyId)
     if (!item?.dataUrl) throw new Error(`历史图片不可用：${historyId}`)
@@ -113,12 +131,13 @@ async function importHistoryReferences(database: AppDatabase, conversationId: st
   return database.importReferenceImages(conversationId, files)
 }
 
-function historyItemToReferencePayload(item: ImageHistoryItem): ReferenceImageFilePayload {
+function historyItemToReferencePayload(item: ImageHistoryItem): ReferenceImageImportPayload {
   return {
     name: `${item.id}.${extensionFromDataUrl(item.dataUrl || '')}`,
     mimeType: mimeTypeFromDataUrl(item.dataUrl || ''),
     dataUrl: item.dataUrl || '',
-    fileSizeBytes: item.fileSizeBytes || 0
+    fileSizeBytes: item.fileSizeBytes || 0,
+    storagePath: item.storagePath || null
   }
 }
 

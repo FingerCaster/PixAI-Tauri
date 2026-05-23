@@ -24,6 +24,7 @@ export type ReferenceImage = {
   mimeType: string
   dataUrl: string
   fileSizeBytes: number
+  storagePath?: string | null
   createdAt: string
 }
 
@@ -70,6 +71,15 @@ export type ProviderSettings = {
 export type ProviderSettingsUpdate = Partial<
   Pick<ProviderSettings, 'selectedImageProfileId' | 'selectedPromptProfileId'>
 >
+
+export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'unsupported'
+
+export type AppPreferences = {
+  notifyOnImageSuccess: boolean
+  notificationPermission: NotificationPermissionState
+}
+
+export type AppPreferencesUpdate = Partial<AppPreferences>
 
 export type LegacyProviderSettingsUpdate = ProviderSettingsUpdate & {
   baseURL?: string
@@ -186,6 +196,7 @@ export type ImageHistoryItem = {
   durationMs: number | null
   dataUrl: string | null
   fileSizeBytes: number | null
+  storagePath?: string | null
   status: ImageStatus
   errorMessage: string | null
   errorDetails: string | null

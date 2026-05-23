@@ -2,6 +2,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { openAiCompatibleAdapter } from './openai-compatible'
 import type { ProviderRuntimeProfile } from './types'
 
+type TauriStreamPayload = {
+  streamId: string
+  kind: 'chunk' | 'done' | 'error'
+  status?: number
+  statusText?: string
+  chunkBase64?: string
+  error?: string
+}
+
 const profile: ProviderRuntimeProfile = {
   id: 'profile-1',
   name: 'Local mock',
@@ -21,6 +30,8 @@ const profile: ProviderRuntimeProfile = {
 
 describe('openAiCompatibleAdapter', () => {
   beforeEach(() => {
+    vi.restoreAllMocks()
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__')
     vi.stubGlobal(
       'fetch',
       vi.fn(async () =>
@@ -56,6 +67,68 @@ describe('openAiCompatibleAdapter', () => {
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/generations', expect.objectContaining({ method: 'POST' }))
   })
 
+  it('extracts images endpoint stream results', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: image_generation.completed',
+        `data: ${JSON.stringify({ type: 'image_generation.completed', b64_json: 's'.repeat(120) })}`,
+        '',
+        'event: done',
+        'data: [DONE]',
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    const images = await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true
+      },
+      referenceImages: []
+    })
+
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/generations', expect.objectContaining({ method: 'POST' }))
+    expect(images[0].b64_json).toBe('s'.repeat(120))
+  })
+
+  it('surfaces images endpoint stream errors from HTTP 200 responses', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: error',
+        `data: ${JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'upstream_error',
+            message: 'stream disconnected before image generation completed'
+          }
+        })}`,
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    await expect(openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true
+      },
+      referenceImages: []
+    })).rejects.toMatchObject({
+      message: 'stream disconnected before image generation completed（upstream_error）'
+    })
+  })
+
   it('routes image-to-image requests to image edits endpoint', async () => {
     await openAiCompatibleAdapter.generateImage(profile, {
       input: {
@@ -71,6 +144,134 @@ describe('openAiCompatibleAdapter', () => {
     })
 
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/edits', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('routes Tauri image edits through platform HTTP proxy', async () => {
+    const invoke = vi.fn().mockResolvedValueOnce({
+      status: 200,
+      status_text: 'OK',
+      body: JSON.stringify({ data: [{ b64_json: 'p'.repeat(120) }] })
+    })
+    Object.defineProperty(window, '__TAURI_INTERNALS__', { value: { invoke }, configurable: true })
+
+    const images = await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'edit test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        referenceImageIds: ['r1']
+      },
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: `data:image/png;base64,${'a'.repeat(120)}` }]
+    })
+    const proxyRequest = vi.mocked(invoke).mock.calls[0]?.[1] as { request?: { url?: string; method?: string; headers?: Record<string, string>; body?: string; bodyBase64?: string } }
+    const multipartBody = atob(proxyRequest.request?.bodyBase64 || '')
+
+    expect(images[0].b64_json).toBe('p'.repeat(120))
+    expect(fetch).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('http_proxy', expect.anything(), undefined)
+    expect(proxyRequest.request).toMatchObject({
+      url: 'http://127.0.0.1:37123/v1/images/edits',
+      method: 'POST'
+    })
+    expect(proxyRequest.request?.headers?.authorization).toBe('Bearer sk-123456789')
+    expect(proxyRequest.request?.headers?.['content-type']).toContain('multipart/form-data; boundary=')
+    expect(proxyRequest.request?.body).toBeUndefined()
+    expect(multipartBody).toContain('name="prompt"')
+    expect(multipartBody).toContain('edit test')
+    expect(multipartBody).toContain('name="image[]"')
+    expect(multipartBody).toContain('filename="ref.png"')
+  })
+
+  it('routes Tauri streaming image edits through platform stream proxy', async () => {
+    const callbacks = new Map<number, (event: { payload: TauriStreamPayload }) => void>()
+    let nextCallbackId = 1
+    const invoke = vi.fn(async (command: string, args?: { request?: { streamId?: string } }) => {
+      if (command === 'plugin:event|listen') return 1
+      if (command === 'plugin:event|unlisten') return undefined
+      if (command !== 'http_proxy_stream') throw new Error(`unexpected command ${command}`)
+      const streamId = args?.request?.streamId || ''
+      await Promise.resolve()
+      const streamHandler = callbacks.values().next().value
+      streamHandler?.({
+        payload: {
+          streamId,
+          kind: 'chunk',
+          status: 200,
+          statusText: 'OK',
+          chunkBase64: btoa(JSON.stringify({ data: [{ b64_json: 'q'.repeat(120) }] }))
+        }
+      })
+      streamHandler?.({
+        payload: {
+          streamId,
+          kind: 'done',
+          status: 200,
+          statusText: 'OK'
+        }
+      })
+    })
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      value: {
+        invoke,
+        transformCallback: (handler: (event: { payload: TauriStreamPayload }) => void) => {
+          const id = nextCallbackId
+          nextCallbackId += 1
+          callbacks.set(id, handler)
+          return id
+        },
+        unregisterCallback: (id: number) => {
+          callbacks.delete(id)
+        }
+      },
+      configurable: true
+    })
+    Object.defineProperty(window, '__TAURI_EVENT_PLUGIN_INTERNALS__', {
+      value: {
+        unregisterListener: vi.fn()
+      },
+      configurable: true
+    })
+
+    const images = await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'stream edit test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true,
+        partialImages: 0,
+        generationTimeoutSeconds: 600,
+        referenceImageIds: ['r1']
+      },
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: `data:image/png;base64,${'a'.repeat(120)}` }]
+    })
+    const proxyRequest = vi.mocked(invoke).mock.calls.find(([command]) => command === 'http_proxy_stream')?.[1] as { request?: { url?: string; method?: string; headers?: Record<string, string>; body?: string; bodyBase64?: string; timeoutMs?: number; firstByteTimeoutMs?: number } }
+    const multipartBody = atob(proxyRequest.request?.bodyBase64 || '')
+
+    expect(images[0].b64_json).toBe('q'.repeat(120))
+    expect(fetch).not.toHaveBeenCalled()
+    expect(invoke).toHaveBeenCalledWith('plugin:event|listen', expect.objectContaining({ event: 'pixai://http-proxy-stream' }), undefined)
+    expect(invoke).toHaveBeenCalledWith('http_proxy_stream', expect.anything(), undefined)
+    expect(proxyRequest.request).toMatchObject({
+      url: 'http://127.0.0.1:37123/v1/images/edits',
+      method: 'POST',
+      timeoutMs: 600000,
+      firstByteTimeoutMs: 20000
+    })
+    expect(proxyRequest.request?.headers?.authorization).toBe('Bearer sk-123456789')
+    expect(proxyRequest.request?.headers?.['content-type']).toContain('multipart/form-data; boundary=')
+    expect(proxyRequest.request?.body).toBeUndefined()
+    expect(multipartBody).toContain('name="stream"')
+    expect(multipartBody).toContain('true')
+    expect(multipartBody).toContain('name="prompt"')
+    expect(multipartBody).toContain('stream edit test')
+    expect(multipartBody).toContain('name="image[]"')
+    expect(multipartBody).toContain('filename="ref.png"')
   })
 
   it('routes responses image-generation profiles through streaming responses', async () => {
@@ -103,6 +304,7 @@ describe('openAiCompatibleAdapter', () => {
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/responses', expect.objectContaining({ method: 'POST' }))
     expect(body.stream).toBe(true)
+    expect(body.tool_choice).toEqual({ type: 'image_generation' })
     expect(body.tools[0]).toMatchObject({
       type: 'image_generation',
       action: 'generate',
@@ -138,6 +340,7 @@ describe('openAiCompatibleAdapter', () => {
         n: 1,
         stream: true,
         partialImages: 1,
+        inputFidelity: 'low',
         referenceImageIds: ['r1']
       },
       referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl }]
@@ -146,12 +349,14 @@ describe('openAiCompatibleAdapter', () => {
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/responses', expect.objectContaining({ method: 'POST' }))
     expect(body.stream).toBe(true)
+    expect(body.tool_choice).toEqual({ type: 'image_generation' })
     expect(body.tools[0]).toMatchObject({
       type: 'image_generation',
       action: 'edit',
       model: 'gpt-image-1',
       size: '1024x1024',
       quality: 'high',
+      input_fidelity: 'low',
       partial_images: 1
     })
     expect(body.input).toEqual([
@@ -164,6 +369,84 @@ describe('openAiCompatibleAdapter', () => {
       }
     ])
     expect(images[0].b64_json).toBe('d'.repeat(120))
+  })
+
+  it('defaults responses image-to-image requests to high input fidelity', async () => {
+    const referenceDataUrl = `data:image/png;base64,${'f'.repeat(120)}`
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: response.image_generation_call.completed',
+        `data: ${JSON.stringify({ type: 'response.image_generation_call.completed', result: 'g'.repeat(120) })}`,
+        '',
+        'event: response.completed',
+        'data: {"type":"response.completed"}',
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    await openAiCompatibleAdapter.generateImage({ ...profile, imageGenerationEndpoint: 'responses-api' }, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'edit test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true,
+        referenceImageIds: ['r1']
+      },
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl }]
+    })
+
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
+    expect(body.tools[0]).toMatchObject({
+      type: 'image_generation',
+      action: 'edit',
+      input_fidelity: 'high'
+    })
+  })
+
+  it('does not send input fidelity for responses gpt-image-2 edits', async () => {
+    const referenceDataUrl = `data:image/png;base64,${'h'.repeat(120)}`
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: response.image_generation_call.completed',
+        `data: ${JSON.stringify({ type: 'response.image_generation_call.completed', result: 'i'.repeat(120) })}`,
+        '',
+        'event: response.completed',
+        'data: {"type":"response.completed"}',
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    await openAiCompatibleAdapter.generateImage({
+      ...profile,
+      defaultImageModel: 'gpt-image-2',
+      imageGenerationEndpoint: 'responses-api'
+    }, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'edit test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true,
+        inputFidelity: 'low',
+        referenceImageIds: ['r1']
+      },
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl }]
+    })
+
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
+    expect(body.tools[0]).toMatchObject({
+      type: 'image_generation',
+      action: 'edit',
+      model: 'gpt-image-2'
+    })
+    expect(body.tools[0]).not.toHaveProperty('input_fidelity')
   })
 
   it('extracts responses image results nested inside output item stream events', async () => {

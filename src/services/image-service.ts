@@ -2,10 +2,10 @@ import { getAdapter } from '../adapters/registry'
 import { ProviderHttpError } from '../adapters/openai-compatible'
 import { createErrorDetails, serializeError } from '../lib/errors'
 import { createId } from '../lib/ids'
-import { PlatformHttpProxyError } from '../lib/platform'
+import { PlatformHttpProxyError, readLocalImageDataUrl, storeDataUrlFile } from '../lib/platform'
 import { elapsedMs, nowIso } from '../lib/time'
 import { getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds, normalizeRetryCount } from '../shared/image-options'
-import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageHistoryItem } from '../shared/types'
+import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageHistoryItem, ReferenceImage } from '../shared/types'
 import type { AppDatabase } from './app-database'
 import type { ProviderSettingsStore } from './provider-settings'
 
@@ -85,6 +85,10 @@ export class ImageService {
             return
           }
           succeededCount += 1
+          const dataUrl = imageDataToDataUrl(generated.image, input.outputFormat || 'png')
+          const stored = dataUrl
+            ? await persistGeneratedImage(createId('image'), dataUrl, input.outputFormat || 'png')
+            : null
           items.push(
             await this.database.insertHistory({
               id: createId('history'),
@@ -97,15 +101,16 @@ export class ImageService {
               quality: input.quality,
               requestIndex,
               durationMs: elapsedMs(startedAt),
-              dataUrl: imageDataToDataUrl(generated.image, input.outputFormat || 'png'),
-              fileSizeBytes: estimateImageBytes(generated.image),
+              dataUrl: stored?.dataUrl || dataUrl,
+              fileSizeBytes: stored?.fileSizeBytes ?? estimateImageBytes(generated.image),
+              storagePath: stored?.path || null,
               status: 'succeeded',
               errorMessage: null,
               errorDetails: null,
               retryAttempt: generated.retryAttempt,
               globalVisible,
               generationMode,
-              referenceImages,
+              referenceImages: stripReferenceImagePayloads(referenceImages),
               createdAt: nowIso()
             })
           )
@@ -171,7 +176,7 @@ export class ImageService {
     const runtimeProfile = await this.providers.getRuntimeProfile(settings.selectedImageProfileId)
     const adapter = getAdapter(runtimeProfile.type)
     const conversation = await this.database.getConversation(input.conversationId)
-    const references = (conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id))
+    const references = await hydrateReferencesForRequest((conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id)))
     for (let retryAttempt = 0; retryAttempt <= maxRetries; retryAttempt += 1) {
       const timeout = createTimeoutController(controller.signal, normalizeImageGenerationTimeoutSeconds(input.generationTimeoutSeconds) * 1000)
       try {
@@ -183,8 +188,7 @@ export class ImageService {
         const image = images.at(-1)
         if (image) return { image, retryAttempt }
         if (retryAttempt < maxRetries) continue
-        const item = await this.createFailureItem(input, run, model, requestIndex, retryAttempt, new Error('图片接口没有返回图片。'), elapsedMs(startedAt))
-        return { image: null, item, retryAttempt }
+        throw new Error('图片接口没有返回图片。')
       } catch (error) {
         if (controller.signal.aborted) throw error
         const nextRun = await this.database.getRun(run.id)
@@ -269,6 +273,11 @@ function createTimeoutController(parentSignal: AbortSignal, timeoutMs: number): 
   }
 }
 
+async function persistGeneratedImage(id: string, dataUrl: string, outputFormat: string): Promise<{ path: string; dataUrl: string; fileSizeBytes: number }> {
+  const extension = outputFormat === 'jpeg' ? 'jpg' : outputFormat
+  return storeDataUrlFile('images', `${id}.${extension}`, dataUrl)
+}
+
 function imageDataToDataUrl(image: ImageApiData, outputFormat: string): string | null {
   if (image.b64_json) return `data:image/${outputFormat === 'jpeg' ? 'jpeg' : outputFormat};base64,${image.b64_json}`
   if (image.url) return image.url
@@ -278,6 +287,23 @@ function imageDataToDataUrl(image: ImageApiData, outputFormat: string): string |
 function estimateImageBytes(image: ImageApiData): number | null {
   if (!image.b64_json) return null
   return Math.floor((image.b64_json.length * 3) / 4)
+}
+
+function stripReferenceImagePayloads(references: ReferenceImage[]): ReferenceImage[] {
+  return references.map((reference) => ({
+    ...reference,
+    dataUrl: ''
+  }))
+}
+
+async function hydrateReferencesForRequest(references: ReferenceImage[]): Promise<ReferenceImage[]> {
+  return Promise.all(references.map(async (reference) => {
+    if (reference.dataUrl.startsWith('data:') || !reference.storagePath) return reference
+    return {
+      ...reference,
+      dataUrl: await readLocalImageDataUrl(reference.storagePath)
+    }
+  }))
 }
 
 function getGenerationErrorMessage(error: unknown): string {

@@ -1,5 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWindow } from '@tauri-apps/api/window'
+import {
+  isPermissionGranted as isNotificationPermissionGranted,
+  requestPermission as requestNotificationPermission,
+  sendNotification as sendPlatformNotification
+} from '@tauri-apps/plugin-notification'
 import type { CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
 
 type SecretWriteResult = {
@@ -19,6 +25,16 @@ type HttpProxyResponse = {
   body: string
 }
 
+type HttpProxyRequestPayload = {
+  url: string
+  method: string
+  headers: Record<string, string>
+  body?: string
+  bodyBase64?: string
+  timeoutMs?: number
+  firstByteTimeoutMs?: number
+}
+
 export type PlatformFetchOptions = {
   timeoutMs?: number
   firstByteTimeoutMs?: number
@@ -32,8 +48,17 @@ export type PlatformStreamResponse = {
 
 type LocalImageReadResult = ReferenceImageFilePayload
 
+type StoredDataUrlFileResult = {
+  path: string
+  dataUrl: string
+  mimeType: string
+  fileSizeBytes: number
+}
+
 const memoryStorage = new Map<string, string>()
 const memorySecrets = new Map<string, string>()
+let mockNotificationPermission: NotificationPermission | 'unsupported' | null = null
+const notificationLog: Array<{ title: string; body?: string }> = []
 
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -63,6 +88,40 @@ export async function fetchJsonThroughPlatform(url: string, init: RequestInit, o
   })
 }
 
+export async function fetchMultipartThroughPlatform(url: string, init: RequestInit, options: PlatformFetchOptions = {}): Promise<Response> {
+  if (!isTauriRuntime()) return fetch(url, init)
+  const requestPayload = await buildHttpProxyRequestPayload(url, init)
+  let result: HttpProxyResponse
+  try {
+    result = await invoke<HttpProxyResponse>('http_proxy', {
+      request: {
+        ...requestPayload,
+        timeoutMs: options.timeoutMs,
+        firstByteTimeoutMs: options.firstByteTimeoutMs
+      }
+    } satisfies { request: HttpProxyRequestPayload })
+  } catch (error) {
+    throw PlatformHttpProxyError.fromInvokeError(url, init.method || 'GET', error)
+  }
+  return new Response(result.body, {
+    status: result.status,
+    statusText: result.status_text
+  })
+}
+
+export async function fetchMultipartTextStreamThroughPlatform(url: string, init: RequestInit, options: PlatformFetchOptions = {}): Promise<PlatformStreamResponse> {
+  if (!isTauriRuntime()) {
+    const response = await fetch(url, init)
+    return {
+      status: response.status,
+      statusText: response.statusText,
+      text: await response.text()
+    }
+  }
+  const requestPayload = await buildHttpProxyRequestPayload(url, init)
+  return fetchTextStreamThroughPlatformPayload(url, init.method || 'GET', requestPayload, options)
+}
+
 export async function fetchTextStreamThroughPlatform(url: string, init: RequestInit, options: PlatformFetchOptions = {}): Promise<PlatformStreamResponse> {
   if (!isTauriRuntime()) {
     const response = await fetch(url, init)
@@ -73,16 +132,22 @@ export async function fetchTextStreamThroughPlatform(url: string, init: RequestI
     }
   }
 
-  const headers = Object.fromEntries(new Headers(init.headers).entries())
+  const requestPayload = await buildHttpProxyRequestPayload(url, init)
+  return fetchTextStreamThroughPlatformPayload(url, init.method || 'GET', requestPayload, options)
+}
+
+async function fetchTextStreamThroughPlatformPayload(url: string, method: string, requestPayload: HttpProxyRequestPayload, options: PlatformFetchOptions): Promise<PlatformStreamResponse> {
   const streamId = globalThis.crypto?.randomUUID?.() || `stream-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const chunks: Uint8Array[] = []
   const decoder = new TextDecoder()
   let status = 0
   let statusText = ''
   let settled = false
+  let unlisten: (() => void) | undefined
+  let listenerReady: Promise<void> | undefined
 
   const streamPromise = new Promise<PlatformStreamResponse>((resolve, reject) => {
-    void listen<PlatformStreamEvent>('pixai://http-proxy-stream', (event) => {
+    const handleStreamEvent = (event: { payload: PlatformStreamEvent }) => {
       const payload = event.payload
       if (payload.streamId !== streamId) return
       if (payload.kind === 'chunk') {
@@ -105,26 +170,32 @@ export async function fetchTextStreamThroughPlatform(url: string, init: RequestI
           reject(error instanceof Error ? error : new Error(String(error)))
         }
       }
-    }).catch((error) => {
+    }
+    listenerReady = listen<PlatformStreamEvent>('pixai://http-proxy-stream', handleStreamEvent)
+      .then((cleanup) => {
+        unlisten = cleanup
+      })
+    void listenerReady.catch((error) => {
       if (!settled) reject(error)
     })
   })
 
   try {
+    if (!listenerReady) throw new Error('无法注册平台流式监听器。')
+    await listenerReady
     await invoke('http_proxy_stream', {
       request: {
+        ...requestPayload,
         streamId,
-        url,
-        method: init.method || 'GET',
-        headers,
-        body: typeof init.body === 'string' ? init.body : undefined,
         timeoutMs: options.timeoutMs,
         firstByteTimeoutMs: options.firstByteTimeoutMs
       }
     })
     return await streamPromise
   } catch (error) {
-    throw PlatformHttpProxyError.fromInvokeError(url, init.method || 'GET', error)
+    throw PlatformHttpProxyError.fromInvokeError(url, method, error)
+  } finally {
+    if (unlisten) unlisten()
   }
 }
 
@@ -174,15 +245,116 @@ export async function getAppDataDir(): Promise<string> {
   return 'browser-memory'
 }
 
+export async function getWindowFocused(): Promise<boolean> {
+  if (!isTauriRuntime()) return document.hasFocus()
+  return getCurrentWindow().isFocused()
+}
+
+export async function watchWindowFocus(onChange: (focused: boolean) => void): Promise<() => void> {
+  if (!isTauriRuntime()) {
+    const update = () => onChange(document.hasFocus())
+    window.addEventListener('focus', update)
+    window.addEventListener('blur', update)
+    update()
+    return () => {
+      window.removeEventListener('focus', update)
+      window.removeEventListener('blur', update)
+    }
+  }
+  const currentWindow = getCurrentWindow()
+  onChange(await currentWindow.isFocused())
+  const unlisten = await currentWindow.onFocusChanged(({ payload }) => onChange(payload))
+  return unlisten
+}
+
+export async function getSystemNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+  if (mockNotificationPermission) return mockNotificationPermission
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
+  if (!isTauriRuntime()) return window.Notification.permission
+  try {
+    if (await isNotificationPermissionGranted()) return 'granted'
+    return window.Notification.permission || 'default'
+  } catch {
+    return window.Notification.permission || 'unsupported'
+  }
+}
+
+export async function requestSystemNotificationPermission(): Promise<NotificationPermission | 'unsupported'> {
+  if (mockNotificationPermission) return mockNotificationPermission
+  if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported'
+  try {
+    return await requestNotificationPermission()
+  } catch {
+    return getSystemNotificationPermission()
+  }
+}
+
+export async function sendSystemNotification(title: string, body?: string): Promise<void> {
+  notificationLog.push({ title, body })
+  if (mockNotificationPermission === 'unsupported' || mockNotificationPermission === 'denied') {
+    throw new Error('系统通知权限不可用。')
+  }
+  if (mockNotificationPermission === 'default') return
+  if (!isTauriRuntime() && !mockNotificationPermission && typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission !== 'granted') {
+    throw new Error('系统通知权限不可用。')
+  }
+  sendPlatformNotification({ title, body })
+}
+
 export async function readLocalImageFile(path: string): Promise<ReferenceImageFilePayload> {
   if (!isTauriRuntime()) throw new Error('本地图片路径只能在 Tauri 应用中读取。')
   const result = await invoke<LocalImageReadResult>('read_local_image_file', { path })
   return result
 }
 
+export async function readLocalImageDataUrl(path: string): Promise<string> {
+  const payload = await readLocalImageFile(path)
+  return payload.dataUrl
+}
+
 export async function writeDataUrlFile(directory: string, filename: string, dataUrl: string): Promise<string> {
   if (!isTauriRuntime()) throw new Error('导出图片只能在 Tauri 应用中执行。')
   return invoke<string>('write_data_url_file', { directory, filename, dataUrl })
+}
+
+export async function readBinaryFileBase64(path: string): Promise<string> {
+  if (!isTauriRuntime()) throw new Error('读取图片文件只能在 Tauri 应用中执行。')
+  return invoke<string>('read_binary_file_base64', { path })
+}
+
+export async function copyBinaryFile(source: string, directory: string, filename: string): Promise<string> {
+  if (!isTauriRuntime()) throw new Error('复制图片文件只能在 Tauri 应用中执行。')
+  return invoke<string>('copy_binary_file', { source, directory, filename })
+}
+
+export async function storeDataUrlFile(namespace: string, filename: string, dataUrl: string): Promise<StoredDataUrlFileResult> {
+  if (!isTauriRuntime()) {
+    const blob = dataUrlToBlob(dataUrl)
+    return {
+      path: `browser-memory/${namespace}/${filename}`,
+      dataUrl,
+      mimeType: blob.type || mimeTypeFromDataUrl(dataUrl),
+      fileSizeBytes: blob.size
+    }
+  }
+  const result = await invoke<StoredDataUrlFileResult>('store_data_url_file', { namespace, filename, dataUrl })
+  return { ...result, dataUrl: result.path }
+}
+
+export function imageSourceFromStoredPath(dataUrl: string | null, storagePath?: string | null): string | null {
+  if (!dataUrl) return null
+  if (dataUrl.startsWith('data:') || /^https?:\/\//i.test(dataUrl)) return dataUrl
+  if (!storagePath && /^[a-z]:[\\/]/i.test(dataUrl)) return null
+  return dataUrl
+}
+
+export async function imageSourceForDisplay(dataUrl: string | null, storagePath?: string | null): Promise<string | null> {
+  if (storagePath) return readLocalImageDataUrl(storagePath)
+  if (!dataUrl) return null
+  if (dataUrl.startsWith('data:')) return dataUrl
+  const path = storagePathFromAssetUrl(dataUrl) || (/^[a-z]:[\\/]/i.test(dataUrl) ? dataUrl : null)
+  if (path) return readLocalImageDataUrl(path)
+  return dataUrl
 }
 
 export async function respondCodexBridge(response: CodexBridgeResponse): Promise<void> {
@@ -193,6 +365,24 @@ export async function respondCodexBridge(response: CodexBridgeResponse): Promise
 export async function markCodexBridgeReady(): Promise<void> {
   if (!isTauriRuntime()) return
   await invoke('codex_bridge_ready')
+}
+
+function dataUrlToBlob(dataUrl: string): Blob {
+  const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl)
+  if (!match) return new Blob([dataUrl], { type: 'text/plain' })
+  const binary = atob(match[2])
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return new Blob([bytes], { type: match[1] })
+}
+
+function mimeTypeFromDataUrl(dataUrl: string): string {
+  return /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || 'image/png'
+}
+
+function storagePathFromAssetUrl(value: string): string | null {
+  const encoded = /^https?:\/\/asset\.localhost\/(.+)$/i.exec(value)?.[1]
+  return encoded ? decodeURIComponent(encoded) : null
 }
 
 export async function getCodexSkillStatus(name: string): Promise<CodexSkillStatus> {
@@ -215,7 +405,17 @@ export async function installCodexSkill(request: CodexSkillInstallRequest): Prom
 export function __resetPlatformStateForTests(): void {
   memoryStorage.clear()
   memorySecrets.clear()
+  mockNotificationPermission = null
+  notificationLog.length = 0
   globalThis.localStorage?.clear()
+}
+
+export function __setNotificationPermissionForTests(permission: NotificationPermission | 'unsupported' | null): void {
+  mockNotificationPermission = permission
+}
+
+export function __getSentNotificationsForTests(): Array<{ title: string; body?: string }> {
+  return [...notificationLog]
 }
 
 export class PlatformHttpProxyError extends Error {
@@ -286,6 +486,109 @@ function base64ToBytes(base64: string): Uint8Array {
     bytes[index] = binary.charCodeAt(index)
   }
   return bytes
+}
+
+async function buildHttpProxyRequestPayload(url: string, init: RequestInit): Promise<HttpProxyRequestPayload> {
+  const method = init.method || 'GET'
+  const headers = new Headers(init.headers)
+  const body = init.body
+  if (body == null) {
+    return {
+      url,
+      method,
+      headers: Object.fromEntries(headers.entries())
+    }
+  }
+  if (typeof body === 'string') {
+    return {
+      url,
+      method,
+      headers: Object.fromEntries(headers.entries()),
+      body
+    }
+  }
+  if (body instanceof FormData) {
+    const multipart = await encodeMultipartFormData(body)
+    headers.set('Content-Type', `multipart/form-data; boundary=${multipart.boundary}`)
+    return {
+      url,
+      method,
+      headers: Object.fromEntries(headers.entries()),
+      bodyBase64: bytesToBase64(multipart.body)
+    }
+  }
+  const request = new Request(url, {
+    method,
+    headers,
+    body: body as BodyInit
+  })
+  const bodyBase64 = bytesToBase64(new Uint8Array(await request.arrayBuffer()))
+  return {
+    url,
+    method,
+    headers: Object.fromEntries(request.headers.entries()),
+    bodyBase64
+  }
+}
+
+async function encodeMultipartFormData(form: FormData): Promise<{ boundary: string; body: Uint8Array }> {
+  const boundary = `----PixAIFormBoundary${globalThis.crypto?.randomUUID?.().replace(/-/g, '') || `${Date.now()}${Math.random().toString(16).slice(2)}`}`
+  const chunks: Uint8Array[] = []
+  const encoder = new TextEncoder()
+  for (const [name, value] of form.entries()) {
+    chunks.push(encoder.encode(`--${boundary}\r\n`))
+    if (value instanceof File) {
+      chunks.push(encoder.encode(
+        `Content-Disposition: form-data; name="${escapeMultipartName(name)}"; filename="${escapeMultipartName(value.name || 'file')}"\r\n` +
+        `Content-Type: ${value.type || 'application/octet-stream'}\r\n\r\n`
+      ))
+      chunks.push(await blobToBytes(value))
+      chunks.push(encoder.encode('\r\n'))
+    } else {
+      chunks.push(encoder.encode(
+        `Content-Disposition: form-data; name="${escapeMultipartName(name)}"\r\n\r\n` +
+        `${String(value)}\r\n`
+      ))
+    }
+  }
+  chunks.push(encoder.encode(`--${boundary}--\r\n`))
+  return { boundary, body: concatBytes(chunks) }
+}
+
+function concatBytes(chunks: Uint8Array[]): Uint8Array {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0)
+  const result = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    result.set(chunk, offset)
+    offset += chunk.length
+  }
+  return result
+}
+
+function escapeMultipartName(value: string): string {
+  return value.replace(/[\r\n"]/g, '_')
+}
+
+function blobToBytes(value: Blob): Promise<Uint8Array> {
+  if (typeof value.arrayBuffer === 'function') {
+    return value.arrayBuffer().then((buffer) => new Uint8Array(buffer))
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer))
+    reader.onerror = () => reject(reader.error || new Error('Unable to read multipart file.'))
+    reader.readAsArrayBuffer(value)
+  })
+}
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
+  }
+  return btoa(binary)
 }
 
 function inferPlainPlatformErrorStage(message: string): string {

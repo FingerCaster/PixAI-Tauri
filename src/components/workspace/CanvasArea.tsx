@@ -36,6 +36,7 @@ export function CanvasArea({
   } = useAppStore()
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(30)
+  const [clearingFailed, setClearingFailed] = useState(false)
   const orderedRuns = useMemo(
     () => [...runs].sort((left, right) => right.createdAt.localeCompare(left.createdAt)),
     [runs]
@@ -86,6 +87,15 @@ export function CanvasArea({
     const start = (page - 1) * pageSize
     return workspaceEntries.slice(start, start + pageSize)
   }, [page, pageSize, workspaceEntries])
+  const clearFailedItems = async () => {
+    if (clearingFailed || failedItems.length === 0) return
+    setClearingFailed(true)
+    try {
+      await deleteHistoryItems(failedItems.map((item) => item.id))
+    } finally {
+      setClearingFailed(false)
+    }
+  }
 
   useEffect(() => {
     if (!generating || !activeConversationId) return undefined
@@ -116,11 +126,12 @@ export function CanvasArea({
             <button
               type="button"
               className="clear-failed-button"
-              title="清空当前工作区中的失败图片"
-              onClick={() => void deleteHistoryItems(failedItems.map((item) => item.id))}
+              title={clearingFailed ? '正在清空失败图片' : '清空当前工作区中的失败图片'}
+              disabled={clearingFailed}
+              onClick={() => void clearFailedItems()}
             >
               <Trash2 size={14} />
-              清空失败
+              {clearingFailed ? '清理中' : '清空失败'}
             </button>
           ) : null}
           <div className="workspace-summary" aria-label="工作区结果统计">

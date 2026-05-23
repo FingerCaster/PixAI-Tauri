@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { openAiCompatibleAdapter } from '../adapters/openai-compatible'
+import { __getSentNotificationsForTests, __setNotificationPermissionForTests, getProfileSecret } from '../lib/platform'
 import { pixaiApi } from '../services/app-api'
 import type { GenerateImageResult, GenerationRun } from '../shared/types'
 import { useAppStore } from './app-store'
@@ -99,4 +101,85 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().runsByConversation[conversation.id] || []).toHaveLength(0)
     expect(await pixaiApi.history.list()).toHaveLength(0)
   })
+
+  it('does not send a system notification while the notification setting is disabled', async () => {
+    await prepareSuccessfulGeneration()
+    useAppStore.getState().setWindowFocused(false)
+
+    await useAppStore.getState().generate()
+
+    expect(__getSentNotificationsForTests()).toHaveLength(0)
+  })
+
+  it('does not send a system notification while the app is focused', async () => {
+    await prepareSuccessfulGeneration()
+    await useAppStore.getState().updatePreferences({ notifyOnImageSuccess: true, notificationPermission: 'granted' })
+    useAppStore.getState().setWindowFocused(true)
+
+    await useAppStore.getState().generate()
+
+    expect(__getSentNotificationsForTests()).toHaveLength(0)
+  })
+
+  it('sends one system notification per successful image while unfocused', async () => {
+    await prepareSuccessfulGeneration()
+    __setNotificationPermissionForTests('granted')
+    await useAppStore.getState().updatePreferences({ notifyOnImageSuccess: true, notificationPermission: 'granted' })
+    useAppStore.getState().setWindowFocused(false)
+
+    await useAppStore.getState().generate()
+
+    expect(__getSentNotificationsForTests()).toHaveLength(2)
+  })
+
+  it('keeps the existing completion toast when notification permission is unavailable', async () => {
+    await prepareSuccessfulGeneration()
+    __setNotificationPermissionForTests('denied')
+    await useAppStore.getState().updatePreferences({ notifyOnImageSuccess: true, notificationPermission: 'denied' })
+    useAppStore.getState().setWindowFocused(false)
+
+    await useAppStore.getState().generate()
+
+    expect(__getSentNotificationsForTests()).toHaveLength(0)
+    expect(useAppStore.getState().toast).toContain('生成完成')
+  })
+
+  it('does not send a system notification for failed image generation', async () => {
+    await prepareSuccessfulGeneration()
+    __setNotificationPermissionForTests('granted')
+    await useAppStore.getState().updatePreferences({ notifyOnImageSuccess: true, notificationPermission: 'granted' })
+    useAppStore.getState().setWindowFocused(false)
+    vi.mocked(openAiCompatibleAdapter.generateImage).mockRejectedValue(new Error('upstream failed'))
+
+    await useAppStore.getState().generate()
+
+    expect(__getSentNotificationsForTests()).toHaveLength(0)
+    expect(useAppStore.getState().toast).toContain('生成失败')
+  })
+
+  it('deletes multiple history items through the batch API', async () => {
+    await useAppStore.getState().load()
+    const deleteManySpy = vi.spyOn(pixaiApi.history, 'deleteMany').mockResolvedValue(2)
+    const deleteSpy = vi.spyOn(pixaiApi.history, 'delete')
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([])
+
+    await useAppStore.getState().deleteHistoryItems(['history-1', 'history-2'])
+
+    expect(deleteManySpy).toHaveBeenCalledWith(['history-1', 'history-2'])
+    expect(deleteSpy).not.toHaveBeenCalled()
+  })
 })
+
+async function prepareSuccessfulGeneration(): Promise<void> {
+  await useAppStore.getState().load()
+  const settings = await pixaiApi.settings.upsertProfile({
+    id: 'default-openai-compatible',
+    apiKey: 'sk-123456789'
+  })
+  useAppStore.setState({ settings })
+  await expect(getProfileSecret(settings.selectedImageProfileId)).resolves.toMatchObject({ value: 'sk-123456789' })
+  await useAppStore.getState().updateActiveConversation({ draftPrompt: '一座玻璃城市', n: 2 })
+  vi.spyOn(openAiCompatibleAdapter, 'generateImage').mockResolvedValue([
+    { b64_json: 'aGVsbG8=' }
+  ])
+}

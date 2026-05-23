@@ -1,5 +1,7 @@
 import type { ChangeEvent, DragEvent } from 'react'
+import { useEffect, useState } from 'react'
 import { Image, Loader2, Sparkles, WandSparkles, X } from 'lucide-react'
+import { imageSourceForDisplay } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
@@ -14,6 +16,23 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     removeReferenceImage,
     updateActiveConversation
   } = useAppStore()
+  const [referenceSources, setReferenceSources] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let canceled = false
+    void Promise.all(
+      conversation.referenceImages.map(async (reference) => [
+        reference.id,
+        await imageSourceForDisplay(reference.dataUrl, reference.storagePath)
+      ] as const)
+    ).then((entries) => {
+      if (canceled) return
+      setReferenceSources(Object.fromEntries(entries.filter((entry): entry is [string, string] => Boolean(entry[1]))))
+    })
+    return () => {
+      canceled = true
+    }
+  }, [conversation.referenceImages])
 
   const onFiles = (files: FileList | null) => {
     if (!files?.length) return
@@ -50,7 +69,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
         <div className="reference-row">
           {conversation.referenceImages.map((reference) => (
             <div className="reference-thumb" key={reference.id}>
-              <img src={reference.dataUrl} alt={reference.name} />
+              <img src={referenceSources[reference.id] || reference.dataUrl} alt={reference.name} />
               <button type="button" onClick={() => void removeReferenceImage(reference.id)} title="移除参考图">
                 <X size={14} />
               </button>

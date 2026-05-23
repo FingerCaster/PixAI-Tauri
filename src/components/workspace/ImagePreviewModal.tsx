@@ -1,10 +1,21 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { formatDuration } from '../../lib/time'
+import { imageSourceForDisplay } from '../../lib/platform'
 import type { ImageHistoryItem } from '../../shared/types'
 
 export function ImagePreviewModal({ item, onClose }: { item: ImageHistoryItem; onClose: () => void }) {
+  const [imageSource, setImageSource] = useState<string | null>(item.dataUrl?.startsWith('data:') ? item.dataUrl : null)
+  useEffect(() => {
+    let canceled = false
+    void imageSourceForDisplay(item.dataUrl, item.storagePath).then((source) => {
+      if (!canceled) setImageSource(source)
+    })
+    return () => {
+      canceled = true
+    }
+  }, [item.dataUrl, item.storagePath])
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -13,7 +24,7 @@ export function ImagePreviewModal({ item, onClose }: { item: ImageHistoryItem; o
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
-  if (!item.dataUrl) return null
+  if (!imageSource) return null
 
   return createPortal(
     <div
@@ -44,7 +55,7 @@ export function ImagePreviewModal({ item, onClose }: { item: ImageHistoryItem; o
           </button>
         </div>
         <div className="image-preview-stage">
-          <img src={item.dataUrl} alt={item.prompt} />
+          <img src={imageSource} alt={item.prompt} />
         </div>
       </div>
     </div>,

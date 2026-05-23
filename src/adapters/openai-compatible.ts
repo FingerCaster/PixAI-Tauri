@@ -6,20 +6,27 @@ import {
   supportsImageInputFidelity,
   trimBaseUrl
 } from '../shared/image-options'
-import { fetchJsonThroughPlatform, fetchTextStreamThroughPlatform } from '../lib/platform'
+import {
+  fetchJsonThroughPlatform,
+  fetchMultipartTextStreamThroughPlatform,
+  fetchMultipartThroughPlatform,
+  fetchTextStreamThroughPlatform
+} from '../lib/platform'
 import type { ImageApiData } from '../shared/types'
 import type { ImageGenerationRequest, ProviderAdapter, ProviderRuntimeProfile } from './types'
 
 type ImageApiResponse = {
   data?: ImageApiData[]
-  error?: {
-    message?: string
-    type?: string
-    code?: string
-    param?: string
-  }
+  error?: ProviderPayloadError
   error_code?: string
   message?: string
+}
+
+type ProviderPayloadError = {
+  message?: string
+  type?: string
+  code?: string
+  param?: string
 }
 
 type ResponsesApiPayload = {
@@ -30,9 +37,7 @@ type ResponsesApiPayload = {
       content?: string
     }
   }>
-  error?: {
-    message?: string
-  }
+  error?: ProviderPayloadError | string
   error_code?: string
   message?: string
 }
@@ -152,7 +157,26 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
         responseError: payload.error
       })
     }
-    return payload.data || []
+    if (payload.error) {
+      throw new ProviderHttpError(getProviderErrorMessage(payload, '图片流式请求失败。'), {
+        endpoint,
+        status: response.status,
+        statusText: response.statusText,
+        responseBody: text,
+        responseError: payload.error,
+        responseSummary: summarizeImageResponse(text, payload)
+      })
+    }
+    const images = extractImagesFromImagePayload(payload)
+    if (images.length === 0) {
+      throw new ProviderHttpError('图片接口没有返回可识别的图片。', {
+        endpoint,
+        status: response.status,
+        statusText: response.statusText,
+        responseSummary: summarizeImageResponse(text, payload)
+      })
+    }
+    return images
   },
   inspirePrompt(profile, input = {}, signal) {
     return requestPrompt(
@@ -231,14 +255,25 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
   for (const reference of request.referenceImages) {
     form.append('image[]', dataUrlToBlob(reference.dataUrl, reference.mimeType), reference.name)
   }
-  return fetch(endpoint, {
+  const requestInit: RequestInit = {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${profile.apiKey || ''}`
     },
     signal: request.signal,
     body: form
-  })
+  }
+  if (input.stream) {
+    const response = await fetchMultipartTextStreamThroughPlatform(endpoint, requestInit, {
+      timeoutMs: Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000),
+      firstByteTimeoutMs: Math.min(Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000), RESPONSES_IMAGE_TEST_TIMEOUT_MS)
+    })
+    return new Response(response.text, {
+      status: response.status,
+      statusText: response.statusText
+    })
+  }
+  return fetchMultipartThroughPlatform(endpoint, requestInit)
 }
 
 async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, request: ImageGenerationRequest, timeoutMs: number): Promise<ResponsesImageStreamResult> {
@@ -246,6 +281,10 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
   const endpoint = buildResponsesEndpoint(profile.baseUrl)
   const input = request.input
   const hasReferences = request.referenceImages.length > 0
+  const imageModel = input.model || profile.defaultImageModel
+  const inputFidelity = hasReferences && supportsImageInputFidelity(imageModel)
+    ? input.inputFidelity || 'high'
+    : undefined
   const response = await fetchTextStreamThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
@@ -254,13 +293,15 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
       model: profile.defaultPromptModel,
       input: buildResponsesImageInput(input.prompt, request.referenceImages),
       stream: true,
+      tool_choice: { type: 'image_generation' },
       tools: [
         {
           type: 'image_generation',
           action: hasReferences ? 'edit' : 'generate',
-          model: input.model || profile.defaultImageModel,
+          model: imageModel,
           size: input.size || getDefaultImageSize(input.ratio),
           quality: input.quality,
+          ...(inputFidelity ? { input_fidelity: inputFidelity } : {}),
           ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
           ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
           ...(input.background ? { background: input.background } : {}),
@@ -362,11 +403,23 @@ function buildHeaders(apiKey: string): Record<string, string> {
 
 function parseImagePayload(text: string): ImageApiResponse {
   if (!text.trim()) return {}
+  const ssePayloads = parseSsePayloads(text)
+  if (ssePayloads.length) {
+    const streamError = extractProviderError(ssePayloads)
+    return {
+      data: dedupeImages(ssePayloads.flatMap((payload) => extractImageApiData(payload))),
+      ...(streamError ? { error: streamError } : {})
+    }
+  }
   try {
     return JSON.parse(text) as ImageApiResponse
   } catch {
     return {}
   }
+}
+
+function extractImagesFromImagePayload(payload: ImageApiResponse): ImageApiData[] {
+  return dedupeImages(extractImageApiData(payload))
 }
 
 function parseResponsesPayload(text: string): ResponsesApiPayload {
@@ -431,6 +484,16 @@ function summarizeResponsesImageResponse(text: string, payload: ResponsesApiPayl
   }
 }
 
+function summarizeImageResponse(text: string, payload: ImageApiResponse): Record<string, unknown> {
+  const payloads = parseSsePayloads(text)
+  return {
+    payloadCount: payloads.length,
+    payloadSamples: payloads.slice(-6).map(summarizeUnknown),
+    finalPayload: summarizeUnknown(payload),
+    bodyPreview: text.slice(0, 1200)
+  }
+}
+
 function summarizeUnknown(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') {
     return isLikelyBase64Image(value) ? `[base64:${value.length}]` : value.slice(0, 240)
@@ -447,6 +510,7 @@ function summarizeUnknown(value: unknown, depth = 0): unknown {
 
 function extractImageApiData(value: unknown): ImageApiData[] {
   if (typeof value === 'string') return isLikelyBase64Image(value) ? [{ b64_json: value }] : []
+  if (Array.isArray(value)) return value.flatMap((item) => extractImageApiData(item))
   if (!isRecord(value)) return []
   const images: ImageApiData[] = []
   for (const key of ['b64_json', 'image_base64', 'partial_image_b64', 'partial_image', 'result'] as const) {
@@ -501,10 +565,41 @@ function extractResponseText(payload: ResponsesApiPayload): string {
 }
 
 function getProviderErrorMessage(payload: ImageApiResponse | ResponsesApiPayload, fallback: string): string {
-  const message = payload.error?.message || payload.message || fallback
-  return payload.error_code && !message.includes(payload.error_code)
-    ? `${message}（${payload.error_code}）`
+  const error = isRecord(payload.error) ? payload.error : undefined
+  const message = (typeof payload.error === 'string' ? payload.error : error?.message) || payload.message || fallback
+  const code = payload.error_code || (typeof error?.code === 'string' ? error.code : undefined) || (typeof error?.type === 'string' ? error.type : undefined)
+  return code && !message.includes(code)
+    ? `${message}（${code}）`
     : message
+}
+
+function extractProviderError(value: unknown): ProviderPayloadError | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const error = extractProviderError(item)
+      if (error) return error
+    }
+    return undefined
+  }
+  if (!isRecord(value)) return undefined
+  const nested = extractProviderError(value.error)
+  const ownType = typeof value.type === 'string' ? value.type : undefined
+  const type = ownType === 'error' && nested?.type ? nested.type : ownType || nested?.type
+  const message = typeof value.message === 'string' ? value.message : nested?.message
+  const code = typeof value.code === 'string'
+    ? value.code
+    : typeof value.error_code === 'string'
+      ? value.error_code
+      : nested?.code
+  const param = typeof value.param === 'string' ? value.param : nested?.param
+  const explicitError = type === 'error' || type?.endsWith('_error') || Boolean(value.error)
+  if (!explicitError) return undefined
+  return {
+    ...(message ? { message } : {}),
+    ...(type ? { type } : {}),
+    ...(code ? { code } : {}),
+    ...(param ? { param } : {})
+  }
 }
 
 function sanitizePromptText(value: string): string {

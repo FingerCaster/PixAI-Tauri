@@ -1,5 +1,5 @@
 import { createId } from '../lib/ids'
-import { readJsonState, writeJsonState } from '../lib/platform'
+import { readJsonState, storeDataUrlFile, writeJsonState } from '../lib/platform'
 import { nowIso } from '../lib/time'
 import {
   DEFAULT_IMAGE_OUTPUT_FORMAT,
@@ -38,14 +38,16 @@ export class AppDatabase {
     const payload = await readJsonState(STATE_NAME)
     if (payload) {
       try {
-        this.data = normalizeData(JSON.parse(payload) as PersistedData)
+        const normalized = await normalizeData(JSON.parse(payload) as PersistedData)
+        this.data = normalized.data
         await this.recoverInterruptedRuns()
+        if (normalized.changed) await this.save()
         return
       } catch {
         // Start fresh when the local data file is invalid.
       }
     }
-    this.data = normalizeData({ conversations: [], runs: [], history: [] })
+    this.data = (await normalizeData({ conversations: [], runs: [], history: [] })).data
     await this.save()
   }
 
@@ -130,7 +132,7 @@ export class AppDatabase {
 
   async insertRun(input: Omit<GenerationRun, 'items'>): Promise<GenerationRun> {
     await this.load()
-    const run: GenerationRun = { ...input, items: [], referenceImages: input.referenceImages || [] }
+    const run: GenerationRun = { ...input, items: [], referenceImages: stripReferenceImagePayloads(input.referenceImages || []) }
     this.requireData().runs.unshift(run)
     await this.save()
     return run
@@ -197,6 +199,18 @@ export class AppDatabase {
     await this.save()
   }
 
+  async deleteHistoryMany(ids: string[]): Promise<number> {
+    await this.load()
+    const selectedIds = new Set(ids)
+    if (selectedIds.size === 0) return 0
+    const data = this.requireData()
+    const before = data.history.length
+    data.history = data.history.filter((item) => !selectedIds.has(item.id))
+    const deletedCount = before - data.history.length
+    if (deletedCount > 0) await this.save()
+    return deletedCount
+  }
+
   async setFavorite(id: string, favorite: boolean): Promise<ImageHistoryItem> {
     await this.load()
     const data = this.requireData()
@@ -208,7 +222,7 @@ export class AppDatabase {
     return next
   }
 
-  async importReferenceImages(conversationId: string, files: Array<{ name: string; mimeType: string; dataUrl: string; fileSizeBytes: number }>): Promise<ReferenceImage[]> {
+  async importReferenceImages(conversationId: string, files: Array<{ name: string; mimeType: string; dataUrl: string; fileSizeBytes: number; storagePath?: string | null }>): Promise<ReferenceImage[]> {
     await this.load()
     const conversation = await this.getConversation(conversationId)
     if (!conversation) throw new Error('Conversation not found.')
@@ -224,6 +238,7 @@ export class AppDatabase {
         mimeType,
         dataUrl: file.dataUrl,
         fileSizeBytes: file.fileSizeBytes,
+        storagePath: file.storagePath || null,
         createdAt: now
       }
     })
@@ -241,6 +256,7 @@ export class AppDatabase {
       mimeType: mimeTypeFromDataUrl(item.dataUrl),
       dataUrl: item.dataUrl,
       fileSizeBytes: item.fileSizeBytes || 0,
+      storagePath: item.storagePath || null,
       createdAt: nowIso()
     }
     await this.updateConversation(conversationId, { referenceImages: [reference] } as ConversationUpdate)
@@ -305,19 +321,78 @@ export class AppDatabase {
   }
 }
 
-function normalizeData(data: PersistedData): PersistedData {
-  return {
+async function normalizeData(data: PersistedData): Promise<{ data: PersistedData; changed: boolean }> {
+  let changed = false
+  const strip = (references: ReferenceImage[] = []) => stripReferenceImagePayloads(references, () => {
+    changed = true
+  })
+  const persistReference = async (reference: ReferenceImage): Promise<ReferenceImage> => {
+    if (!reference.dataUrl?.startsWith('data:')) {
+      const recoveredPath = reference.storagePath || storagePathFromAssetUrl(reference.dataUrl)
+      if (recoveredPath && recoveredPath !== reference.storagePath) {
+        changed = true
+        return { ...reference, storagePath: recoveredPath }
+      }
+      return reference
+    }
+    const stored = await storeDataUrlFile('references', reference.name || `${reference.id}.png`, reference.dataUrl)
+    changed = true
+    return {
+      ...reference,
+      dataUrl: stored.dataUrl,
+      fileSizeBytes: stored.fileSizeBytes || reference.fileSizeBytes,
+      storagePath: stored.path
+    }
+  }
+  const persistHistoryItem = async (item: ImageHistoryItem): Promise<ImageHistoryItem> => {
+    if (!item.dataUrl?.startsWith('data:')) {
+      const recoveredPath = item.storagePath || storagePathFromAssetUrl(item.dataUrl)
+      if (recoveredPath && recoveredPath !== item.storagePath) {
+        changed = true
+        return { ...item, storagePath: recoveredPath }
+      }
+      return item
+    }
+    const stored = await storeDataUrlFile('images', `${item.id}.${extensionFromDataUrl(item.dataUrl)}`, item.dataUrl)
+    changed = true
+    return {
+      ...item,
+      dataUrl: stored.dataUrl,
+      fileSizeBytes: stored.fileSizeBytes || item.fileSizeBytes,
+      storagePath: stored.path
+    }
+  }
+  const normalized = {
     conversations: Array.isArray(data.conversations)
-      ? data.conversations.map((conversation) => ({
+      ? await Promise.all(data.conversations.map(async (conversation) => ({
         ...conversation,
         size: isImageSizeCompatible(conversation.ratio, conversation.size)
           ? conversation.size
-          : getDefaultImageSize(conversation.ratio)
+          : getDefaultImageSize(conversation.ratio),
+        referenceImages: await Promise.all((conversation.referenceImages || []).map(persistReference))
+      })))
+      : [],
+    runs: Array.isArray(data.runs)
+      ? data.runs.map((run) => ({
+        ...run,
+        referenceImages: strip(run.referenceImages || [])
       }))
       : [],
-    runs: Array.isArray(data.runs) ? data.runs : [],
-    history: Array.isArray(data.history) ? data.history : []
+    history: Array.isArray(data.history)
+      ? await Promise.all(data.history.map(async (item) => persistHistoryItem({
+        ...item,
+        referenceImages: strip(item.referenceImages || [])
+      })))
+      : []
   }
+  return { data: normalized, changed }
+}
+
+function stripReferenceImagePayloads(references: ReferenceImage[], onStripped?: () => void): ReferenceImage[] {
+  return references.map((reference) => ({
+    ...reference,
+    dataUrl: reference.dataUrl ? (onStripped?.(), '') : reference.dataUrl
+  }))
 }
 
 function normalizeConversationSize(ratio: ImageRatio, nextSize: string | undefined, currentSize: string | undefined): string {
@@ -349,6 +424,20 @@ function normalizeReferenceMimeType(mimeType: string, name: string): string | nu
 
 function mimeTypeFromDataUrl(dataUrl: string): string {
   return /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || 'image/png'
+}
+
+function extensionFromDataUrl(dataUrl: string): string {
+  const mimeType = mimeTypeFromDataUrl(dataUrl)
+  if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/webp') return 'webp'
+  return 'png'
+}
+
+function storagePathFromAssetUrl(value: string | null | undefined): string | null {
+  if (!value) return null
+  const encoded = /^https?:\/\/asset\.localhost\/(.+)$/i.exec(value)?.[1]
+  if (!encoded) return null
+  return decodeURIComponent(encoded)
 }
 
 export function ratioFromSize(size: string | null): ImageRatio {

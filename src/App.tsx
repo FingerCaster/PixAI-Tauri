@@ -6,12 +6,12 @@ import { PromptLibraryPage } from './components/prompts/PromptLibraryPage'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { Workspace } from './components/workspace/Workspace'
 import { registerCodexBridgeHandler } from './services/codex-bridge'
-import { isTauriRuntime } from './lib/platform'
+import { isTauriRuntime, watchWindowFocus } from './lib/platform'
 import { useAppStore } from './store/app-store'
 import './styles.css'
 
 function App() {
-  const { darkMode, load, loading, reloadHistory, settingsVisible, toast, view } = useAppStore()
+  const { darkMode, load, loading, reloadHistory, setWindowFocused, settingsVisible, toast, view } = useAppStore()
 
   useEffect(() => {
     void load()
@@ -33,6 +33,21 @@ function App() {
       if (unlisten) void unlisten()
     }
   }, [load, reloadHistory])
+
+  useEffect(() => {
+    let disposed = false
+    let unwatch: (() => void) | null = null
+    void watchWindowFocus((focused) => {
+      setWindowFocused(focused)
+    }).then((nextUnwatch) => {
+      if (disposed) void nextUnwatch()
+      else unwatch = nextUnwatch
+    })
+    return () => {
+      disposed = true
+      if (unwatch) void unwatch()
+    }
+  }, [setWindowFocused])
 
   return (
     <div className={darkMode ? 'app theme-dark' : 'app'}>

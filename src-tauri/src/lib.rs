@@ -50,6 +50,8 @@ struct HttpProxyRequest {
     method: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    #[serde(rename = "bodyBase64")]
+    body_base64: Option<String>,
     #[serde(rename = "timeoutMs")]
     timeout_ms: Option<u64>,
     #[serde(rename = "firstByteTimeoutMs")]
@@ -64,6 +66,8 @@ struct HttpProxyStreamRequest {
     method: String,
     headers: HashMap<String, String>,
     body: Option<String>,
+    #[serde(rename = "bodyBase64")]
+    body_base64: Option<String>,
     #[serde(rename = "timeoutMs")]
     timeout_ms: Option<u64>,
     #[serde(rename = "firstByteTimeoutMs")]
@@ -94,6 +98,15 @@ struct LocalImageReadResult {
     name: String,
     mime_type: String,
     data_url: String,
+    file_size_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredDataUrlFile {
+    path: String,
+    data_url: String,
+    mime_type: String,
     file_size_bytes: u64,
 }
 
@@ -248,7 +261,11 @@ async fn http_proxy(request: HttpProxyRequest) -> Result<HttpProxyResponse, Stri
     for (name, value) in request.headers {
         builder = builder.header(name, value);
     }
-    if let Some(body) = request.body {
+    if let Some(body_base64) = request.body_base64 {
+        let body = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, body_base64)
+            .map_err(|error| format!("请求体 base64 无效：{error}"))?;
+        builder = builder.body(body);
+    } else if let Some(body) = request.body {
         builder = builder.body(body);
     }
     let timeout_ms = request.timeout_ms.or(request.first_byte_timeout_ms);
@@ -289,7 +306,11 @@ async fn http_proxy_stream(app: AppHandle, request: HttpProxyStreamRequest) -> R
     for (name, value) in request.headers {
         builder = builder.header(name, value);
     }
-    if let Some(body) = request.body {
+    if let Some(body_base64) = request.body_base64 {
+        let body = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, body_base64)
+            .map_err(|error| format!("请求体 base64 无效：{error}"))?;
+        builder = builder.body(body);
+    } else if let Some(body) = request.body {
         builder = builder.body(body);
     }
     if let Some(timeout_ms) = request.timeout_ms {
@@ -404,7 +425,6 @@ fn http_proxy_client() -> Result<&'static Client, String> {
         return Ok(client);
     }
     let client = Client::builder()
-        .http1_only()
         .connect_timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(0)
         .build()
@@ -479,6 +499,53 @@ fn write_data_url_file(
     let path = directory.join(sanitize_export_filename(&filename));
     fs::write(&path, bytes).map_err(|error| error.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn read_binary_file_base64(path: String) -> Result<String, String> {
+    let resolved = PathBuf::from(path);
+    if !resolved.is_file() {
+        return Err("文件不存在。".to_string());
+    }
+    let data = fs::read(resolved).map_err(|error| error.to_string())?;
+    Ok(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        data,
+    ))
+}
+
+#[tauri::command]
+fn copy_binary_file(source: String, directory: String, filename: String) -> Result<String, String> {
+    let source_path = PathBuf::from(source);
+    if !source_path.is_file() {
+        return Err("源文件不存在。".to_string());
+    }
+    let directory = PathBuf::from(directory);
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = unique_file_path(&directory, &sanitize_export_filename(&filename));
+    fs::copy(&source_path, &path).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn store_data_url_file(
+    app: AppHandle,
+    namespace: String,
+    filename: String,
+    data_url: String,
+) -> Result<StoredDataUrlFile, String> {
+    let bytes = decode_data_url(&data_url)?;
+    let mime_type = mime_type_from_data_url(&data_url).to_string();
+    let directory = app_data_path(&app)?.join(sanitize_name(&namespace)?);
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = unique_file_path(&directory, &sanitize_export_filename(&filename));
+    fs::write(&path, &bytes).map_err(|error| error.to_string())?;
+    Ok(StoredDataUrlFile {
+        path: path.to_string_lossy().to_string(),
+        data_url: path_to_file_url(&path),
+        mime_type,
+        file_size_bytes: bytes.len() as u64,
+    })
 }
 
 #[tauri::command]
@@ -1007,6 +1074,13 @@ fn decode_data_url(data_url: &str) -> Result<Vec<u8>, String> {
         .map_err(|error| error.to_string())
 }
 
+fn mime_type_from_data_url(data_url: &str) -> &str {
+    data_url
+        .strip_prefix("data:")
+        .and_then(|value| value.split_once(";base64,").map(|(mime_type, _)| mime_type))
+        .unwrap_or("image/png")
+}
+
 fn mime_type_from_path(path: &Path) -> &'static str {
     match path
         .extension()
@@ -1019,6 +1093,27 @@ fn mime_type_from_path(path: &Path) -> &'static str {
         "webp" => "image/webp",
         _ => "image/png",
     }
+}
+
+fn unique_file_path(directory: &Path, filename: &str) -> PathBuf {
+    let candidate = directory.join(filename);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let path = Path::new(filename);
+    let stem = path.file_stem().and_then(|value| value.to_str()).unwrap_or("image");
+    let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("png");
+    for index in 1.. {
+        let candidate = directory.join(format!("{stem}-{index}.{extension}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!("unique file path loop should always return")
+}
+
+fn path_to_file_url(path: &Path) -> String {
+    path.to_string_lossy().to_string()
 }
 
 fn sanitize_export_filename(filename: &str) -> String {
@@ -1213,6 +1308,7 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             start_codex_bridge(app.handle().clone());
@@ -1229,6 +1325,9 @@ pub fn run() {
             http_proxy_stream,
             read_local_image_file,
             write_data_url_file,
+            read_binary_file_base64,
+            copy_binary_file,
+            store_data_url_file,
             codex_skill_status,
             install_codex_skill,
             codex_bridge_respond,

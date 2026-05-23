@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Copy, Download, Edit3, Heart, ImageDown, Trash2 } from 'lucide-react'
 import type { ImageHistoryItem } from '../../shared/types'
 import { formatDuration } from '../../lib/time'
+import { imageSourceForDisplay } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
@@ -11,7 +12,17 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const { addHistoryAsReference, deleteHistory, notify, toggleFavorite } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
+  const [imageSource, setImageSource] = useState<string | null>(item.dataUrl?.startsWith('data:') ? item.dataUrl : null)
   const showFailedRetryChip = shouldShowFailedImageRetryChip(item.retryAttempt)
+  useEffect(() => {
+    let canceled = false
+    void imageSourceForDisplay(item.dataUrl, item.storagePath).then((source) => {
+      if (!canceled) setImageSource(source)
+    })
+    return () => {
+      canceled = true
+    }
+  }, [item.dataUrl, item.storagePath])
   const copyPrompt = async () => {
     await navigator.clipboard.writeText(item.prompt)
     notify('提示词已复制')
@@ -19,8 +30,8 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const copyImage = async () => {
     if (!item.dataUrl) return
     if (!item.dataUrl.startsWith('data:')) {
-      await navigator.clipboard.writeText(item.dataUrl)
-      notify('图片链接已复制')
+      await navigator.clipboard.writeText(item.storagePath || item.dataUrl)
+      notify('图片路径已复制')
       return
     }
     try {
@@ -33,15 +44,15 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
     }
   }
   const downloadImage = () => {
-    if (!item.dataUrl) return
+    if (!imageSource) return
     const link = document.createElement('a')
-    link.href = item.dataUrl
-    link.download = `${item.id}.${extensionFromDataUrl(item.dataUrl)}`
+    link.href = imageSource
+    link.download = `${item.id}.${extensionFromDataUrl(item.dataUrl || item.storagePath || imageSource)}`
     link.click()
     notify('图片下载已开始')
   }
   const openPreview = () => {
-    if (item.dataUrl) setPreviewOpen(true)
+    if (imageSource) setPreviewOpen(true)
   }
 
   if (item.status === 'failed') {
@@ -83,7 +94,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   return (
     <article className="image-tile">
       <button className="image-frame image-preview-trigger" type="button" title="查看大图" onClick={openPreview}>
-        {item.dataUrl ? <img src={item.dataUrl} alt={item.prompt} /> : null}
+        {imageSource ? <img src={imageSource} alt={item.prompt} /> : null}
       </button>
       <div className="tile-body">
         <strong>{item.prompt}</strong>
@@ -96,7 +107,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
         <button type="button" onClick={copyPrompt} title="复制提示词">
           <Copy size={15} />
         </button>
-        {item.dataUrl ? (
+        {imageSource ? (
           <>
             <button type="button" onClick={() => void copyImage()} title="复制图片">
               <ImageDown size={15} />
@@ -133,6 +144,10 @@ function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 function extensionFromDataUrl(dataUrl: string): string {
+  if (!dataUrl.startsWith('data:')) {
+    const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(dataUrl)?.[1]?.toLowerCase()
+    return extension === 'jpg' || extension === 'jpeg' || extension === 'webp' ? extension : 'png'
+  }
   const mimeType = /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || ''
   if (mimeType.includes('jpeg')) return 'jpg'
   if (mimeType.includes('webp')) return 'webp'

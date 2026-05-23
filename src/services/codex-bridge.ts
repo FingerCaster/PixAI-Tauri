@@ -1,6 +1,6 @@
 import { emit, listen } from '@tauri-apps/api/event'
 import { DEFAULT_IMAGE_MAX_RETRIES, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible } from '../shared/image-options'
-import { isTauriRuntime, markCodexBridgeReady, readLocalImageFile, respondCodexBridge, writeDataUrlFile } from '../lib/platform'
+import { copyBinaryFile, isTauriRuntime, markCodexBridgeReady, readBinaryFileBase64, readLocalImageFile, respondCodexBridge, writeDataUrlFile } from '../lib/platform'
 import type { PixaiApi } from './app-api'
 import { pixaiApi } from './app-api'
 import { ImageGenerationPreflightError } from './image-service'
@@ -344,8 +344,15 @@ async function exportImages(api: PixaiApi, body: unknown): Promise<BridgeResult>
       skipped.push({ id, reason: '图片不可用或未成功生成。' })
       continue
     }
-    const filename = `${safeFilename(item.id)}.${extensionFromDataUrl(item.dataUrl)}`
-    exported.push({ id, path: await writeDataUrlFile(directory, filename, item.dataUrl) })
+    const extension = extensionFromImageSource(item)
+    const filename = `${safeFilename(item.id)}.${extension}`
+    if (item.dataUrl.startsWith('data:')) {
+      exported.push({ id, path: await writeDataUrlFile(directory, filename, item.dataUrl) })
+    } else if (item.storagePath) {
+      exported.push({ id, path: await copyStoredImageFile(item.storagePath, directory, filename) })
+    } else {
+      skipped.push({ id, reason: '图片文件路径不可用。' })
+    }
   }
   return { body: { ok: true, directory, exported, skipped } }
 }
@@ -353,6 +360,15 @@ async function exportImages(api: PixaiApi, body: unknown): Promise<BridgeResult>
 async function imageFile(api: PixaiApi, id: string): Promise<BridgeResult> {
   const item = await requireHistory(api, id)
   if (item.status !== 'succeeded' || !item.dataUrl) throw new BridgeHttpError(404, '未找到图片文件。')
+  if (!item.dataUrl.startsWith('data:') && item.storagePath) {
+    return {
+      headers: {
+        'Content-Type': mimeTypeFromImageSource(item),
+        'Content-Disposition': `inline; filename="${safeFilename(item.id)}.${extensionFromImageSource(item)}"`
+      },
+      bodyBase64: base64FromBytes(await readStoredImageFile(item.storagePath))
+    }
+  }
   return {
     headers: {
       'Content-Type': mimeTypeFromDataUrl(item.dataUrl),
@@ -654,7 +670,7 @@ function enrichHistoryItem<T extends ImageHistoryItem>(item: T, port: number): T
 } {
   return {
     ...item,
-    fileUrl: item.dataUrl,
+    fileUrl: item.dataUrl?.startsWith('data:') ? item.dataUrl : item.storagePath || item.dataUrl,
     bridgeFileUrl: `http://127.0.0.1:${port}/images/${encodeURIComponent(item.id)}/file`
   }
 }
@@ -682,10 +698,27 @@ function mimeTypeFromDataUrl(dataUrl: string): string {
   return /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || 'image/png'
 }
 
+function mimeTypeFromImageSource(item: ImageHistoryItem): string {
+  if (item.dataUrl?.startsWith('data:')) return mimeTypeFromDataUrl(item.dataUrl)
+  const extension = extensionFromImageSource(item)
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg'
+  if (extension === 'webp') return 'image/webp'
+  return 'image/png'
+}
+
 function base64FromDataUrl(dataUrl: string): string {
   const match = /^data:image\/[a-z0-9.+-]+;base64,(.+)$/i.exec(dataUrl.trim())
   if (!match) throw new BridgeHttpError(404, '图片数据不可用。')
   return match[1]
+}
+
+function base64FromBytes(bytes: Uint8Array): string {
+  let binary = ''
+  const chunkSize = 0x8000
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.slice(index, index + chunkSize))
+  }
+  return btoa(binary)
 }
 
 function extensionFromDataUrl(dataUrl: string): string {
@@ -693,6 +726,28 @@ function extensionFromDataUrl(dataUrl: string): string {
   if (mimeType === 'image/jpeg') return 'jpg'
   if (mimeType === 'image/webp') return 'webp'
   return 'png'
+}
+
+function extensionFromImageSource(item: ImageHistoryItem): string {
+  if (item.dataUrl?.startsWith('data:')) return extensionFromDataUrl(item.dataUrl)
+  const source = item.storagePath || item.dataUrl || ''
+  const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(source)?.[1]?.toLowerCase()
+  return extension === 'jpg' || extension === 'jpeg' || extension === 'webp' ? extension : 'png'
+}
+
+async function readStoredImageFile(path: string): Promise<Uint8Array> {
+  return base64ToBytes(await readBinaryFileBase64(path))
+}
+
+async function copyStoredImageFile(sourcePath: string, directory: string, filename: string): Promise<string> {
+  return copyBinaryFile(sourcePath, directory, filename)
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return bytes
 }
 
 function safeFilename(value: string): string {
