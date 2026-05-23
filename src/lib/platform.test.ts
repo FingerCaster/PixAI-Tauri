@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getSystemNotificationPermission, requestSystemNotificationPermission } from './platform'
+import {
+  __resetPlatformStateForTests,
+  imageSourceForDisplay,
+  imageSourceForDisplaySync,
+  getSystemNotificationPermission,
+  requestSystemNotificationPermission
+} from './platform'
 
 describe('platform notification permissions', () => {
   const originalNotificationDescriptor = Object.getOwnPropertyDescriptor(window, 'Notification')
@@ -8,6 +14,7 @@ describe('platform notification permissions', () => {
   afterEach(() => {
     restoreWindowProperty('Notification', originalNotificationDescriptor)
     restoreWindowProperty('__TAURI_INTERNALS__', originalTauriDescriptor)
+    __resetPlatformStateForTests()
   })
 
   it('treats Tauri desktop notifications as granted without trusting WebView Notification state', async () => {
@@ -22,6 +29,14 @@ describe('platform notification permissions', () => {
 
     await expect(getSystemNotificationPermission()).resolves.toBe('granted')
     await expect(requestSystemNotificationPermission()).resolves.toBe('granted')
+  })
+})
+
+describe('platform image display sources', () => {
+  it('returns cached local image sources synchronously after the first async load', async () => {
+    await imageSourceForDisplay('data:image/png;base64,aGVsbG8=', 'browser-memory/images/example.png')
+
+    expect(imageSourceForDisplaySync(null, 'browser-memory/images/example.png')).toBe('data:image/png;base64,aGVsbG8=')
   })
 })
 

@@ -2,15 +2,17 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { X } from 'lucide-react'
 import { formatDuration } from '../../lib/time'
-import { imageSourceForDisplay } from '../../lib/platform'
+import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import type { ImageHistoryItem } from '../../shared/types'
 
 export function ImagePreviewModal({ item, onClose }: { item: ImageHistoryItem; onClose: () => void }) {
-  const [imageSource, setImageSource] = useState<string | null>(item.dataUrl?.startsWith('data:') ? item.dataUrl : null)
+  const [imageSource, setImageSource] = useState<string | null>(() => imageSourceForDisplaySync(item.dataUrl, item.storagePath))
   useEffect(() => {
     let canceled = false
+    const syncSource = imageSourceForDisplaySync(item.dataUrl, item.storagePath)
+    if (syncSource) setImageSource(syncSource)
     void imageSourceForDisplay(item.dataUrl, item.storagePath).then((source) => {
-      if (!canceled) setImageSource(source)
+      if (!canceled && source) setImageSource(source)
     })
     return () => {
       canceled = true

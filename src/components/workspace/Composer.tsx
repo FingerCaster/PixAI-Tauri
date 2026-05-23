@@ -2,7 +2,7 @@ import type { ChangeEvent, DragEvent } from 'react'
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
-import { imageSourceForDisplay } from '../../lib/platform'
+import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation, ReferenceImage } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
@@ -23,6 +23,14 @@ export function Composer({ conversation, generating }: { conversation: Conversat
 
   useEffect(() => {
     let canceled = false
+    setReferenceSources((currentSources) => ({
+      ...currentSources,
+      ...Object.fromEntries(
+        conversation.referenceImages
+          .map((reference) => [reference.id, imageSourceForDisplaySync(reference.dataUrl, reference.storagePath)] as const)
+          .filter((entry): entry is [string, string] => Boolean(entry[1]))
+      )
+    }))
     void Promise.all(
       conversation.referenceImages.map(async (reference) => [
         reference.id,

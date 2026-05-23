@@ -1,4 +1,4 @@
-import { invoke } from '@tauri-apps/api/core'
+import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
@@ -54,6 +54,7 @@ type CloseRequestAction = 'hide' | 'quit' | false
 
 const memoryStorage = new Map<string, string>()
 const memorySecrets = new Map<string, string>()
+const imageSourceCache = new Map<string, string>()
 let mockNotificationPermission: NotificationPermission | 'unsupported' | null = null
 const notificationLog: Array<{ title: string; body?: string }> = []
 
@@ -382,13 +383,56 @@ export function imageSourceFromStoredPath(dataUrl: string | null, storagePath?: 
   return dataUrl
 }
 
-export async function imageSourceForDisplay(dataUrl: string | null, storagePath?: string | null): Promise<string | null> {
-  if (storagePath) return readLocalImageDataUrl(storagePath)
+export function imageSourceForDisplaySync(dataUrl: string | null, storagePath?: string | null): string | null {
+  const cacheKey = imageDisplayCacheKey(dataUrl, storagePath)
+  if (cacheKey) {
+    const cached = imageSourceCache.get(cacheKey)
+    if (cached) return cached
+  }
+  const localPath = storagePath || (dataUrl ? storagePathFromAssetUrl(dataUrl) || (/^[a-z]:[\\/]/i.test(dataUrl) ? dataUrl : null) : null)
+  if (localPath && isTauriRuntime()) {
+    try {
+      const source = convertFileSrc(localPath)
+      if (cacheKey) imageSourceCache.set(cacheKey, source)
+      return source
+    } catch {
+      return null
+    }
+  }
   if (!dataUrl) return null
-  if (dataUrl.startsWith('data:')) return dataUrl
+  if (dataUrl.startsWith('data:') || /^https?:\/\//i.test(dataUrl)) {
+    if (cacheKey) imageSourceCache.set(cacheKey, dataUrl)
+    return dataUrl
+  }
+  return null
+}
+
+export async function imageSourceForDisplay(dataUrl: string | null, storagePath?: string | null): Promise<string | null> {
+  const syncSource = imageSourceForDisplaySync(dataUrl, storagePath)
+  if (syncSource) return syncSource
+  const cacheKey = imageDisplayCacheKey(dataUrl, storagePath)
+  if (storagePath) {
+    const source = await readLocalImageDataUrl(storagePath)
+    if (cacheKey) imageSourceCache.set(cacheKey, source)
+    return source
+  }
+  if (!dataUrl) return null
+  if (dataUrl.startsWith('data:')) {
+    if (cacheKey) imageSourceCache.set(cacheKey, dataUrl)
+    return dataUrl
+  }
   const path = storagePathFromAssetUrl(dataUrl) || (/^[a-z]:[\\/]/i.test(dataUrl) ? dataUrl : null)
-  if (path) return readLocalImageDataUrl(path)
+  if (path) {
+    const source = await readLocalImageDataUrl(path)
+    if (cacheKey) imageSourceCache.set(cacheKey, source)
+    return source
+  }
+  if (cacheKey) imageSourceCache.set(cacheKey, dataUrl)
   return dataUrl
+}
+
+function imageDisplayCacheKey(dataUrl: string | null, storagePath?: string | null): string | null {
+  return storagePath || dataUrl || null
 }
 
 export async function respondCodexBridge(response: CodexBridgeResponse): Promise<void> {
@@ -439,6 +483,7 @@ export async function installCodexSkill(request: CodexSkillInstallRequest): Prom
 export function __resetPlatformStateForTests(): void {
   memoryStorage.clear()
   memorySecrets.clear()
+  imageSourceCache.clear()
   mockNotificationPermission = null
   notificationLog.length = 0
   globalThis.localStorage?.clear()

@@ -1,4 +1,4 @@
-import { Copy, Plus, Trash2, WandSparkles } from 'lucide-react'
+import { Copy, Pencil, Plus, Trash2, WandSparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { PromptTemplate } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
@@ -88,7 +88,7 @@ export function PromptLibraryPage() {
                 <Copy size={15} />
               </button>
               <button type="button" onClick={() => setDraft(template)} title="编辑">
-                编辑
+                <Pencil size={15} />
               </button>
               <button type="button" onClick={() => void deleteTemplate(template.id)} title="删除">
                 <Trash2 size={15} />

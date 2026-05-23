@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Copy, Download, Edit3, Heart, ImageDown, Trash2 } from 'lucide-react'
 import type { ImageHistoryItem } from '../../shared/types'
 import { formatDuration } from '../../lib/time'
-import { imageSourceForDisplay } from '../../lib/platform'
+import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
@@ -12,12 +12,14 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const { addHistoryAsReference, deleteHistory, notify, toggleFavorite } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
-  const [imageSource, setImageSource] = useState<string | null>(item.dataUrl?.startsWith('data:') ? item.dataUrl : null)
+  const [imageSource, setImageSource] = useState<string | null>(() => imageSourceForDisplaySync(item.dataUrl, item.storagePath))
   const showFailedRetryChip = shouldShowFailedImageRetryChip(item.retryAttempt)
   useEffect(() => {
     let canceled = false
+    const syncSource = imageSourceForDisplaySync(item.dataUrl, item.storagePath)
+    if (syncSource) setImageSource(syncSource)
     void imageSourceForDisplay(item.dataUrl, item.storagePath).then((source) => {
-      if (!canceled) setImageSource(source)
+      if (!canceled && source) setImageSource(source)
     })
     return () => {
       canceled = true
