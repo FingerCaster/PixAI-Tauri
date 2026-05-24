@@ -16,13 +16,13 @@ use std::{
     thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+#[cfg(target_os = "windows")]
+use tauri::utils::{config::BundleType, platform::bundle_type};
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri::{AppHandle, Emitter, Manager};
-#[cfg(target_os = "windows")]
-use tauri::utils::{config::BundleType, platform::bundle_type};
 #[cfg(not(target_os = "windows"))]
 use tauri_plugin_notification::NotificationExt;
 #[cfg(target_os = "windows")]
@@ -197,7 +197,9 @@ fn app_installer_type() -> String {
         return match bundle_type() {
             Some(BundleType::Msi) => "msi".to_string(),
             Some(BundleType::Nsis) => "nsis".to_string(),
-            _ => installed_app_installer_type().unwrap_or("unknown").to_string(),
+            _ => installed_app_installer_type()
+                .unwrap_or("unknown")
+                .to_string(),
         };
     }
 
@@ -241,7 +243,8 @@ fn installed_app_installer_type_from_root(root: RegKey) -> Option<&'static str> 
             continue;
         }
 
-        let uninstall_string = registry_string_value(&subkey, "UninstallString").unwrap_or_default();
+        let uninstall_string =
+            registry_string_value(&subkey, "UninstallString").unwrap_or_default();
         if uninstall_string.to_ascii_lowercase().contains("msiexec") {
             return Some("msi");
         }
@@ -262,7 +265,10 @@ fn registry_string_value(key: &RegKey, name: &str) -> Option<String> {
 #[cfg(target_os = "windows")]
 fn is_pixai_tauri_uninstall_entry(display_name: Option<&str>, publisher: Option<&str>) -> bool {
     matches!(display_name, Some("PixAI"))
-        && matches!(publisher.map(str::to_ascii_lowercase).as_deref(), Some("fingercaster"))
+        && matches!(
+            publisher.map(str::to_ascii_lowercase).as_deref(),
+            Some("fingercaster")
+        )
 }
 
 #[tauri::command]
@@ -644,11 +650,8 @@ fn write_binary_file(path: String, bytes_base64: String) -> Result<String, Strin
     if let Some(parent) = resolved.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
-    let bytes = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        bytes_base64,
-    )
-    .map_err(|error| format!("图片数据无效：{error}"))?;
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, bytes_base64)
+        .map_err(|error| format!("图片数据无效：{error}"))?;
     fs::write(&resolved, bytes).map_err(|error| error.to_string())?;
     Ok(resolved.to_string_lossy().to_string())
 }
@@ -754,10 +757,7 @@ fn write_codex_bridge_state(port: u16) {
         "port": port,
         "updatedAt": current_timestamp()
     });
-    let _ = fs::write(
-        skill_path.join("bridge.json"),
-        format!("{}\n", payload),
-    );
+    let _ = fs::write(skill_path.join("bridge.json"), format!("{}\n", payload));
 }
 
 fn current_timestamp() -> u128 {
@@ -1030,9 +1030,7 @@ fn bind_codex_bridge_listener(preferred_port: u16) -> Option<(TcpListener, u16)>
                 .local_addr()
                 .map(|address| address.port())
                 .unwrap_or(CODEX_BRIDGE_PORT);
-            eprintln!(
-                "[PixAI Codex] Bridge falling back to http://{CODEX_BRIDGE_HOST}:{port}"
-            );
+            eprintln!("[PixAI Codex] Bridge falling back to http://{CODEX_BRIDGE_HOST}:{port}");
             Some((listener, port))
         }
         Err(error) => {
@@ -1650,6 +1648,9 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            let _ = activate_main_window_for(app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
