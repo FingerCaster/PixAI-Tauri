@@ -29,6 +29,12 @@
       }
     }
   },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json"],
+      "pubkey": ""
+    }
+  },
   "bundle": {
     "active": true,
     "category": "GraphicsAndDesign",

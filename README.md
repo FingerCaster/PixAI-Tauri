@@ -34,6 +34,26 @@ pnpm dist
 pnpm codex -- health
 ```
 
+## App updates
+
+PixAI uses the Tauri updater plugin for in-app update checks. The settings panel shows the current runtime version, can check for updates manually, and checks once on desktop startup when the updater is configured.
+
+Before producing a public installer, add updater configuration to `src-tauri/tauri.conf.json`:
+
+```json
+"bundle": {
+  "createUpdaterArtifacts": true
+},
+"plugins": {
+  "updater": {
+    "endpoints": ["https://your-release-host.example.com/pixai/{{target}}/{{current_version}}"],
+    "pubkey": "YOUR_TAURI_UPDATER_PUBLIC_KEY"
+  }
+}
+```
+
+Generate and keep the Tauri updater private key outside the repository, then set `TAURI_SIGNING_PRIVATE_KEY` and, if needed, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the release environment before running `pnpm dist`. Without configured updater endpoints and signing keys, update checks fail gracefully and do not affect image generation.
+
 ## Codex Bridge
 
 When the Tauri app is running it starts a local bridge at:

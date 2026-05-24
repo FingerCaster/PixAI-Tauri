@@ -1,12 +1,14 @@
 import { create } from 'zustand'
 import { pixaiApi } from '../services/app-api'
 import { ImageGenerationPreflightError } from '../services/image-service'
+import { getBundledAppVersion } from '../shared/app-version'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
 import { sendSystemNotification } from '../lib/platform'
 import { formatDuration } from '../lib/time'
 import type {
   AppPreferences,
   AppPreferencesUpdate,
+  AppUpdateState,
   CodexSkillStatus,
   Conversation,
   ConversationCreateInput,
@@ -45,6 +47,7 @@ type AppState = {
   templates: PromptTemplate[]
   codexSkillStatus: CodexSkillStatus | null
   codexSkillInstalling: boolean
+  appUpdate: AppUpdateState
   query: string
   favoritesOnly: boolean
   loading: boolean
@@ -75,6 +78,9 @@ type AppState = {
   testProfile: (id: string) => Promise<void>
   loadCodexSkillStatus: () => Promise<void>
   installCodexSkill: () => Promise<void>
+  loadAppVersionInfo: () => Promise<void>
+  checkForAppUpdate: (options?: { silent?: boolean }) => Promise<void>
+  downloadAndInstallAppUpdate: () => Promise<void>
   importReferenceFiles: (files: File[]) => Promise<void>
   addHistoryAsReference: (historyId: string) => Promise<void>
   removeReferenceImage: (referenceImageId: string) => Promise<void>
@@ -97,6 +103,19 @@ type AppState = {
 }
 
 let generationClockTimer: number | null = null
+let startupUpdateCheckStarted = false
+
+const initialAppUpdateState: AppUpdateState = {
+  status: 'idle',
+  currentVersion: getBundledAppVersion(),
+  platform: 'browser',
+  runtime: 'browser',
+  availableUpdate: null,
+  lastCheckedAt: null,
+  errorMessage: null,
+  downloadedBytes: null,
+  contentLength: null
+}
 
 function startGenerationClock(): void {
   if (generationClockTimer != null || typeof window === 'undefined') return
@@ -130,6 +149,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   templates: [],
   codexSkillStatus: null,
   codexSkillInstalling: false,
+  appUpdate: initialAppUpdateState,
   query: '',
   favoritesOnly: false,
   loading: false,
@@ -163,6 +183,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       templates,
       loading: false
     })
+    await get().loadAppVersionInfo()
+    if (!startupUpdateCheckStarted && get().appUpdate.runtime === 'tauri') {
+      startupUpdateCheckStarted = true
+      void get().checkForAppUpdate({ silent: true })
+    }
   },
   setView: (view) => set({ view }),
   toggleSettings: () => set((state) => ({ settingsVisible: !state.settingsVisible, view: 'workspace' })),
@@ -285,6 +310,126 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().notify(error instanceof Error ? `技能安装失败：${error.message}` : '技能安装失败')
     } finally {
       set({ codexSkillInstalling: false })
+    }
+  },
+  loadAppVersionInfo: async () => {
+    try {
+      const versionInfo = await pixaiApi.appUpdate.versionInfo()
+      set({
+        appUpdate: {
+          ...get().appUpdate,
+          currentVersion: versionInfo.version,
+          platform: versionInfo.platform,
+          runtime: versionInfo.runtime
+        }
+      })
+    } catch (error) {
+      set({
+        appUpdate: {
+          ...get().appUpdate,
+          status: 'error',
+          errorMessage: error instanceof Error ? error.message : '版本信息读取失败'
+        }
+      })
+    }
+  },
+  checkForAppUpdate: async (options = {}) => {
+    const current = get().appUpdate
+    if (current.status === 'checking' || current.status === 'downloading' || current.status === 'installing') return
+    set({
+      appUpdate: {
+        ...current,
+        status: 'checking',
+        errorMessage: null,
+        downloadedBytes: null,
+        contentLength: null
+      }
+    })
+    try {
+      const result = await pixaiApi.appUpdate.check()
+      const checkedAt = new Date().toISOString()
+      const next: AppUpdateState = {
+        ...get().appUpdate,
+        status: result.update ? 'available' : 'upToDate',
+        currentVersion: result.currentVersion,
+        availableUpdate: result.update,
+        lastCheckedAt: checkedAt,
+        errorMessage: null,
+        downloadedBytes: null,
+        contentLength: null
+      }
+      set({ appUpdate: next })
+      if (!options.silent) {
+        get().notify(result.update ? `发现新版本 ${result.update.version}` : '当前已是最新版本')
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '检查更新失败'
+      set({
+        appUpdate: {
+          ...get().appUpdate,
+          status: 'error',
+          lastCheckedAt: new Date().toISOString(),
+          errorMessage: message,
+          downloadedBytes: null,
+          contentLength: null
+        }
+      })
+      if (!options.silent) get().notify(`检查更新失败：${message}`)
+    }
+  },
+  downloadAndInstallAppUpdate: async () => {
+    const current = get().appUpdate
+    if (!current.availableUpdate || current.status === 'downloading' || current.status === 'installing') return
+    set({
+      appUpdate: {
+        ...current,
+        status: 'downloading',
+        errorMessage: null,
+        downloadedBytes: 0,
+        contentLength: null
+      }
+    })
+    try {
+      const result = await pixaiApi.appUpdate.downloadAndInstall((progress) => {
+        const state = useAppStore.getState().appUpdate
+        set({
+          appUpdate: {
+            ...state,
+            downloadedBytes: progress.downloadedBytes ?? state.downloadedBytes,
+            contentLength: progress.contentLength ?? state.contentLength
+          }
+        })
+      })
+      if (result.action === 'openedDownload') {
+        set({
+          appUpdate: {
+            ...get().appUpdate,
+            status: 'available',
+            errorMessage: null
+          }
+        })
+        get().notify('已打开 GitHub Release 下载页')
+        return
+      }
+      set({
+        appUpdate: {
+          ...get().appUpdate,
+          status: 'installing',
+          errorMessage: null
+        }
+      })
+      get().notify('更新已安装，正在重启 PixAI')
+      await pixaiApi.appUpdate.relaunch()
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '下载安装更新失败'
+      set({
+        appUpdate: {
+          ...get().appUpdate,
+          status: 'error',
+          errorMessage: message
+        }
+      })
+      get().notify(`更新失败：${message}`)
     }
   },
   importReferenceFiles: async (files) => {

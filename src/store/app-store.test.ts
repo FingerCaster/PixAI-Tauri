@@ -30,6 +30,64 @@ describe('useAppStore', () => {
     expect(installSpy).not.toHaveBeenCalled()
   })
 
+  it('loads app version info and starts one silent update check during normal app load', async () => {
+    const versionSpy = vi.spyOn(pixaiApi.appUpdate, 'versionInfo').mockResolvedValue({
+      version: '0.0.2',
+      platform: 'desktop',
+      runtime: 'tauri'
+    })
+    const checkSpy = vi.spyOn(pixaiApi.appUpdate, 'check').mockResolvedValue({
+      currentVersion: '0.0.2',
+      update: null
+    })
+
+    await useAppStore.getState().load()
+    await vi.waitFor(() => expect(checkSpy).toHaveBeenCalledTimes(1))
+
+    expect(versionSpy).toHaveBeenCalled()
+    expect(useAppStore.getState().appUpdate).toMatchObject({
+      status: 'upToDate',
+      currentVersion: '0.0.2',
+      availableUpdate: null,
+      errorMessage: null
+    })
+  })
+
+  it('stores available update metadata after a manual check', async () => {
+    vi.spyOn(pixaiApi.appUpdate, 'check').mockResolvedValue({
+      currentVersion: '0.0.2',
+      update: {
+        version: '0.0.3',
+        date: '2026-05-24T00:00:00Z',
+        notes: '更新说明',
+        rawJson: {}
+      }
+    })
+
+    await useAppStore.getState().checkForAppUpdate({ silent: false })
+
+    expect(useAppStore.getState().appUpdate).toMatchObject({
+      status: 'available',
+      currentVersion: '0.0.2',
+      availableUpdate: expect.objectContaining({ version: '0.0.3' }),
+      errorMessage: null
+    })
+    expect(useAppStore.getState().toast).toBe('发现新版本 0.0.3')
+  })
+
+  it('keeps update check failures visible without clearing the workspace', async () => {
+    vi.spyOn(pixaiApi.appUpdate, 'check').mockRejectedValue(new Error('updater endpoint missing'))
+
+    await useAppStore.getState().checkForAppUpdate({ silent: false })
+
+    expect(useAppStore.getState().appUpdate).toMatchObject({
+      status: 'error',
+      errorMessage: 'updater endpoint missing'
+    })
+    expect(useAppStore.getState().conversations).toHaveLength(1)
+    expect(useAppStore.getState().toast).toBe('检查更新失败：updater endpoint missing')
+  })
+
   it('applies prompt templates to the active conversation', async () => {
     await useAppStore.getState().load()
     const template = useAppStore.getState().templates[0]

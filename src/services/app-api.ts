@@ -1,6 +1,7 @@
 import { openPath } from '@tauri-apps/plugin-opener'
 import { storeDataUrlFile } from '../lib/platform'
 import { AppDatabase } from './app-database'
+import { AppUpdateService } from './app-update'
 import { AppPreferencesStore } from './app-preferences'
 import { getPixaiCodexSkillStatus, installPixaiCodexSkill } from './codex-skill-installer'
 import { ImageService } from './image-service'
@@ -32,6 +33,7 @@ export function createPixaiApi() {
   const images = new ImageService(database, providers)
   const prompts = new PromptService(providers)
   const templates = new PromptTemplateStore()
+  const appUpdate = new AppUpdateService()
 
   return {
     settings: {
@@ -82,6 +84,12 @@ export function createPixaiApi() {
       list: () => templates.list(),
       upsert: (input: PromptTemplateInput & { id?: string }) => templates.upsert(input),
       delete: (id: string) => templates.delete(id)
+    },
+    appUpdate: {
+      versionInfo: () => appUpdate.getVersionInfo(),
+      check: () => appUpdate.check(),
+      downloadAndInstall: (onProgress?: Parameters<AppUpdateService['downloadAndInstall']>[0]) => appUpdate.downloadAndInstall(onProgress),
+      relaunch: () => appUpdate.relaunch()
     },
     codexSkill: {
       status: () => getPixaiCodexSkillStatus(),

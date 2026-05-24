@@ -24,6 +24,7 @@ import { pixaiApi } from '../../services/app-api'
 import type { ImageBackground, ImageGenerationEndpoint, ImageInputFidelity, ImageModeration, ImageOutputFormat, ProviderProfile } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 import { GallerySelect } from '../common/GallerySelect'
+import { AppUpdateSection } from './AppUpdateSection'
 
 export function SettingsPanel() {
   const {
@@ -40,8 +41,11 @@ export function SettingsPanel() {
     upsertProfile,
     codexSkillStatus,
     codexSkillInstalling,
+    appUpdate,
     loadCodexSkillStatus,
     installCodexSkill,
+    checkForAppUpdate,
+    downloadAndInstallAppUpdate,
     notify
   } = useAppStore()
   const conversation = conversations.find((item) => item.id === activeConversationId) || null
@@ -271,6 +275,12 @@ export function SettingsPanel() {
           </div>
         </div>
       </section>
+
+      <AppUpdateSection
+        appUpdate={appUpdate}
+        onCheck={() => void checkForAppUpdate({ silent: false })}
+        onInstall={() => void downloadAndInstallAppUpdate()}
+      />
 
       <section className="settings-section">
         <div className="section-title">

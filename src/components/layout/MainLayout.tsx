@@ -18,7 +18,8 @@ export function MainLayout({ children }: { children: ReactNode }) {
     toggleSettings,
     toggleTheme,
     view,
-    generatingByConversation
+    generatingByConversation,
+    appUpdate
   } = useAppStore()
   const imageProfile = settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId)
   const endpoint = imageProfile ? buildImageEndpoint(imageProfile.baseUrl) : ''
@@ -107,7 +108,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
         <div className="sidebar-footer">
           <div className="version-line">
             <strong>PixAI</strong>
-            <span>v0.1.0</span>
+            <span>v{appUpdate.currentVersion}</span>
           </div>
           <div className="icon-row">
             <button className="theme-toggle" type="button" onClick={toggleTheme} title="切换主题">

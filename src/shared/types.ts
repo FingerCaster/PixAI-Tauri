@@ -82,6 +82,53 @@ export type AppPreferences = {
 
 export type AppPreferencesUpdate = Partial<AppPreferences>
 
+export type AppUpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'upToDate'
+  | 'available'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
+  | 'error'
+
+export type AppVersionInfo = {
+  version: string
+  platform: 'desktop' | 'browser'
+  runtime: 'tauri' | 'browser'
+}
+
+export type AvailableAppUpdate = {
+  version: string
+  date: string | null
+  notes: string | null
+  rawJson: Record<string, unknown>
+  installMode?: 'tauri' | 'github'
+  releaseUrl?: string | null
+  downloadUrl?: string | null
+}
+
+export type AppUpdateCheckResult = {
+  currentVersion: string
+  update: AvailableAppUpdate | null
+}
+
+export type AppUpdateInstallResult = {
+  action: 'installed' | 'openedDownload'
+}
+
+export type AppUpdateState = {
+  status: AppUpdateStatus
+  currentVersion: string
+  platform: AppVersionInfo['platform']
+  runtime: AppVersionInfo['runtime']
+  availableUpdate: AvailableAppUpdate | null
+  lastCheckedAt: string | null
+  errorMessage: string | null
+  downloadedBytes: number | null
+  contentLength: number | null
+}
+
 export type LegacyProviderSettingsUpdate = ProviderSettingsUpdate & {
   baseURL?: string
   baseUrl?: string
