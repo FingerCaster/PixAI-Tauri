@@ -18,7 +18,13 @@
     "updater:local:keygen": "node scripts/local-updater.mjs keygen",
     "updater:local:build": "node scripts/local-updater.mjs build",
     "updater:local:publish": "node scripts/local-updater.mjs publish",
-    "updater:local:serve": "node scripts/local-updater.mjs serve"
+    "updater:local:serve": "node scripts/local-updater.mjs serve",
+    "updater:release": "node scripts/release-updater.mjs",
+    "updater:release:keygen": "node scripts/release-updater.mjs keygen",
+    "updater:release:pull-key": "node scripts/release-updater.mjs pull-key",
+    "updater:release:build": "node scripts/release-updater.mjs build",
+    "updater:release:manifest": "node scripts/release-updater.mjs manifest",
+    "updater:release:publish": "node scripts/release-updater.mjs publish"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

@@ -38,21 +38,123 @@ pnpm codex -- health
 
 PixAI uses the Tauri updater plugin for in-app update checks. The settings panel shows the current runtime version, can check for updates manually, and checks once on desktop startup when the updater is configured.
 
-Before producing a public installer, add updater configuration to `src-tauri/tauri.conf.json`:
+If the updater keypair is missing, the app still works normally for image generation, settings, and manual installer downloads. What breaks is the signed in-app auto-update path only; PixAI falls back to the GitHub release page when `latest.json`, signatures, or updater key config are unavailable.
+
+### Production updater release
+
+Production builds now use the GitHub release feed already configured in `src-tauri/tauri.conf.json`:
 
 ```json
-"bundle": {
-  "createUpdaterArtifacts": true
-},
 "plugins": {
   "updater": {
-    "endpoints": ["https://your-release-host.example.com/pixai/{{target}}/{{current_version}}"],
+    "endpoints": ["https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json"],
     "pubkey": "YOUR_TAURI_UPDATER_PUBLIC_KEY"
   }
 }
 ```
 
-Generate and keep the Tauri updater private key outside the repository, then set `TAURI_SIGNING_PRIVATE_KEY` and, if needed, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the release environment before running `pnpm dist`. Without configured updater endpoints and signing keys, update checks fail gracefully and do not affect image generation.
+1. Generate the long-lived production updater key once:
+
+```bash
+pnpm updater:release:keygen
+```
+
+This writes the private key to:
+
+```text
+artifacts/release-updater/keys/updater.key
+```
+
+and the public key to:
+
+```text
+artifacts/release-updater/keys/updater.key.pub
+```
+
+The `artifacts/` directory is gitignored. Keep `updater.key` stable across releases; if you rotate it, older installed builds signed with the previous public key will stop trusting future in-app updates.
+
+If you develop on multiple machines, do not keep the only copy inside one workspace. The release script also accepts:
+
+```text
+PIXAI_RELEASE_UPDATER_KEY_PATH
+```
+
+or Tauri's native:
+
+```text
+TAURI_SIGNING_PRIVATE_KEY_PATH
+```
+
+So each machine can point at the same exported private key copy, for example from a synced secrets folder, password manager attachment, secure network share, or CI secret mount.
+
+If you store the key in 1Password, the repo can pull it back into the default local path:
+
+```bash
+pnpm updater:release:pull-key
+```
+
+By default this reads:
+
+- vault: `PixAI Release`
+- document: `PixAI updater.key`
+- document: `PixAI updater.key.pub`
+
+Override those names with:
+
+```text
+PIXAI_1PASSWORD_VAULT
+PIXAI_1PASSWORD_UPDATER_KEY_TITLE
+PIXAI_1PASSWORD_UPDATER_PUBKEY_TITLE
+```
+
+2. Build the signed production installers and updater signatures:
+
+```bash
+pnpm updater:release:build -- --version 0.0.3
+```
+
+This command:
+
+- uses `TAURI_SIGNING_PRIVATE_KEY_PATH` with the local production key
+- also accepts `PIXAI_RELEASE_UPDATER_KEY_PATH` when you want the repo to read the key from another location
+- temporarily enables `bundle.createUpdaterArtifacts`
+- generates signed MSI / NSIS updater artifacts under `src-tauri/target/release/bundle/`
+
+3. Stage `latest.json` for a GitHub release tag:
+
+```bash
+pnpm updater:release:manifest -- --version 0.0.3 --tag 0.0.3
+```
+
+The staged release payload is written to:
+
+```text
+artifacts/release-updater/staging/0.0.3/
+```
+
+4. Upload the staged updater manifest and matching installers to an existing GitHub release:
+
+```bash
+pnpm updater:release:publish -- --version 0.0.3 --tag 0.0.3
+```
+
+This uploads:
+
+- `latest.json`
+- `PixAI_0.0.3_x64_en-US.msi`
+- `PixAI_0.0.3_x64-setup.exe`
+
+The app then checks updates from:
+
+```text
+https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json
+```
+
+Notes:
+
+- The updater public key committed in `src-tauri/tauri.conf.json` must match `artifacts/release-updater/keys/updater.key.pub`.
+- Older installs built before the public key was baked into the app will still fall back to the GitHub release page once; installs built after this setup use the signed updater path normally.
+- If 1Password CLI asks for approval often on Windows, that is usually the desktop app integration policy doing its job. The least noisy setup is: keep the 1Password desktop app unlocked, enable Windows Hello, and enable `Settings > Developer > Integrate with 1Password CLI`. For fully non-interactive release automation, move signing to a dedicated CI or release machine instead of a daily dev machine.
 
 ### Local updater verification
 

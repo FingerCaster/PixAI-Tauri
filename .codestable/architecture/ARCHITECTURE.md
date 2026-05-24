@@ -36,6 +36,11 @@ PixAI rebuilt as a Tauri 2 desktop app.
   - `src-tauri/tauri.local-updater.conf.json`
   - `README.md`
   - 负责在不上传 GitHub Release 的前提下，生成本地签名更新包、`latest.json` 和本地 feed。
+- **正式 updater 发布工具**
+  - `scripts/release-updater.mjs`
+  - `src-tauri/tauri.conf.json`
+  - `README.md`
+  - 负责用长期公私钥生成正式签名更新包、组装 GitHub Release `latest.json` 并上传现有 release 资产。
 
 ## 4. 关键架构决定
 
@@ -43,6 +48,7 @@ PixAI rebuilt as a Tauri 2 desktop app.
 - Provider 维护不再和工作区参数混排，而是作为 `Services` 分区内的独立管理流存在。
 - 更新、通知权限、技能安装统一按状态卡表达，减少和普通表单字段的视觉冲突。
 - 正式更新源与本地验证更新源分离：正式分发继续走 GitHub Release，本地验证通过独立脚本和本地 HTTP feed 完成。
+- 正式 updater 私钥只保存在本机 gitignored 的 `artifacts/release-updater/keys/`；仓库只提交公钥。
 
 ## 5. 已知约束 / 硬边界
 

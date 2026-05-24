@@ -32,7 +32,7 @@
   "plugins": {
     "updater": {
       "endpoints": ["https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json"],
-      "pubkey": ""
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJDOEZCQkM4NTVFMDhBQkIKUldTN2l1QlZ5THVQdk9WZVFTZTd4SEUwV2RDV1cwREpmazF1RVAydmZNdTdDT0hEcFdYWDFPNjcK"
     }
   },
   "bundle": {
