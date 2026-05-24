@@ -14,6 +14,11 @@ artifacts
 artifacts/local-updater
 src-tauri/target
 .serena
+.codedb-mcp/
+.codedb-mcp/*.bin
+.codedb-mcp/manifest.json
+.codedb-mcp/louvain-cache.json
+.codedb-mcp/deepwiki/
 .tmp-edge-profile*
 *.local
 
