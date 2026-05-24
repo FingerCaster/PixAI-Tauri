@@ -61,6 +61,7 @@ async function buildReleaseUpdater() {
   await ensureKeypair({ force: false })
   await assertConfiguredPubkey()
   const version = await resolveVersion()
+  const privateKey = process.env.TAURI_SIGNING_PRIVATE_KEY || await readFile(keyPath, 'utf8')
   const tempConfig = {
     version,
     bundle: {
@@ -84,9 +85,7 @@ async function buildReleaseUpdater() {
     cwd: rootDir,
     env: {
       ...process.env,
-      ...(process.env.TAURI_SIGNING_PRIVATE_KEY || process.env.TAURI_SIGNING_PRIVATE_KEY_PATH
-        ? {}
-        : { TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath })
+      TAURI_SIGNING_PRIVATE_KEY: privateKey
     }
   })
 
