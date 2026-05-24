@@ -70,6 +70,8 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
 
   const imageSelectedProfile = profiles.find((profile) => profile.id === selectedImageProfileId) || imageProfiles[0] || null
   const promptSelectedProfile = profiles.find((profile) => profile.id === selectedPromptProfileId) || promptProfiles[0] || null
+  const hasImageProfiles = imageProfiles.length > 0
+  const hasPromptProfiles = promptProfiles.length > 0
   const isImageToImage = conversation.referenceImages.length > 0
   const sizeOptions = getImageSizeOptions(conversation.ratio)
   const selectedSize = sizeOptions.some((option) => option.value === conversation.size)
@@ -79,6 +81,10 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
   const saveProviderConfig = async () => {
     const imageProfile = imageSelectedProfile
     const promptProfile = promptSelectedProfile
+    if (!imageProfile && !promptProfile) {
+      onOpenGlobalSettings('services')
+      return
+    }
     if (imageProfile && promptProfile && imageProfile.id === promptProfile.id) {
       await upsertProfile({
         ...imageProfile,
@@ -101,7 +107,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
       <ScrollArea className="h-full">
         <div className="grid gap-3 p-3">
       <Card className="settings-section gap-3 rounded-2xl shadow-none">
-        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+        <CardHeader className="section-title flex items-center justify-between space-y-0 pb-0">
           <CardTitle className="text-sm">引擎</CardTitle>
           <Button variant="outline" size="sm" type="button" onClick={() => onOpenGlobalSettings('services')}>
             <Settings size={15} />
@@ -109,43 +115,60 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
           </Button>
         </CardHeader>
         <CardContent className="grid gap-3">
+        {!hasImageProfiles && !hasPromptProfiles ? (
+          <div className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
+            请先添加 Provider，再选择图片生成或提示词助手服务。
+          </div>
+        ) : null}
         <Label className="grid gap-1.5 text-xs text-muted-foreground">
           图片生成
-          <GallerySelect
-            value={selectedImageProfileId}
-            options={imageProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
-            ariaLabel="图片生成 Provider"
-            className="settings-select"
-            onChange={(profileId) => {
-              const profile = profiles.find((item) => item.id === profileId)
-              setSelectedImageProfileId(profileId)
-              setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
-            }}
-          />
+          {hasImageProfiles ? (
+            <GallerySelect
+              value={selectedImageProfileId}
+              options={imageProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+              ariaLabel="图片生成 Provider"
+              className="settings-select"
+              onChange={(profileId) => {
+                const profile = profiles.find((item) => item.id === profileId)
+                setSelectedImageProfileId(profileId)
+                setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
+              }}
+            />
+          ) : (
+            <Button variant="outline" type="button" onClick={() => onOpenGlobalSettings('services')}>
+              添加 Provider
+            </Button>
+          )}
         </Label>
         <Label className="grid gap-1.5 text-xs text-muted-foreground">
           提示词助手
-          <GallerySelect
-            value={selectedPromptProfileId}
-            options={promptProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
-            ariaLabel="提示词助手 Provider"
-            className="settings-select"
-            onChange={(profileId) => {
-              const profile = profiles.find((item) => item.id === profileId)
-              setSelectedPromptProfileId(profileId)
-              setPromptModel(profile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
-            }}
-          />
+          {hasPromptProfiles ? (
+            <GallerySelect
+              value={selectedPromptProfileId}
+              options={promptProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+              ariaLabel="提示词助手 Provider"
+              className="settings-select"
+              onChange={(profileId) => {
+                const profile = profiles.find((item) => item.id === profileId)
+                setSelectedPromptProfileId(profileId)
+                setPromptModel(profile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
+              }}
+            />
+          ) : (
+            <Button variant="outline" type="button" onClick={() => onOpenGlobalSettings('services')}>
+              添加 Provider
+            </Button>
+          )}
         </Label>
         <Label className="grid gap-1.5 text-xs text-muted-foreground">
           图片模型
-          <Input value={imageModel} onChange={(event) => setImageModel(event.target.value)} />
+          <Input value={imageModel} disabled={!hasImageProfiles} placeholder="先添加 Provider" onChange={(event) => setImageModel(event.target.value)} />
         </Label>
         <Label className="grid gap-1.5 text-xs text-muted-foreground">
           提示词模型
-          <Input value={promptModel} onChange={(event) => setPromptModel(event.target.value)} />
+          <Input value={promptModel} disabled={!hasPromptProfiles} placeholder="先添加 Provider" onChange={(event) => setPromptModel(event.target.value)} />
         </Label>
-        <Button className="primary-button full w-full" type="button" onClick={() => void saveProviderConfig()}>
+        <Button className="primary-button full w-full" type="button" disabled={!hasImageProfiles && !hasPromptProfiles} onClick={() => void saveProviderConfig()}>
           <Save size={15} />
           保存引擎设置
         </Button>
@@ -153,7 +176,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
       </Card>
 
       <Card className="settings-section gap-3 rounded-2xl shadow-none">
-        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+        <CardHeader className="section-title flex items-center justify-between space-y-0 pb-0">
           <CardTitle className="text-sm">基础参数</CardTitle>
           <Badge variant="outline" className="pill tiny">高频</Badge>
         </CardHeader>
@@ -222,7 +245,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
       </Card>
 
       <Card className="settings-section gap-3 rounded-2xl shadow-none">
-        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+        <CardHeader className="section-title flex items-center justify-between space-y-0 pb-0">
           <CardTitle className="text-sm">高级参数</CardTitle>
           <Badge variant={isImageToImage ? 'default' : 'outline'} className={`pill tiny ${isImageToImage ? 'blue' : ''}`}>{isImageToImage ? '图生图' : '文生图'}</Badge>
         </CardHeader>
@@ -428,7 +451,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
       </Card>
 
       <Card className="settings-section gap-3 rounded-2xl shadow-none">
-        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+        <CardHeader className="section-title flex items-center justify-between space-y-0 pb-0">
           <CardTitle className="text-sm">会话选项</CardTitle>
           <Badge variant="outline" className="pill tiny">轻量</Badge>
         </CardHeader>

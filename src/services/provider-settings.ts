@@ -99,13 +99,12 @@ export class ProviderSettingsStore {
 
   async deleteProfile(id: string): Promise<ProviderSettings> {
     const current = await this.get()
-    if (current.profiles.length <= 1) throw new Error('至少需要保留一个服务配置。')
     const profiles = current.profiles.filter((profile) => profile.id !== id)
     await deleteProfileSecret(id)
     const next = normalizeSettings({
       profiles,
-      selectedImageProfileId: current.selectedImageProfileId === id ? profiles[0].id : current.selectedImageProfileId,
-      selectedPromptProfileId: current.selectedPromptProfileId === id ? profiles[0].id : current.selectedPromptProfileId
+      selectedImageProfileId: current.selectedImageProfileId === id ? '' : current.selectedImageProfileId,
+      selectedPromptProfileId: current.selectedPromptProfileId === id ? '' : current.selectedPromptProfileId
     })
     await this.save(next)
     return next
@@ -113,8 +112,9 @@ export class ProviderSettingsStore {
 
   async getRuntimeProfile(profileId: string): Promise<ProviderRuntimeProfile> {
     const settings = await this.get()
+    if (!settings.profiles.length) throw new Error('请先添加 Provider。')
     const profile = settings.profiles.find((item) => item.id === profileId)
-    if (!profile) throw new Error('未找到服务配置。')
+    if (!profile) throw new Error('请先选择可用的 Provider。')
     const secret = await getProfileSecret(profile.id)
     if (profile.insecureStorage !== secret.insecureStorage && profile.apiKeyStored) {
       await this.upsertProfile({
@@ -149,32 +149,15 @@ export class ProviderSettingsStore {
 }
 
 function createDefaultSettings(): ProviderSettings {
-  const adapter = getAdapter('openai-compatible')
-  const now = nowIso()
-  const profile: ProviderProfile = {
-    id: 'default-openai-compatible',
-    name: '本地 OpenAI 兼容接口',
-    type: 'openai-compatible',
-    baseUrl: 'http://127.0.0.1:37123',
-    defaultImageModel: DEFAULT_MODEL,
-    defaultPromptModel: DEFAULT_PROMPT_MODEL,
-    imageGenerationEndpoint: 'images-api',
-    enabledUsages: ['image', 'prompt'],
-    capabilities: adapter.capabilities,
-    apiKeyStored: false,
-    insecureStorage: false,
-    createdAt: now,
-    updatedAt: now
-  }
   return {
-    profiles: [profile],
-    selectedImageProfileId: profile.id,
-    selectedPromptProfileId: profile.id
+    profiles: [],
+    selectedImageProfileId: '',
+    selectedPromptProfileId: ''
   }
 }
 
 function normalizeSettings(settings: ProviderSettings, fallback?: ProviderSettings): ProviderSettings {
-  const profiles = (settings.profiles?.length ? settings.profiles : createDefaultSettings().profiles).map(normalizeProfile)
+  const profiles = (settings.profiles || []).map(normalizeProfile)
   return {
     profiles,
     selectedImageProfileId: selectProfileForUsage(profiles, settings.selectedImageProfileId, 'image', fallback?.selectedImageProfileId),
@@ -203,5 +186,5 @@ function normalizePromptModel(model?: string): string {
 function selectProfileForUsage(profiles: ProviderProfile[], selectedId: string | undefined, usage: ProviderUsage, fallbackId?: string): string {
   const selected = profiles.find((profile) => profile.id === selectedId && profile.enabledUsages.includes(usage))
   const fallback = profiles.find((profile) => profile.id === fallbackId && profile.enabledUsages.includes(usage))
-  return selected?.id || fallback?.id || profiles.find((profile) => profile.enabledUsages.includes(usage))?.id || profiles[0].id
+  return selected?.id || fallback?.id || profiles.find((profile) => profile.enabledUsages.includes(usage))?.id || ''
 }

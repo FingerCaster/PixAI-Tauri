@@ -12,6 +12,8 @@ let pendingGithubUpdate: AvailableAppUpdate | null = null
 const GITHUB_REPO_URL = 'https://github.com/FingerCaster/PixAI-Tauri'
 const GITHUB_LATEST_RELEASE_URL = 'https://github.com/FingerCaster/PixAI-Tauri/releases/latest'
 const GITHUB_RELEASE_ASSETS_URL = 'https://github.com/FingerCaster/PixAI-Tauri/releases/expanded_assets'
+const WINDOWS_X64_MSI_UPDATER_TARGET = 'windows-x86_64-msi'
+const WINDOWS_X64_NSIS_UPDATER_TARGET = 'windows-x86_64-nsis'
 
 export type AppUpdateDownloadProgress = {
   downloadedBytes: number | null
@@ -40,11 +42,12 @@ export class AppUpdateService {
     if (!isTauriRuntime()) {
       throw new Error('更新检查仅在桌面应用中可用。')
     }
-    const tauriResult = await checkTauriUpdater()
+    const installerType = versionInfo.installerType || 'unknown'
+    const tauriResult = await checkTauriUpdater(installerType)
     pendingUpdate = tauriResult.update
     pendingGithubUpdate = null
     if (tauriResult.source === 'github') {
-      const githubUpdate = await checkGithubRelease(versionInfo.version, versionInfo.installerType || 'unknown')
+      const githubUpdate = await checkGithubRelease(versionInfo.version, installerType)
       pendingGithubUpdate = githubUpdate
       return {
         currentVersion: versionInfo.version,
@@ -64,7 +67,8 @@ export class AppUpdateService {
       return { action: 'openedDownload' }
     }
     if (!pendingUpdate) {
-      pendingUpdate = (await checkTauriUpdater()).update
+      const versionInfo = await this.getVersionInfo()
+      pendingUpdate = (await checkTauriUpdater(versionInfo.installerType || 'unknown')).update
     }
     if (!pendingUpdate) throw new Error('当前没有可安装的更新。')
     let downloadedBytes = 0
@@ -97,11 +101,13 @@ export class AppUpdateService {
   }
 }
 
-async function checkTauriUpdater(): Promise<{ source: 'tauri' | 'github'; update: Update | null }> {
+async function checkTauriUpdater(
+  installerType: AppVersionInfo['installerType'] = 'unknown'
+): Promise<{ source: 'tauri' | 'github'; update: Update | null }> {
   try {
     return {
       source: 'tauri',
-      update: await check()
+      update: await check(buildUpdaterCheckOptions(installerType))
     }
   } catch (error) {
     const normalizedError = normalizeUpdateError(error)
@@ -113,6 +119,17 @@ async function checkTauriUpdater(): Promise<{ source: 'tauri' | 'github'; update
     }
     throw normalizedError
   }
+}
+
+function buildUpdaterCheckOptions(installerType: AppVersionInfo['installerType'] = 'unknown'): { target?: string } | undefined {
+  const target = getUpdaterTarget(installerType)
+  return target ? { target } : undefined
+}
+
+function getUpdaterTarget(installerType: AppVersionInfo['installerType'] = 'unknown'): string | null {
+  if (installerType === 'msi') return WINDOWS_X64_MSI_UPDATER_TARGET
+  if (installerType === 'nsis') return WINDOWS_X64_NSIS_UPDATER_TARGET
+  throw new Error('无法识别当前安装器类型，请重新安装 MSI 或 NSIS 版本后再检查更新。')
 }
 
 async function checkGithubRelease(

@@ -165,8 +165,20 @@ async function updateSettings(api: PixaiApi, body: unknown): Promise<BridgeResul
   let next = await api.settings.update(update)
   const baseUrl = readOptionalString(input.baseURL ?? input.baseUrl, 'baseURL')
   const apiKey = 'apiKey' in input ? readOptionalString(input.apiKey, 'apiKey') || null : undefined
-  if (baseUrl || apiKey !== undefined) {
-    const profileIds = Array.from(new Set([selectedImageProfileId, selectedPromptProfileId]))
+  const imageModel = readOptionalString(input.defaultImageModel ?? input.defaultModel, 'defaultImageModel')
+  const promptModel = readOptionalString(input.defaultPromptModel ?? input.promptModel, 'defaultPromptModel')
+  const imageGenerationEndpoint = readEnum(input.imageGenerationEndpoint, ['images-api', 'responses-api'] as const, 'imageGenerationEndpoint', true)
+  if (!next.profiles.length && (baseUrl || apiKey !== undefined || imageModel || promptModel || imageGenerationEndpoint)) {
+    next = await api.settings.upsertProfile({
+      name: 'OpenAI 兼容接口',
+      baseUrl: baseUrl || undefined,
+      apiKey,
+      defaultImageModel: imageModel || undefined,
+      defaultPromptModel: promptModel || undefined,
+      imageGenerationEndpoint: imageGenerationEndpoint || undefined
+    })
+  } else if (baseUrl || apiKey !== undefined) {
+    const profileIds = Array.from(new Set([selectedImageProfileId, selectedPromptProfileId].filter(Boolean)))
     for (const profileId of profileIds) {
       const profile = next.profiles.find((item) => item.id === profileId)
       if (!profile) throw new BridgeHttpError(404, '未找到服务配置。')
@@ -177,21 +189,18 @@ async function updateSettings(api: PixaiApi, body: unknown): Promise<BridgeResul
       })
     }
   }
-  const imageModel = readOptionalString(input.defaultImageModel ?? input.defaultModel, 'defaultImageModel')
   if (imageModel) {
-    const imageProfile = next.profiles.find((profile) => profile.id === selectedImageProfileId)
+    const imageProfile = next.profiles.find((profile) => profile.id === (selectedImageProfileId || next.selectedImageProfileId))
     if (!imageProfile) throw new BridgeHttpError(404, '未找到图片服务配置。')
     next = await api.settings.upsertProfile({ id: imageProfile.id, defaultImageModel: imageModel })
   }
-  const promptModel = readOptionalString(input.defaultPromptModel ?? input.promptModel, 'defaultPromptModel')
   if (promptModel) {
-    const promptProfile = next.profiles.find((profile) => profile.id === selectedPromptProfileId)
+    const promptProfile = next.profiles.find((profile) => profile.id === (selectedPromptProfileId || next.selectedPromptProfileId))
     if (!promptProfile) throw new BridgeHttpError(404, '未找到提示词服务配置。')
     next = await api.settings.upsertProfile({ id: promptProfile.id, defaultPromptModel: promptModel })
   }
-  const imageGenerationEndpoint = readEnum(input.imageGenerationEndpoint, ['images-api', 'responses-api'] as const, 'imageGenerationEndpoint', true)
   if (imageGenerationEndpoint) {
-    const imageProfile = next.profiles.find((profile) => profile.id === selectedImageProfileId)
+    const imageProfile = next.profiles.find((profile) => profile.id === (selectedImageProfileId || next.selectedImageProfileId))
     if (!imageProfile) throw new BridgeHttpError(404, '未找到图片服务配置。')
     next = await api.settings.upsertProfile({ id: imageProfile.id, imageGenerationEndpoint })
   }

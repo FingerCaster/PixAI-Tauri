@@ -14,7 +14,7 @@ describe('useAppStore', () => {
     await useAppStore.getState().load()
     const state = useAppStore.getState()
 
-    expect(state.settings?.profiles.length).toBeGreaterThan(0)
+    expect(state.settings?.profiles).toEqual([])
     expect(state.templates.length).toBeGreaterThan(0)
     expect(state.conversations).toHaveLength(1)
     expect(state.activeConversationId).toBe(state.conversations[0].id)
@@ -155,7 +155,7 @@ describe('useAppStore', () => {
 
     await useAppStore.getState().generate()
 
-    expect(useAppStore.getState().toast).toBe('API Key 尚未配置。')
+    expect(useAppStore.getState().toast).toBe('生成失败：请先添加 Provider。')
     expect(useAppStore.getState().runsByConversation[conversation.id] || []).toHaveLength(0)
     expect(await pixaiApi.history.list()).toHaveLength(0)
   })

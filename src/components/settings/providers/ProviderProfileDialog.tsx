@@ -125,7 +125,7 @@ export function ProviderProfileDialog({
           ) : null}
         </div>
         <div className="button-row modal-actions flex justify-end gap-2">
-          {mode === 'edit' && profileCount > 1 ? (
+          {mode === 'edit' && profileCount > 0 ? (
             <Button className="danger-button mr-auto" variant="destructive" type="button" onClick={onDelete}>
               <Trash2 size={15} />
               删除

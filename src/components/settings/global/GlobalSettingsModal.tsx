@@ -48,21 +48,21 @@ export function GlobalSettingsModal({
               <strong className="text-base">全局设置</strong>
               <span className="text-xs leading-5 text-muted-foreground">低频配置与环境状态集中放在这里。</span>
             </div>
-            <TabsList className="grid h-auto justify-stretch gap-1 bg-transparent p-0">
+            <TabsList className="grid h-auto w-full justify-stretch gap-1 bg-transparent p-0">
               {TAB_OPTIONS.map((tab) => (
-                <TabsTrigger key={tab.id} value={tab.id} className="justify-start rounded-lg px-3">
+                <TabsTrigger key={tab.id} value={tab.id} className="h-10 w-full justify-start rounded-lg px-4 text-sm">
                   {tab.label}
                 </TabsTrigger>
               ))}
             </TabsList>
           </nav>
           <div className="global-settings-body min-w-0">
-            <DialogHeader className="modal-head global-settings-head border-b border-border px-5 py-4">
+            <DialogHeader className="modal-head global-settings-head border-b border-border px-4 py-4">
               <DialogTitle>{getTabTitle(activeTab)}</DialogTitle>
               <span className="text-sm text-muted-foreground">{getTabSummary(activeTab)}</span>
             </DialogHeader>
             <ScrollArea className="h-[min(680px,calc(100vh-150px))]">
-              <div className="global-settings-content grid gap-4 p-5">
+              <div className="global-settings-content grid gap-4 p-4">
                 {activeTab === 'general' ? <GeneralSettingsTab /> : null}
                 {activeTab === 'notifications' ? <NotificationSettingsTab /> : null}
                 {activeTab === 'services' ? <ServicesSettingsTab /> : null}

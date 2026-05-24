@@ -4,16 +4,28 @@ import { DEFAULT_PROMPT_MODEL } from '../shared/image-options'
 import { ProviderSettingsStore } from './provider-settings'
 
 describe('ProviderSettingsStore', () => {
-  it('creates a local OpenAI-compatible default with independent selections', async () => {
+  it('starts without a default provider so the UI can prompt setup', async () => {
     const store = new ProviderSettingsStore()
     const settings = await store.get()
 
-    expect(settings.profiles).toHaveLength(1)
-    expect(settings.profiles[0].type).toBe('openai-compatible')
-    expect(settings.profiles[0].baseUrl).toBe('http://127.0.0.1:37123')
-    expect(settings.profiles[0].imageGenerationEndpoint).toBe('images-api')
-    expect(settings.selectedImageProfileId).toBe(settings.profiles[0].id)
-    expect(settings.selectedPromptProfileId).toBe(settings.profiles[0].id)
+    expect(settings.profiles).toHaveLength(0)
+    expect(settings.selectedImageProfileId).toBe('')
+    expect(settings.selectedPromptProfileId).toBe('')
+  })
+
+  it('selects the first created profile for each compatible usage', async () => {
+    const store = new ProviderSettingsStore()
+    const settings = await store.upsertProfile({
+      name: 'Local mock',
+      baseUrl: 'http://127.0.0.1:37123'
+    })
+    const profile = settings.profiles[0]
+
+    expect(profile.type).toBe('openai-compatible')
+    expect(profile.baseUrl).toBe('http://127.0.0.1:37123')
+    expect(profile.imageGenerationEndpoint).toBe('images-api')
+    expect(settings.selectedImageProfileId).toBe(profile.id)
+    expect(settings.selectedPromptProfileId).toBe(profile.id)
   })
 
   it('stores API keys through the secret boundary instead of profile metadata', async () => {
@@ -120,6 +132,18 @@ describe('ProviderSettingsStore', () => {
     const settings = await store.deleteProfile(promptProfile?.id || '')
 
     expect(settings.selectedImageProfileId).toBe(imageProfile?.id)
-    expect(settings.selectedPromptProfileId).toBe('default-openai-compatible')
+    expect(settings.selectedPromptProfileId).toBe('')
+  })
+
+  it('allows deleting the last provider and returns to setup state', async () => {
+    const store = new ProviderSettingsStore()
+    const created = await store.upsertProfile({ name: 'Only provider' })
+    const profile = created.profiles[0]
+
+    const settings = await store.deleteProfile(profile.id)
+
+    expect(settings.profiles).toHaveLength(0)
+    expect(settings.selectedImageProfileId).toBe('')
+    expect(settings.selectedPromptProfileId).toBe('')
   })
 })

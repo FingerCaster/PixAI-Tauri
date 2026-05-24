@@ -32,3 +32,6 @@ tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"

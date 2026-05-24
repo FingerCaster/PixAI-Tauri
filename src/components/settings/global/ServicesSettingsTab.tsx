@@ -3,9 +3,7 @@ import { Pencil, Plus, Save } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { DEFAULT_MODEL, DEFAULT_PROMPT_MODEL } from '../../../shared/image-options'
+import { DEFAULT_MODEL } from '../../../shared/image-options'
 import type { ProviderProfile } from '../../../shared/types'
 import { useAppStore } from '../../../store/app-store'
 import { GallerySelect } from '../../common/GallerySelect'
@@ -28,7 +26,6 @@ export function ServicesSettingsTab() {
   const [selectedImageProfileId, setSelectedImageProfileId] = useState(settings?.selectedImageProfileId || '')
   const [selectedPromptProfileId, setSelectedPromptProfileId] = useState(settings?.selectedPromptProfileId || '')
   const [imageModel, setImageModel] = useState(DEFAULT_MODEL)
-  const [promptModel, setPromptModel] = useState(DEFAULT_PROMPT_MODEL)
   const [profileDraft, setProfileDraft] = useState<ProviderProfile | null>(null)
   const [profileDraftMode, setProfileDraftMode] = useState<'create' | 'edit'>('create')
   const [profileApiKey, setProfileApiKey] = useState('')
@@ -40,13 +37,14 @@ export function ServicesSettingsTab() {
     setSelectedImageProfileId(imageProfile?.id || '')
     setSelectedPromptProfileId(promptProfile?.id || '')
     setImageModel(imageProfile?.defaultImageModel || DEFAULT_MODEL)
-    setPromptModel(promptProfile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
   }, [imageProfiles, profiles, promptProfiles, settings])
 
   if (!settings || !conversation) return null
 
   const imageSelectedProfile = profiles.find((profile) => profile.id === selectedImageProfileId) || imageProfiles[0] || null
   const promptSelectedProfile = profiles.find((profile) => profile.id === selectedPromptProfileId) || promptProfiles[0] || null
+  const hasImageProfiles = imageProfiles.length > 0
+  const hasPromptProfiles = promptProfiles.length > 0
 
   const openNewProfileDialog = () => {
     setProfileApiKey('')
@@ -85,15 +83,9 @@ export function ServicesSettingsTab() {
   const saveServiceDefaults = async () => {
     const imageProfile = imageSelectedProfile
     const promptProfile = promptSelectedProfile
-    if (imageProfile && promptProfile && imageProfile.id === promptProfile.id) {
-      await upsertProfile({
-        ...imageProfile,
-        defaultImageModel: imageModel.trim() || DEFAULT_MODEL,
-        defaultPromptModel: promptModel.trim() || DEFAULT_PROMPT_MODEL
-      })
-    } else {
-      if (imageProfile) await upsertProfile({ ...imageProfile, defaultImageModel: imageModel.trim() || DEFAULT_MODEL })
-      if (promptProfile) await upsertProfile({ ...promptProfile, defaultPromptModel: promptModel.trim() || DEFAULT_PROMPT_MODEL })
+    if (!imageProfile && !promptProfile) {
+      openNewProfileDialog()
+      return
     }
     await updateSettings({
       selectedImageProfileId: imageProfile?.id,
@@ -111,14 +103,13 @@ export function ServicesSettingsTab() {
 
   const setAsPromptDefault = async (profile: ProviderProfile) => {
     setSelectedPromptProfileId(profile.id)
-    setPromptModel(profile.defaultPromptModel || DEFAULT_PROMPT_MODEL)
     await updateSettings({ selectedPromptProfileId: profile.id })
   }
 
   return (
     <>
       <Card className="settings-status-card settings-status-card-highlight rounded-2xl shadow-none">
-        <CardHeader className="section-title flex-row items-center justify-between space-y-0">
+        <CardHeader className="section-title flex items-center justify-between space-y-0">
           <CardTitle className="text-base">默认服务摘要</CardTitle>
           <Button type="button" size="sm" onClick={openNewProfileDialog}>
             <Plus />
@@ -126,46 +117,53 @@ export function ServicesSettingsTab() {
           </Button>
         </CardHeader>
         <CardContent className="grid gap-4">
+          {!profiles.length ? (
+            <div className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3 text-sm leading-6 text-muted-foreground">
+              还没有 Provider。请先添加 Provider，再设置图片生成和提示词助手的默认服务。
+            </div>
+          ) : null}
           <div className="provider-default-grid grid grid-cols-2 gap-3">
             <div className="field grid gap-1.5">
               <span className="text-xs text-muted-foreground">图片默认 Provider</span>
-              <GallerySelect
-                value={selectedImageProfileId}
-                options={imageProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
-                ariaLabel="图片默认 Provider"
-                className="settings-select"
-                onChange={(profileId) => {
-                  const profile = profiles.find((item) => item.id === profileId)
-                  setSelectedImageProfileId(profileId)
-                  setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
-                }}
-              />
+              {hasImageProfiles ? (
+                <GallerySelect
+                  value={selectedImageProfileId}
+                  options={imageProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+                  ariaLabel="图片默认 Provider"
+                  className="settings-select"
+                  onChange={(profileId) => {
+                    const profile = profiles.find((item) => item.id === profileId)
+                    setSelectedImageProfileId(profileId)
+                    setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
+                  }}
+                />
+              ) : (
+                <div className="grid min-h-9 place-items-start rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  先添加支持图片的 Provider
+                </div>
+              )}
             </div>
             <div className="field grid gap-1.5">
               <span className="text-xs text-muted-foreground">提示词默认 Provider</span>
-              <GallerySelect
-                value={selectedPromptProfileId}
-                options={promptProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
-                ariaLabel="提示词默认 Provider"
-                className="settings-select"
-                onChange={(profileId) => {
-                  const profile = profiles.find((item) => item.id === profileId)
-                  setSelectedPromptProfileId(profileId)
-                  setPromptModel(profile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
-                }}
-              />
+              {hasPromptProfiles ? (
+                <GallerySelect
+                  value={selectedPromptProfileId}
+                  options={promptProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+                  ariaLabel="提示词默认 Provider"
+                  className="settings-select"
+                  onChange={(profileId) => {
+                    setSelectedPromptProfileId(profileId)
+                  }}
+                />
+              ) : (
+                <div className="grid min-h-9 place-items-start rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  先添加支持提示词的 Provider
+                </div>
+              )}
             </div>
-            <Label className="grid gap-1.5 text-xs text-muted-foreground">
-              图片默认模型
-              <Input value={imageModel} onChange={(event) => setImageModel(event.target.value)} />
-            </Label>
-            <Label className="grid gap-1.5 text-xs text-muted-foreground">
-              提示词默认模型
-              <Input value={promptModel} onChange={(event) => setPromptModel(event.target.value)} />
-            </Label>
           </div>
           <div className="button-row provider-summary-actions flex justify-end">
-            <Button className="primary-button" type="button" onClick={() => void saveServiceDefaults()}>
+            <Button className="primary-button" type="button" disabled={!hasImageProfiles && !hasPromptProfiles} onClick={() => void saveServiceDefaults()}>
               <Save />
               保存默认设置
             </Button>
@@ -179,7 +177,7 @@ export function ServicesSettingsTab() {
           const isPromptDefault = settings.selectedPromptProfileId === profile.id
           return (
             <Card key={profile.id} className="settings-status-card provider-summary-card rounded-2xl shadow-none">
-              <CardHeader className="provider-summary-head flex-row items-start justify-between space-y-0">
+              <CardHeader className="provider-summary-head flex items-start justify-between space-y-0">
                 <div className="provider-summary-copy grid min-w-0 gap-1">
                   <div className="provider-summary-title-row flex items-center gap-2">
                     <CardTitle className="truncate text-base">{profile.name}</CardTitle>
@@ -199,7 +197,7 @@ export function ServicesSettingsTab() {
                   <Pencil />
                 </Button>
               </CardHeader>
-              <CardContent className="button-row provider-summary-actions flex justify-end gap-2">
+              <CardContent className="button-row provider-summary-actions flex justify-start gap-2">
                 <Button
                   variant="outline"
                   type="button"

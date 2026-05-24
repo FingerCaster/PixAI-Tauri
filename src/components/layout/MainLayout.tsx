@@ -40,7 +40,7 @@ export function MainLayout({
   return (
     <div className="shell app-frame flex h-dvh min-h-[720px] min-w-[1080px] flex-col overflow-hidden bg-[radial-gradient(circle_at_0%_0%,hsl(var(--primary)/0.09),transparent_28%),linear-gradient(135deg,hsl(var(--background)),hsl(var(--secondary)/0.55))]">
       <header className="topbar flex h-16 shrink-0 items-center gap-3 border-b border-border/80 bg-background/86 px-4 backdrop-blur">
-        <div className="brand flex min-w-48 items-center gap-3">
+        <div className="brand flex w-[248px] shrink-0 items-center gap-3">
           <img className="brand-mark size-9 rounded-xl border border-border bg-card p-1.5 shadow-sm" src={appLogo} alt="" />
           <div className="leading-tight">
             <strong className="block text-base font-semibold">PixAI</strong>
@@ -49,8 +49,8 @@ export function MainLayout({
         </div>
         <div className="endpoint flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm">
           <span className={cn('size-2.5 shrink-0 rounded-full', imageProfile?.apiKeyStored ? 'bg-emerald-500' : 'bg-amber-500')} />
-          <span className="shrink-0 text-muted-foreground">{imageProfile?.apiKeyStored ? '接口已配置' : '等待配置密钥'}</span>
-          <code className="truncate text-xs text-foreground/80">{endpoint || '未选择 Provider'}</code>
+          <span className="shrink-0 text-muted-foreground">{imageProfile?.apiKeyStored ? '接口已配置' : imageProfile ? '等待配置密钥' : '未添加 Provider'}</span>
+          <code className="truncate text-xs text-foreground/80">{endpoint || '请先在全局设置中添加 Provider'}</code>
         </div>
         <nav className="top-actions flex items-center gap-2">
           <Button variant="outline" type="button" onClick={toggleSettings} title={settingsVisible ? '隐藏参数栏' : '显示参数栏'}>

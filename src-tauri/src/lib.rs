@@ -27,6 +27,8 @@ use tauri::utils::{config::BundleType, platform::bundle_type};
 use tauri_plugin_notification::NotificationExt;
 #[cfg(target_os = "windows")]
 use tauri_winrt_notification::{Duration as ToastDuration, Toast};
+#[cfg(target_os = "windows")]
+use winreg::{enums::*, RegKey};
 
 const SECRET_SERVICE: &str = "PixAI-Tauri";
 const CODEX_BRIDGE_HOST: &str = "127.0.0.1";
@@ -195,7 +197,7 @@ fn app_installer_type() -> String {
         return match bundle_type() {
             Some(BundleType::Msi) => "msi".to_string(),
             Some(BundleType::Nsis) => "nsis".to_string(),
-            _ => "unknown".to_string(),
+            _ => installed_app_installer_type().unwrap_or("unknown").to_string(),
         };
     }
 
@@ -203,6 +205,64 @@ fn app_installer_type() -> String {
     {
         "unknown".to_string()
     }
+}
+
+#[cfg(target_os = "windows")]
+fn installed_app_installer_type() -> Option<&'static str> {
+    for root in [
+        RegKey::predef(HKEY_CURRENT_USER),
+        RegKey::predef(HKEY_LOCAL_MACHINE),
+    ] {
+        if let Some(installer_type) = installed_app_installer_type_from_root(root) {
+            return Some(installer_type);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn installed_app_installer_type_from_root(root: RegKey) -> Option<&'static str> {
+    let uninstall = root
+        .open_subkey_with_flags(
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ | KEY_WOW64_64KEY,
+        )
+        .ok()?;
+
+    for subkey_name in uninstall.enum_keys().flatten() {
+        let Ok(subkey) = uninstall.open_subkey_with_flags(&subkey_name, KEY_READ | KEY_WOW64_64KEY)
+        else {
+            continue;
+        };
+
+        let display_name = registry_string_value(&subkey, "DisplayName");
+        let publisher = registry_string_value(&subkey, "Publisher");
+        if !is_pixai_tauri_uninstall_entry(display_name.as_deref(), publisher.as_deref()) {
+            continue;
+        }
+
+        let uninstall_string = registry_string_value(&subkey, "UninstallString").unwrap_or_default();
+        if uninstall_string.to_ascii_lowercase().contains("msiexec") {
+            return Some("msi");
+        }
+        return Some("nsis");
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn registry_string_value(key: &RegKey, name: &str) -> Option<String> {
+    key.get_value::<String, _>(name)
+        .ok()
+        .map(|value| value.trim_matches('"').trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "windows")]
+fn is_pixai_tauri_uninstall_entry(display_name: Option<&str>, publisher: Option<&str>) -> bool {
+    matches!(display_name, Some("PixAI"))
+        && matches!(publisher.map(str::to_ascii_lowercase).as_deref(), Some("fingercaster"))
 }
 
 #[tauri::command]

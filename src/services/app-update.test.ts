@@ -44,7 +44,7 @@ describe('AppUpdateService', () => {
     vi.mocked(getVersion).mockResolvedValue('0.0.1')
     vi.mocked(openUrl).mockResolvedValue(undefined)
     vi.mocked(check).mockRejectedValue(new Error('HTTP status client error (404 Not Found): latest.json'))
-    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('unknown')
+    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('nsis')
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       value: {
         invoke: vi.fn(async (command: string, args?: { request?: { url?: string } }) => {
@@ -106,6 +106,7 @@ describe('AppUpdateService', () => {
 
     const result = await new AppUpdateService().check()
 
+    expect(check).toHaveBeenCalledWith({ target: 'windows-x86_64-msi' })
     expect(result.update).toMatchObject({
       installMode: 'github',
       downloadUrl: 'https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64_en-US.msi'
@@ -117,14 +118,24 @@ describe('AppUpdateService', () => {
 
     const result = await new AppUpdateService().check()
 
+    expect(check).toHaveBeenCalledWith({ target: 'windows-x86_64-nsis' })
     expect(result.update).toMatchObject({
       installMode: 'github',
       downloadUrl: 'https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64-setup.exe'
     })
   })
 
+  it('does not let the updater fall back to a generic Windows target when the installer type is unknown', async () => {
+    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('unknown')
+
+    await expect(new AppUpdateService().check()).rejects.toThrow('无法识别当前安装器类型')
+
+    expect(check).not.toHaveBeenCalled()
+  })
+
   it('does not fall back to GitHub when Tauri updater reports no update', async () => {
     vi.mocked(check).mockResolvedValue(null)
+    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('msi')
     const service = new AppUpdateService()
 
     const result = await service.check()
