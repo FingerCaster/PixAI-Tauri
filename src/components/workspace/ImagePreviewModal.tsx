@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { formatDuration } from '../../lib/time'
 import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import type { ImageHistoryItem } from '../../shared/types'
@@ -28,39 +27,20 @@ export function ImagePreviewModal({ item, onClose }: { item: ImageHistoryItem; o
 
   if (!imageSource) return null
 
-  return createPortal(
-    <div
-      className="modal-backdrop image-preview-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div
-        className="image-preview-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label="图片预览"
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="image-preview-head">
-          <div>
-            <strong>{item.prompt}</strong>
-            <span>
-              {item.model} · {item.size || item.ratio}
-              {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
-            </span>
-          </div>
-          <button className="icon-button image-preview-close" type="button" title="关闭" onClick={onClose}>
-            <X size={20} />
-          </button>
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="image-preview-panel max-w-6xl" aria-label="图片预览" aria-describedby={undefined}>
+        <DialogHeader className="image-preview-head">
+          <DialogTitle className="line-clamp-2">{item.prompt}</DialogTitle>
+          <span className="text-sm text-muted-foreground">
+            {item.model} · {item.size || item.ratio}
+            {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
+          </span>
+        </DialogHeader>
+        <div className="image-preview-stage grid max-h-[74vh] place-items-center overflow-hidden rounded-xl bg-muted">
+          <img className="max-h-[74vh] max-w-full object-contain" src={imageSource} alt={item.prompt} />
         </div>
-        <div className="image-preview-stage">
-          <img src={imageSource} alt={item.prompt} />
-        </div>
-      </div>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   )
 }

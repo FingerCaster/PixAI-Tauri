@@ -1,5 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { CircleHelp, Save, Settings } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Separator } from '@/components/ui/separator'
+import { cn } from '@/lib/utils'
 import {
   DEFAULT_IMAGE_OUTPUT_FORMAT,
   DEFAULT_MODEL,
@@ -58,7 +66,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
     setPromptModel(promptProfile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
   }, [imageProfiles, profiles, promptProfiles, settings])
 
-  if (!settings || !conversation) return <aside className="settings-panel workspace-config-panel" />
+  if (!settings || !conversation) return <aside className="settings-panel workspace-config-panel border-l border-border bg-card" />
 
   const imageSelectedProfile = profiles.find((profile) => profile.id === selectedImageProfileId) || imageProfiles[0] || null
   const promptSelectedProfile = profiles.find((profile) => profile.id === selectedPromptProfileId) || promptProfiles[0] || null
@@ -89,85 +97,86 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
   }
 
   return (
-    <aside className="settings-panel workspace-config-panel">
-      <section className="settings-section">
-        <div className="section-title">
-          <h2>引擎</h2>
-          <button type="button" onClick={() => onOpenGlobalSettings('services')}>
+    <aside className="settings-panel workspace-config-panel min-h-0 border-l border-border bg-card">
+      <ScrollArea className="h-full">
+        <div className="grid gap-3 p-3">
+      <Card className="settings-section gap-3 rounded-2xl shadow-none">
+        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+          <CardTitle className="text-sm">引擎</CardTitle>
+          <Button variant="outline" size="sm" type="button" onClick={() => onOpenGlobalSettings('services')}>
             <Settings size={15} />
             管理服务
-          </button>
-        </div>
-        <label>
+          </Button>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+        <Label className="grid gap-1.5 text-xs text-muted-foreground">
           图片生成
-          <select
+          <GallerySelect
             value={selectedImageProfileId}
-            onChange={(event) => {
-              const profile = profiles.find((item) => item.id === event.target.value)
-              setSelectedImageProfileId(event.target.value)
+            options={imageProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+            ariaLabel="图片生成 Provider"
+            className="settings-select"
+            onChange={(profileId) => {
+              const profile = profiles.find((item) => item.id === profileId)
+              setSelectedImageProfileId(profileId)
               setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
             }}
-          >
-            {imageProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
+          />
+        </Label>
+        <Label className="grid gap-1.5 text-xs text-muted-foreground">
           提示词助手
-          <select
+          <GallerySelect
             value={selectedPromptProfileId}
-            onChange={(event) => {
-              const profile = profiles.find((item) => item.id === event.target.value)
-              setSelectedPromptProfileId(event.target.value)
+            options={promptProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+            ariaLabel="提示词助手 Provider"
+            className="settings-select"
+            onChange={(profileId) => {
+              const profile = profiles.find((item) => item.id === profileId)
+              setSelectedPromptProfileId(profileId)
               setPromptModel(profile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
             }}
-          >
-            {promptProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
+          />
+        </Label>
+        <Label className="grid gap-1.5 text-xs text-muted-foreground">
           图片模型
-          <input value={imageModel} onChange={(event) => setImageModel(event.target.value)} />
-        </label>
-        <label>
+          <Input value={imageModel} onChange={(event) => setImageModel(event.target.value)} />
+        </Label>
+        <Label className="grid gap-1.5 text-xs text-muted-foreground">
           提示词模型
-          <input value={promptModel} onChange={(event) => setPromptModel(event.target.value)} />
-        </label>
-        <button className="primary-button full" type="button" onClick={() => void saveProviderConfig()}>
+          <Input value={promptModel} onChange={(event) => setPromptModel(event.target.value)} />
+        </Label>
+        <Button className="primary-button full w-full" type="button" onClick={() => void saveProviderConfig()}>
           <Save size={15} />
           保存引擎设置
-        </button>
-      </section>
+        </Button>
+        </CardContent>
+      </Card>
 
-      <section className="settings-section">
-        <div className="section-title">
-          <h2>基础参数</h2>
-          <span className="pill tiny">高频</span>
-        </div>
-        <div className="field">
-          <span>图片比例</span>
-          <div className="segmented">
+      <Card className="settings-section gap-3 rounded-2xl shadow-none">
+        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+          <CardTitle className="text-sm">基础参数</CardTitle>
+          <Badge variant="outline" className="pill tiny">高频</Badge>
+        </CardHeader>
+        <CardContent className="grid gap-3">
+        <div className="field grid gap-1.5">
+          <span className="text-xs text-muted-foreground">图片比例</span>
+          <div className="segmented grid grid-cols-4 gap-1 rounded-xl border border-border bg-muted p-1">
             {IMAGE_RATIOS.map((ratio) => (
-              <button
+              <Button
                 key={ratio}
-                className={conversation.ratio === ratio ? 'on' : ''}
+                className={cn('h-8 px-1', conversation.ratio === ratio ? 'on bg-background shadow-sm' : '')}
+                variant={conversation.ratio === ratio ? 'secondary' : 'ghost'}
+                size="sm"
                 type="button"
                 onClick={() => void updateActiveConversation({ ratio, size: getDefaultImageSize(ratio) })}
               >
                 {ratio}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
-        <div className="field">
-          <span>分辨率</span>
+        <div className="field grid gap-1.5">
+          <span className="text-xs text-muted-foreground">分辨率</span>
           <GallerySelect
             value={selectedSize}
             options={sizeOptions}
@@ -176,51 +185,57 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
             onChange={(size) => void updateActiveConversation({ size })}
           />
         </div>
-        <div className="field">
-          <span className="field-label-with-help">
+        <div className="field grid gap-1.5">
+          <span className="field-label-with-help flex items-center gap-2 text-xs text-muted-foreground">
             <span>质量</span>
-            <button
+            <Button
               type="button"
-              className="info-icon"
+              className="info-icon size-6"
+              variant="ghost"
+              size="icon-sm"
               title="质量越高，细节通常更多，但生成会更慢，也更容易放大成本。"
               aria-label="质量说明"
             >
               <CircleHelp size={14} />
-            </button>
+            </Button>
           </span>
-          <div className="segmented">
+          <div className="segmented grid grid-cols-3 gap-1 rounded-xl border border-border bg-muted p-1">
             {IMAGE_QUALITIES.map((quality) => (
-              <button
+              <Button
                 key={quality}
-                className={conversation.quality === quality ? 'on' : ''}
+                className={cn('h-8 px-1', conversation.quality === quality ? 'on bg-background shadow-sm' : '')}
+                variant={conversation.quality === quality ? 'secondary' : 'ghost'}
+                size="sm"
                 type="button"
                 onClick={() => void updateActiveConversation({ quality })}
               >
                 {formatImageQuality(quality)}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
-        <label>
+        <Label className="grid gap-1.5 text-xs text-muted-foreground">
           生成数量
-          <input type="number" min={1} max={10} value={conversation.n} onChange={(event) => void updateActiveConversation({ n: Number(event.target.value) })} />
-        </label>
-      </section>
+          <Input type="number" min={1} max={10} value={conversation.n} onChange={(event) => void updateActiveConversation({ n: Number(event.target.value) })} />
+        </Label>
+        </CardContent>
+      </Card>
 
-      <section className="settings-section">
-        <div className="section-title">
-          <h2>高级参数</h2>
-          <span className={`pill tiny ${isImageToImage ? 'blue' : ''}`}>{isImageToImage ? '图生图' : '文生图'}</span>
-        </div>
-        <details className="advanced-settings">
-          <summary>
+      <Card className="settings-section gap-3 rounded-2xl shadow-none">
+        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+          <CardTitle className="text-sm">高级参数</CardTitle>
+          <Badge variant={isImageToImage ? 'default' : 'outline'} className={`pill tiny ${isImageToImage ? 'blue' : ''}`}>{isImageToImage ? '图生图' : '文生图'}</Badge>
+        </CardHeader>
+        <CardContent>
+        <details className="advanced-settings group">
+          <summary className="flex min-h-10 cursor-pointer items-center justify-between rounded-lg border border-border bg-muted px-3 text-sm font-medium">
             <span>展开高级配置</span>
-            <span className="pill tiny">低频</span>
+            <Badge variant="outline" className="pill tiny">低频</Badge>
           </summary>
-          <div className="advanced-settings-body">
-            <label>
+          <div className="advanced-settings-body grid gap-3 pt-3">
+            <Label className="grid gap-1.5 text-xs text-muted-foreground">
               失败重试次数
-              <input
+              <Input
                 type="number"
                 min={0}
                 max={MAX_IMAGE_MAX_RETRIES}
@@ -228,26 +243,28 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 value={conversation.maxRetries}
                 onChange={(event) => void updateActiveConversation({ maxRetries: Number(event.target.value) })}
               />
-            </label>
+            </Label>
             <SettingsToggleRow
               label="流式输出"
               help="开启后会以流式方式接收图片结果；默认关闭。"
               checked={conversation.stream}
               onChange={() => void updateActiveConversation({ stream: !conversation.stream })}
             />
-            <label>
-              <span className="field-label-with-help">
+            <Label className="grid gap-1.5 text-xs text-muted-foreground">
+              <span className="field-label-with-help flex items-center gap-2">
                 <span>超时时间(秒)</span>
-                <button
+                <Button
                   type="button"
-                  className="info-icon"
+                  className="info-icon size-6"
+                  variant="ghost"
+                  size="icon-sm"
                   title="单张图片的最大等待时间；每次重试都会重新计时。"
                   aria-label="超时时间说明"
                 >
                   <CircleHelp size={14} />
-                </button>
+                </Button>
               </span>
-              <input
+              <Input
                 type="number"
                 min={1}
                 max={1800}
@@ -255,18 +272,20 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 value={conversation.generationTimeoutSeconds}
                 onChange={(event) => void updateActiveConversation({ generationTimeoutSeconds: Number(event.target.value) })}
               />
-            </label>
-            <div className="field">
-              <span className="field-label-with-help">
+            </Label>
+            <div className="field grid gap-1.5">
+              <span className="field-label-with-help flex items-center gap-2 text-xs text-muted-foreground">
                 <span>输出格式</span>
-                <button
+                <Button
                   type="button"
-                  className="info-icon"
+                  className="info-icon size-6"
+                  variant="ghost"
+                  size="icon-sm"
                   title={`控制最终图片文件格式，默认使用 ${DEFAULT_IMAGE_OUTPUT_FORMAT.toUpperCase()}。`}
                   aria-label="输出格式说明"
                 >
                   <CircleHelp size={14} />
-                </button>
+                </Button>
               </span>
               <GallerySelect
                 value={conversation.outputFormat}
@@ -276,19 +295,21 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 onChange={(outputFormat) => void updateActiveConversation({ outputFormat: outputFormat as ImageOutputFormat })}
               />
             </div>
-            <label>
-              <span className="field-label-with-help">
+            <Label className="grid gap-1.5 text-xs text-muted-foreground">
+              <span className="field-label-with-help flex items-center gap-2">
                 <span>输出压缩</span>
-                <button
+                <Button
                   type="button"
-                  className="info-icon"
+                  className="info-icon size-6"
+                  variant="ghost"
+                  size="icon-sm"
                   title="仅 JPEG 和 WebP 有效，数值越高画质越好、文件越大。"
                   aria-label="输出压缩说明"
                 >
                   <CircleHelp size={14} />
-                </button>
+                </Button>
               </span>
-              <input
+              <Input
                 type="number"
                 min={0}
                 max={100}
@@ -301,18 +322,20 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                   void updateActiveConversation({ outputCompression: value ? Number(value) : null })
                 }}
               />
-            </label>
-            <div className="field">
-              <span className="field-label-with-help">
+            </Label>
+            <div className="field grid gap-1.5">
+              <span className="field-label-with-help flex items-center gap-2 text-xs text-muted-foreground">
                 <span>背景</span>
-                <button
+                <Button
                   type="button"
-                  className="info-icon"
+                  className="info-icon size-6"
+                  variant="ghost"
+                  size="icon-sm"
                   title="选择是否保持自动背景或强制不透明背景。"
                   aria-label="背景说明"
                 >
                   <CircleHelp size={14} />
-                </button>
+                </Button>
               </span>
               <GallerySelect
                 value={conversation.background}
@@ -322,17 +345,19 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 onChange={(background) => void updateActiveConversation({ background: background as ImageBackground })}
               />
             </div>
-            <div className="field">
-              <span className="field-label-with-help">
+            <div className="field grid gap-1.5">
+              <span className="field-label-with-help flex items-center gap-2 text-xs text-muted-foreground">
                 <span>审核策略</span>
-                <button
+                <Button
                   type="button"
-                  className="info-icon"
+                  className="info-icon size-6"
+                  variant="ghost"
+                  size="icon-sm"
                   title="控制内容审核强度，默认使用自动策略。"
                   aria-label="审核策略说明"
                 >
                   <CircleHelp size={14} />
-                </button>
+                </Button>
               </span>
               <GallerySelect
                 value={conversation.moderation}
@@ -342,19 +367,21 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 onChange={(moderation) => void updateActiveConversation({ moderation: moderation as ImageModeration })}
               />
             </div>
-            <label>
-              <span className="field-label-with-help">
+            <Label className="grid gap-1.5 text-xs text-muted-foreground">
+              <span className="field-label-with-help flex items-center gap-2">
                 <span>中间图数量</span>
-                <button
+                <Button
                   type="button"
-                  className="info-icon"
+                  className="info-icon size-6"
+                  variant="ghost"
+                  size="icon-sm"
                   title="仅流式输出时有效，范围为 0 到 3。"
                   aria-label="中间图数量说明"
                 >
                   <CircleHelp size={14} />
-                </button>
+                </Button>
               </span>
-              <input
+              <Input
                 type="number"
                 min={0}
                 max={3}
@@ -363,19 +390,21 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 disabled={!conversation.stream}
                 onChange={(event) => void updateActiveConversation({ partialImages: Number(event.target.value) })}
               />
-            </label>
+            </Label>
             {isImageToImage && supportsImageInputFidelity(conversation.model) ? (
-              <div className="field">
-                <span className="field-label-with-help">
+              <div className="field grid gap-1.5">
+                <span className="field-label-with-help flex items-center gap-2 text-xs text-muted-foreground">
                   <span>输入保真度</span>
-                  <button
+                  <Button
                     type="button"
-                    className="info-icon"
+                    className="info-icon size-6"
+                    variant="ghost"
+                    size="icon-sm"
                     title="编辑场景下控制对输入参考图细节的保留程度。"
                     aria-label="输入保真度说明"
                   >
                     <CircleHelp size={14} />
-                  </button>
+                  </Button>
                 </span>
                 <GallerySelect
                   value={conversation.inputFidelity || ''}
@@ -395,14 +424,16 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
             ) : null}
           </div>
         </details>
-      </section>
+        </CardContent>
+      </Card>
 
-      <section className="settings-section">
-        <div className="section-title">
-          <h2>会话选项</h2>
-          <span className="pill tiny">轻量</span>
-        </div>
-        <div className="toggle-stack">
+      <Card className="settings-section gap-3 rounded-2xl shadow-none">
+        <CardHeader className="section-title flex-row items-center justify-between space-y-0 pb-0">
+          <CardTitle className="text-sm">会话选项</CardTitle>
+          <Badge variant="outline" className="pill tiny">轻量</Badge>
+        </CardHeader>
+        <CardContent>
+        <div className="toggle-stack grid gap-2">
           <SettingsToggleRow
             label="自动写入历史"
             checked={conversation.autoSaveHistory}
@@ -414,7 +445,11 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
             onChange={() => void updateActiveConversation({ keepFailureDetails: !conversation.keepFailureDetails })}
           />
         </div>
-      </section>
+        </CardContent>
+      </Card>
+        <Separator />
+        </div>
+      </ScrollArea>
     </aside>
   )
 }

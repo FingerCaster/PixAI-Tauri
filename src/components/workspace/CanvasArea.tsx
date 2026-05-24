@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Image as ImageIcon, Trash2 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { GallerySelect, type GallerySelectOption } from '../common/GallerySelect'
 import { elapsedMs, formatDuration } from '../../lib/time'
 import { getGenerationAttemptStartedAt } from '../../generation-timing'
@@ -115,51 +117,55 @@ export function CanvasArea({
   }, [pageCount])
 
   return (
-    <section className="canvas-area">
-      <div className="history-head">
-        <div className="history-title">
+    <section className="canvas-area flex min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <div className="history-head flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
+        <div className="history-title inline-flex items-center gap-2 text-sm font-semibold">
           <ImageIcon size={16} />
           当前工作区
         </div>
-        <div className="workspace-head-actions">
+        <div className="workspace-head-actions flex min-w-0 flex-1 items-center justify-end gap-2">
           {failedItems.length > 0 ? (
-            <button
+            <Button
               type="button"
               className="clear-failed-button"
+              variant="destructive"
+              size="sm"
               title={clearingFailed ? '正在清空失败图片' : '清空当前工作区中的失败图片'}
               disabled={clearingFailed}
               onClick={() => void clearFailedItems()}
             >
               <Trash2 size={14} />
               {clearingFailed ? '清理中' : '清空失败'}
-            </button>
+            </Button>
           ) : null}
-          <div className="workspace-summary" aria-label="工作区结果统计">
-            {generationStatusText ? <span className="summary-chip active">{generationStatusText}</span> : null}
+          <div className="workspace-summary flex flex-wrap items-center justify-end gap-1.5" aria-label="工作区结果统计">
+            {generationStatusText ? <Badge className="summary-chip active">{generationStatusText}</Badge> : null}
             {summarySegments.map((segment) => (
-              <span key={segment.key} className={`summary-chip ${segment.tone}`}>
+              <Badge key={segment.key} variant="outline" className={`summary-chip ${segment.tone}`}>
                 {segment.label} <strong>{segment.value}</strong>
                 {segment.suffix ? ` ${segment.suffix}` : ''}
-              </span>
+              </Badge>
             ))}
           </div>
         </div>
       </div>
-      <div className="preview-grid">
+      <div className="preview-grid grid min-h-0 flex-1 auto-rows-fr grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3 overflow-auto p-4">
         {workspaceEntries.length === 0 && !generating ? (
-          <div className="empty-state grid-empty">生成后的图片会显示在这里</div>
+          <div className="empty-state grid-empty col-span-full grid min-h-80 place-items-center rounded-2xl border border-dashed border-border bg-muted/35 text-sm text-muted-foreground">
+            生成后的图片会显示在这里
+          </div>
         ) : null}
         {visibleEntries.map((entry) => renderWorkspaceEntry(entry, generationClockMs))}
       </div>
       {workspaceEntries.length > 0 ? (
-        <div className="gallery-pagination workspace-pagination">
-          <button type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
+        <div className="gallery-pagination workspace-pagination flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
+          <Button variant="outline" size="sm" type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
             上一页
-          </button>
-          <span>{page} / {pageCount}</span>
-          <button type="button" disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
+          </Button>
+          <span className="text-sm text-muted-foreground">{page} / {pageCount}</span>
+          <Button variant="outline" size="sm" type="button" disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
             下一页
-          </button>
+          </Button>
           <GallerySelect
             value={pageSize}
             options={pageSizeSelectOptions}

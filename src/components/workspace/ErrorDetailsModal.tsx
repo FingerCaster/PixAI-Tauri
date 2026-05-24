@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
-import { createPortal } from 'react-dom'
 import { Copy, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { ImageHistoryItem } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 
@@ -35,35 +36,36 @@ export function ErrorDetailsModal({ item, onClose }: { item: ImageHistoryItem; o
     }
   }
 
-  return createPortal(
-    <div
-      className="modal-backdrop error-details-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div
-        className="provider-modal error-details-panel"
-        role="dialog"
-        aria-modal="true"
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent
+        className="provider-modal error-details-panel max-w-4xl"
+        overlayClassName="error-details-backdrop"
+        overlayProps={{
+          onMouseDown: (event) => {
+            if (event.target === event.currentTarget) onClose()
+          },
+          onClick: (event) => event.stopPropagation()
+        }}
+        showCloseButton={false}
         aria-label="错误详情"
+        aria-describedby={undefined}
         onMouseDown={(event) => event.stopPropagation()}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="modal-head">
-          <strong>{item.errorMessage || '生成失败'}</strong>
-          <div className="mini-controls">
-            <button className="icon-button" type="button" title="复制全部错误信息" onClick={() => void copyError()}>
+        <DialogHeader className="modal-head flex-row items-center justify-between gap-3 space-y-0">
+          <DialogTitle className="line-clamp-2 text-base">{item.errorMessage || '生成失败'}</DialogTitle>
+          <div className="mini-controls flex items-center gap-1 pr-7">
+            <Button className="icon-button" variant="outline" size="icon-sm" type="button" title="复制全部错误信息" onClick={() => void copyError()}>
               <Copy size={15} />
-            </button>
-            <button className="icon-button" type="button" title="关闭" onClick={onClose}>
+            </Button>
+            <Button className="icon-button" variant="outline" size="icon-sm" type="button" title="关闭" onClick={onClose}>
               <X size={15} />
-            </button>
+            </Button>
           </div>
-        </div>
-        <div className="error-details-body">
-          <div className="error-details-meta">
+        </DialogHeader>
+        <div className="error-details-body grid max-h-[70vh] gap-3 overflow-auto">
+          <div className="error-details-meta flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
             {renderMetaText('阶段', payload?.stage)}
             {renderMetaSeparator()}
             {renderMetaText('时间', formatErrorTimestamp(payload?.timestamp) || item.createdAt)}
@@ -74,17 +76,16 @@ export function ErrorDetailsModal({ item, onClose }: { item: ImageHistoryItem; o
           <ErrorSection title="响应体" value={responseBody ?? details?.responseError ?? details ?? '无响应体'} />
           <ErrorSection title="原始错误详情" value={payload ?? copyText} />
         </div>
-      </div>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   )
 }
 
 function ErrorSection({ title, value }: { title: string; value: unknown }) {
   return (
-    <section className="error-details-section">
-      <h4>{title}</h4>
-      <pre>{formatDetailValue(value)}</pre>
+    <section className="error-details-section rounded-xl border border-border bg-muted/30 p-3">
+      <h4 className="mb-2 text-sm font-semibold">{title}</h4>
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-background p-3 text-xs text-muted-foreground">{formatDetailValue(value)}</pre>
     </section>
   )
 }
@@ -102,8 +103,8 @@ function parseErrorPayload(errorDetails: string | null): ErrorPayload | null {
 function renderMetaText(label: string, value: unknown) {
   if (value === null || value === undefined || value === '') return null
   return (
-    <span className="error-details-meta-item">
-      <span className="error-details-meta-label">{label}</span>
+    <span className="error-details-meta-item inline-flex items-center gap-1">
+      <span className="error-details-meta-label font-medium text-foreground">{label}</span>
       <span className="error-details-meta-value">{String(value)}</span>
     </span>
   )

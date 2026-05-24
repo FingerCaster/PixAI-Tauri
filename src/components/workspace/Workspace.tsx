@@ -10,10 +10,16 @@ export function Workspace() {
     ? getConversationGenerationState(activeConversationId)
     : { generating: false, startedAt: null, activeCount: 0 }
 
-  if (!conversation) return <div className="empty-state">请选择一个会话。</div>
+  if (!conversation) {
+    return (
+      <div className="empty-state grid h-full place-items-center text-sm text-muted-foreground">
+        请选择一个会话。
+      </div>
+    )
+  }
 
   return (
-    <section className="workspace">
+    <section className="workspace grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden p-4">
       <Composer conversation={conversation} generating={generationState.generating} />
       <CanvasArea
         runs={runs}

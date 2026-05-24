@@ -1,4 +1,7 @@
 import { Download, RefreshCw } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { AppUpdateState } from '../../shared/types'
 
 type AppUpdateSectionProps = {
@@ -14,43 +17,44 @@ export function AppUpdateSection({ appUpdate, onCheck, onInstall, variant = 'pan
   const canInstall = appUpdate.status === 'available' && Boolean(appUpdate.availableUpdate)
   const status = getUpdateStatusText(appUpdate)
   const progressText = getProgressText(appUpdate)
-  const rootClassName = variant === 'card' ? 'settings-status-card' : 'settings-section'
 
   return (
-    <section className={rootClassName}>
-      <div className="section-title">
-        <h2>关于应用 / 更新</h2>
-        <span className={`pill tiny ${appUpdate.status === 'available' ? 'warn' : appUpdate.status === 'error' ? 'bad' : 'good'}`}>
+    <Card className={`${variant === 'card' ? 'settings-status-card' : 'settings-section'} rounded-2xl shadow-none`}>
+      <CardHeader className="section-title flex-row items-center justify-between space-y-0">
+        <CardTitle className="text-base">关于应用 / 更新</CardTitle>
+        <Badge variant={appUpdate.status === 'available' ? 'secondary' : appUpdate.status === 'error' ? 'destructive' : 'default'} className={`pill tiny ${appUpdate.status === 'available' ? 'warn' : appUpdate.status === 'error' ? 'bad' : 'good'}`}>
           {status.badge}
-        </span>
-      </div>
-      <div className="app-update-card">
-        <div className="app-update-version">
-          <span>当前版本</span>
+        </Badge>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+      <div className="app-update-card grid gap-3 rounded-xl border border-border bg-muted/30 p-4">
+        <div className="app-update-version flex items-center justify-between gap-3">
+          <span className="text-sm text-muted-foreground">当前版本</span>
           <strong>v{appUpdate.currentVersion}</strong>
         </div>
         {appUpdate.availableUpdate ? (
-          <div className="app-update-version">
-            <span>可用版本</span>
+          <div className="app-update-version flex items-center justify-between gap-3">
+            <span className="text-sm text-muted-foreground">可用版本</span>
             <strong>v{appUpdate.availableUpdate.version}</strong>
           </div>
         ) : null}
-        <p>{status.message}</p>
-        {appUpdate.availableUpdate?.notes ? <p className="app-update-notes">{appUpdate.availableUpdate.notes}</p> : null}
-        {progressText ? <div className="status-line">{progressText}</div> : null}
-        {appUpdate.lastCheckedAt ? <div className="status-line">上次检查：{formatDateTime(appUpdate.lastCheckedAt)}</div> : null}
+        <p className="text-sm text-muted-foreground">{status.message}</p>
+        {appUpdate.availableUpdate?.notes ? <p className="app-update-notes rounded-lg bg-background p-3 text-sm text-muted-foreground">{appUpdate.availableUpdate.notes}</p> : null}
+        {progressText ? <div className="status-line text-xs text-muted-foreground">{progressText}</div> : null}
+        {appUpdate.lastCheckedAt ? <div className="status-line text-xs text-muted-foreground">上次检查：{formatDateTime(appUpdate.lastCheckedAt)}</div> : null}
       </div>
-      <div className="button-row app-update-actions">
-        <button type="button" onClick={onCheck} disabled={checking || installing}>
-          <RefreshCw className={checking ? 'spin' : ''} size={15} />
+      <div className="button-row app-update-actions flex justify-end gap-2">
+        <Button variant="outline" type="button" onClick={onCheck} disabled={checking || installing}>
+          <RefreshCw className={checking ? 'spin animate-spin' : ''} size={15} />
           {checking ? '检查中' : '检查更新'}
-        </button>
-        <button className="primary-button" type="button" onClick={onInstall} disabled={!canInstall || installing}>
+        </Button>
+        <Button className="primary-button" type="button" onClick={onInstall} disabled={!canInstall || installing}>
           <Download size={15} />
           {installing ? '更新中' : appUpdate.availableUpdate?.installMode === 'github' ? '打开下载' : '下载并重启'}
-        </button>
+        </Button>
       </div>
-    </section>
+      </CardContent>
+    </Card>
   )
 }
 

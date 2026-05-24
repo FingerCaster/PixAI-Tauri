@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Loader2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { formatDuration } from '../../lib/time'
 import { shouldShowRetryAttemptChip } from '../../generation-retry-display'
 import type { GenerationRunRetryFailure, ImageHistoryItem } from '../../shared/types'
@@ -58,7 +60,7 @@ export function GeneratingTile({
 
   return (
     <article
-      className={`image-tile generating-card${canOpenRetryDetails ? ' retry-details-card' : ''}`}
+      className={`image-tile generating-card flex min-h-[320px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm${canOpenRetryDetails ? ' retry-details-card cursor-pointer' : ''}`}
       aria-label={canOpenRetryDetails ? '重试中，点击查看上次失败详情' : '生成中'}
       role={canOpenRetryDetails ? 'button' : undefined}
       tabIndex={canOpenRetryDetails ? 0 : undefined}
@@ -72,30 +74,32 @@ export function GeneratingTile({
         }
       }}
     >
-      <div className="image-frame generating-frame">
-        <div className="generating-center">
-          <Loader2 className="spin" size={28} />
-          <span className="generating-label">生成中</span>
+      <div className="image-frame generating-frame grid aspect-square w-full place-items-center bg-muted/50">
+        <div className="generating-center grid justify-items-center gap-3 text-center">
+          <Loader2 className="spin animate-spin text-primary" size={28} />
+          <span className="generating-label text-sm font-medium">生成中</span>
           {showRetryAttemptChip ? (
-            <span className="retry-chip">{`重试第 ${retryAttempt} 次`}</span>
+            <Badge variant="outline" className="retry-chip">{`重试第 ${retryAttempt} 次`}</Badge>
           ) : retryFailure ? (
-            <span className="retry-chip">重试中</span>
+            <Badge variant="outline" className="retry-chip">重试中</Badge>
           ) : null}
         </div>
       </div>
-      <div className="generating-meta">
+      <div className="generating-meta mt-auto flex items-center justify-between border-t border-border p-3 text-xs text-muted-foreground">
         <span>{`已耗时 ${formatDuration(generationElapsedMs ?? 0)}`}</span>
         {canCancel ? (
-          <button
+          <Button
             type="button"
             className="cancel-chip"
+            variant="outline"
+            size="sm"
             onClick={(event) => {
               event.stopPropagation()
               void cancelGeneration(runId, requestIndex)
             }}
           >
             取消
-          </button>
+          </Button>
         ) : null}
       </div>
       {errorDetailsOpen && retryFailureItem ? (

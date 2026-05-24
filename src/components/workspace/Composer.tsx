@@ -1,7 +1,10 @@
 import type { ChangeEvent, DragEvent } from 'react'
 import { useEffect, useState } from 'react'
-import { createPortal } from 'react-dom'
 import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Textarea } from '@/components/ui/textarea'
 import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation, ReferenceImage } from '../../shared/types'
@@ -56,68 +59,79 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   }
 
   return (
-    <section className="composer">
-      <div className="composer-head">
-        <div>
-          <div className="composer-tools">
-            <span className="pill good">{conversation.referenceImages.length > 0 ? '图生图' : '文生图'}</span>
-            <span className="pill blue">{conversation.size}</span>
-            <span className="pill">已保存</span>
+    <section className="composer rounded-2xl border border-border bg-card p-3 shadow-sm">
+      <div className="composer-head mb-3 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="composer-tools flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="pill good">{conversation.referenceImages.length > 0 ? '图生图' : '文生图'}</Badge>
+            <Badge variant="outline" className="pill blue">{conversation.size}</Badge>
+            <Badge variant="outline" className="pill">已保存</Badge>
           </div>
         </div>
-        <div className="composer-actions">
-          <button type="button" onClick={() => void inspirePrompt()} disabled={promptAssistantRunning.inspire}>
-            {promptAssistantRunning.inspire ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
+        <div className="composer-actions flex items-center gap-2">
+          <Button variant="outline" size="sm" type="button" onClick={() => void inspirePrompt()} disabled={promptAssistantRunning.inspire}>
+            {promptAssistantRunning.inspire ? <Loader2 className="spin animate-spin" /> : <Sparkles />}
             灵感
-          </button>
-          <button type="button" onClick={() => void enrichPrompt()} disabled={!conversation.draftPrompt.trim() || promptAssistantRunning.enrich}>
-            {promptAssistantRunning.enrich ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+          </Button>
+          <Button variant="outline" size="sm" type="button" onClick={() => void enrichPrompt()} disabled={!conversation.draftPrompt.trim() || promptAssistantRunning.enrich}>
+            {promptAssistantRunning.enrich ? <Loader2 className="spin animate-spin" /> : <WandSparkles />}
             丰富
-          </button>
+          </Button>
         </div>
       </div>
       {conversation.referenceImages.length > 0 ? (
-        <div className="reference-row">
+        <div className="reference-row mb-3 flex gap-2 overflow-x-auto pb-1">
           {conversation.referenceImages.map((reference) => (
-            <div className="reference-thumb" key={reference.id}>
-              <button className="reference-preview-button" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
-                <img src={referenceSources[reference.id] || reference.dataUrl} alt={reference.name} />
+            <div className="reference-thumb group relative size-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted" key={reference.id}>
+              <button className="reference-preview-button h-full w-full" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
+                <img className="h-full w-full object-cover" src={referenceSources[reference.id] || reference.dataUrl} alt={reference.name} />
               </button>
-              <button className="reference-remove-button" type="button" onClick={() => void removeReferenceImage(reference.id)} title="移除参考图">
+              <button
+                className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+                type="button"
+                onClick={() => void removeReferenceImage(reference.id)}
+                title="移除参考图"
+              >
                 <X size={14} />
               </button>
             </div>
           ))}
         </div>
       ) : null}
-      <div className="prompt-box">
-        <textarea
-          className="prompt-textarea"
+      <div className="prompt-box rounded-xl border border-input bg-background">
+        <Textarea
+          className="prompt-textarea min-h-28 resize-none border-0 bg-transparent p-3 text-base shadow-none focus-visible:ring-0"
           value={conversation.draftPrompt}
           placeholder="描述你想生成的画面..."
           onChange={(event) => void updateActiveConversation({ draftPrompt: event.target.value })}
         />
-        <div className="prompt-foot">
-          <label className="reference-footer-button" onDragOver={(event) => event.preventDefault()} onDrop={onDrop} title="添加参考图">
+        <div className="prompt-foot flex items-center gap-2 border-t border-border px-2 py-2">
+          <label
+            className="reference-footer-button inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={onDrop}
+            title="添加参考图"
+          >
             <Image size={17} />
             {conversation.referenceImages.length > 0 ? <span>{conversation.referenceImages.length}</span> : null}
             <input
+              className="hidden"
               type="file"
               accept="image/png,image/jpeg,image/webp"
               multiple
               onChange={(event: ChangeEvent<HTMLInputElement>) => onFiles(event.target.files)}
             />
           </label>
-          <div className="hint">
+          <div className="hint min-w-0 flex-1 truncate text-xs text-muted-foreground">
             {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
           </div>
-          <button className="prompt-expand-button" type="button" onClick={() => setPromptExpanded(true)} title="放大查看提示词" aria-label="放大查看提示词">
+          <Button className="prompt-expand-button" variant="ghost" size="icon-sm" type="button" onClick={() => setPromptExpanded(true)} title="放大查看提示词" aria-label="放大查看提示词">
             <Maximize2 size={16} />
-          </button>
-          <button className="generate-button" type="button" onClick={() => void generate()} disabled={!conversation.draftPrompt.trim()}>
-            {generating ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+          </Button>
+          <Button className="generate-button" type="button" onClick={() => void generate()} disabled={!conversation.draftPrompt.trim()}>
+            {generating ? <Loader2 className="spin animate-spin" /> : <WandSparkles />}
             {generating ? '继续生成' : '生成图片'}
-          </button>
+          </Button>
         </div>
       </div>
       {promptExpanded ? (
@@ -149,39 +163,20 @@ function ReferencePreviewModal({ reference, source, onClose }: { reference: Refe
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
-  return createPortal(
-    <div
-      className="modal-backdrop image-preview-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div
-        className="image-preview-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label="参考图预览"
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="image-preview-head">
-          <div>
-            <strong>{reference.name}</strong>
-            <span>
-              {reference.mimeType} · {formatFileSize(reference.fileSizeBytes)}
-            </span>
-          </div>
-          <button className="icon-button image-preview-close" type="button" title="关闭" onClick={onClose}>
-            <X size={20} />
-          </button>
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="image-preview-panel max-w-5xl" aria-label="参考图预览" aria-describedby={undefined}>
+        <DialogHeader className="image-preview-head">
+          <DialogTitle className="truncate">{reference.name}</DialogTitle>
+          <span className="text-sm text-muted-foreground">
+            {reference.mimeType} · {formatFileSize(reference.fileSizeBytes)}
+          </span>
+        </DialogHeader>
+        <div className="image-preview-stage grid max-h-[72vh] place-items-center overflow-hidden rounded-xl bg-muted">
+          <img className="max-h-[72vh] max-w-full object-contain" src={source} alt={reference.name} />
         </div>
-        <div className="image-preview-stage">
-          <img src={source} alt={reference.name} />
-        </div>
-      </div>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -213,43 +208,25 @@ function PromptExpandModal({
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [onClose])
 
-  return createPortal(
-    <div
-      className="modal-backdrop prompt-expand-backdrop"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      onClick={(event) => event.stopPropagation()}
-    >
-      <div
-        className="prompt-expand-panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label="提示词放大编辑"
-        onMouseDown={(event) => event.stopPropagation()}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <div className="prompt-expand-head">
-          <div>
-            <strong>提示词</strong>
-            <span>
-              {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
-            </span>
-          </div>
-          <button className="icon-button prompt-expand-close" type="button" title="关闭" onClick={onClose}>
-            <X size={20} />
-          </button>
-        </div>
-        <textarea
-          className="prompt-expand-textarea"
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
+      <DialogContent className="prompt-expand-panel max-w-4xl" aria-label="提示词放大编辑" aria-describedby={undefined}>
+        <DialogHeader className="prompt-expand-head">
+          <DialogTitle>提示词</DialogTitle>
+          <span className="text-sm text-muted-foreground">
+            {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
+          </span>
+        </DialogHeader>
+        <Textarea
+          className="prompt-expand-textarea min-h-[46vh] resize-none text-base"
           value={conversation.draftPrompt}
           placeholder="描述你想生成的画面..."
           autoFocus
           onChange={(event) => onPromptChange(event.target.value)}
         />
-        <div className="prompt-expand-actions">
-          <span>{conversation.draftPrompt.trim().length} 字符</span>
-          <button
+        <div className="prompt-expand-actions flex items-center justify-between">
+          <span className="text-sm text-muted-foreground">{conversation.draftPrompt.trim().length} 字符</span>
+          <Button
             className="generate-button"
             type="button"
             onClick={() => {
@@ -258,12 +235,11 @@ function PromptExpandModal({
             }}
             disabled={!conversation.draftPrompt.trim()}
           >
-            {generating ? <Loader2 className="spin" size={16} /> : <WandSparkles size={16} />}
+            {generating ? <Loader2 className="spin animate-spin" /> : <WandSparkles />}
             {generating ? '继续生成' : '生成图片'}
-          </button>
+          </Button>
         </div>
-      </div>
-    </div>,
-    document.body
+      </DialogContent>
+    </Dialog>
   )
 }

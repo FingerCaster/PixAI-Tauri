@@ -1,5 +1,10 @@
 import { Download, Heart, Search, Square, SquareCheckBig, Trash2, WandSparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { ImageTile } from '../workspace/ImageTile'
 import { DownloadCanceledError, downloadImageSource } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
@@ -56,16 +61,19 @@ export function GalleryPage() {
   }
 
   return (
-    <section className="page">
-      <div className="page-header">
+    <section className="page flex h-full min-h-0 flex-col overflow-hidden p-5">
+      <div className="page-header mb-4 flex shrink-0 items-start justify-between gap-4">
         <div>
-          <span className="eyebrow">图库</span>
-          <h1>跨会话历史</h1>
+          <span className="eyebrow text-xs font-semibold uppercase tracking-wide text-muted-foreground">图库</span>
+          <h1 className="text-2xl font-semibold tracking-normal">跨会话历史</h1>
         </div>
-        <div className="toolbar">
-          <label className="search">
+        <div className="toolbar flex flex-wrap items-center justify-end gap-2">
+          <label className="search relative min-w-64">
+              <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">
               <Search size={15} />
-              <input
+              </span>
+              <Input
+                className="pl-9"
                 value={query}
               placeholder="搜索提示词 / 模型 / 尺寸"
               onChange={(event) => {
@@ -74,55 +82,57 @@ export function GalleryPage() {
               }}
             />
           </label>
-          <button type="button" className={favoritesOnly ? 'active' : ''} onClick={() => void setFavoritesOnly(!favoritesOnly)}>
+          <Button type="button" variant={favoritesOnly ? 'secondary' : 'outline'} className={favoritesOnly ? 'active' : ''} onClick={() => void setFavoritesOnly(!favoritesOnly)}>
             <Heart size={15} />
             收藏
-          </button>
-          <button type="button" onClick={toggleSelectAll}>
+          </Button>
+          <Button variant="outline" type="button" onClick={toggleSelectAll}>
             {allSelected ? <SquareCheckBig size={15} /> : <Square size={15} />}
             全选
-          </button>
-          <button type="button" onClick={() => void downloadSelected()} disabled={selectedItems.length === 0}>
+          </Button>
+          <Button variant="outline" type="button" onClick={() => void downloadSelected()} disabled={selectedItems.length === 0}>
             <Download size={15} />
             下载
-          </button>
-          <button type="button" onClick={() => void favoriteSelected(true)} disabled={selectedItems.length === 0}>
+          </Button>
+          <Button variant="outline" type="button" onClick={() => void favoriteSelected(true)} disabled={selectedItems.length === 0}>
             <Heart size={15} />
             收藏选中
-          </button>
-          <button type="button" onClick={() => void favoriteSelected(false)} disabled={selectedItems.length === 0}>
+          </Button>
+          <Button variant="outline" type="button" onClick={() => void favoriteSelected(false)} disabled={selectedItems.length === 0}>
             取消收藏
-          </button>
-          <button type="button" onClick={() => void deleteSelected()} disabled={selectedItems.length === 0}>
+          </Button>
+          <Button variant="destructive" type="button" onClick={() => void deleteSelected()} disabled={selectedItems.length === 0}>
             <Trash2 size={15} />
             删除选中
-          </button>
+          </Button>
         </div>
       </div>
       {filtered.length === 0 ? (
-        <div className="empty-state">图库还是空的。</div>
+        <div className="empty-state grid flex-1 place-items-center rounded-2xl border border-dashed border-border bg-card text-sm text-muted-foreground">图库还是空的。</div>
       ) : (
-        <div className="gallery-list">
-          {filtered.map((item) => (
-            <div className="gallery-item" key={item.id}>
-              <label className="selection-row">
-                <input type="checkbox" checked={selectedIds.includes(item.id)} onChange={() => toggleSelected(item.id)} />
-                选择
-              </label>
-              <ImageTile item={item} />
-              <div className="gallery-actions">
-                <button type="button" onClick={() => void reuseHistory(item)}>
-                  <WandSparkles size={15} />
-                  回填参数
-                </button>
-                <button type="button" onClick={() => void deleteHistory(item.id)}>
-                  <Trash2 size={15} />
-                  删除
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
+        <ScrollArea className="min-h-0 flex-1">
+          <div className="gallery-list grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 pr-3">
+            {filtered.map((item) => (
+              <Card className="gallery-item overflow-hidden rounded-2xl p-2 shadow-none" key={item.id}>
+                <label className="selection-row mb-2 flex items-center gap-2 rounded-lg px-1 text-sm text-muted-foreground">
+                  <Checkbox checked={selectedIds.includes(item.id)} onCheckedChange={() => toggleSelected(item.id)} aria-label="选择图片" />
+                  选择
+                </label>
+                <ImageTile item={item} />
+                <div className="gallery-actions mt-2 flex gap-2">
+                  <Button className="flex-1" variant="outline" type="button" onClick={() => void reuseHistory(item)}>
+                    <WandSparkles size={15} />
+                    回填参数
+                  </Button>
+                  <Button variant="outline" type="button" onClick={() => void deleteHistory(item.id)}>
+                    <Trash2 size={15} />
+                    删除
+                  </Button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </ScrollArea>
       )}
     </section>
   )

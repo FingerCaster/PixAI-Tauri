@@ -1,4 +1,9 @@
 import { Plus, Save, Trash2, X } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { cn } from '@/lib/utils'
 import { GallerySelect } from '../../common/GallerySelect'
 import { DEFAULT_MODEL, DEFAULT_PROMPT_MODEL } from '../../../shared/image-options'
 import type { ImageGenerationEndpoint, ProviderProfile } from '../../../shared/types'
@@ -26,78 +31,74 @@ export function ProviderProfileDialog({
   onProfileChange,
   onApiKeyChange
 }: ProviderProfileDialogProps) {
-  if (!profileDraft) return null
-
   return (
-    <div className="modal-backdrop provider-profile-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="provider-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-label={mode === 'create' ? '新增供应商' : '编辑供应商'}
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="modal-head">
-          <h2>{mode === 'create' ? '新增供应商' : '编辑供应商'}</h2>
-          <button className="icon-button modal-close-button" type="button" onClick={onClose} title="关闭">
-            <X size={16} />
-          </button>
-        </div>
-        <div className="profile-editor">
-          <div className="field">
-            <span>用途</span>
-            <div className="segmented provider-usage">
-              <button
-                className={hasSameUsages(profileDraft, ['image']) ? 'on' : ''}
+    <Dialog open={Boolean(profileDraft)} onOpenChange={(open) => { if (!open) onClose() }}>
+      {profileDraft ? (
+        <DialogContent className="provider-modal max-w-2xl" aria-label={mode === 'create' ? '新增供应商' : '编辑供应商'} aria-describedby={undefined}>
+        <DialogHeader className="modal-head">
+          <DialogTitle>{mode === 'create' ? '新增供应商' : '编辑供应商'}</DialogTitle>
+        </DialogHeader>
+        <div className="profile-editor grid gap-3">
+          <div className="field grid gap-1.5">
+            <span className="text-xs text-muted-foreground">用途</span>
+            <div className="segmented provider-usage grid grid-cols-3 gap-1 rounded-xl border border-border bg-muted p-1">
+              <Button
+                className={cn('h-8', hasSameUsages(profileDraft, ['image']) ? 'on bg-background shadow-sm' : '')}
+                variant={hasSameUsages(profileDraft, ['image']) ? 'secondary' : 'ghost'}
+                size="sm"
                 type="button"
                 onClick={() => onProfileChange({ ...profileDraft, enabledUsages: ['image'] })}
               >
                 生图
-              </button>
-              <button
-                className={hasSameUsages(profileDraft, ['prompt']) ? 'on' : ''}
+              </Button>
+              <Button
+                className={cn('h-8', hasSameUsages(profileDraft, ['prompt']) ? 'on bg-background shadow-sm' : '')}
+                variant={hasSameUsages(profileDraft, ['prompt']) ? 'secondary' : 'ghost'}
+                size="sm"
                 type="button"
                 onClick={() => onProfileChange({ ...profileDraft, enabledUsages: ['prompt'] })}
               >
                 提示词
-              </button>
-              <button
-                className={hasSameUsages(profileDraft, ['image', 'prompt']) ? 'on' : ''}
+              </Button>
+              <Button
+                className={cn('h-8', hasSameUsages(profileDraft, ['image', 'prompt']) ? 'on bg-background shadow-sm' : '')}
+                variant={hasSameUsages(profileDraft, ['image', 'prompt']) ? 'secondary' : 'ghost'}
+                size="sm"
                 type="button"
                 onClick={() => onProfileChange({ ...profileDraft, enabledUsages: ['image', 'prompt'] })}
               >
                 二者都可
-              </button>
+              </Button>
             </div>
           </div>
-          <label>
+          <Label className="grid gap-1.5 text-xs text-muted-foreground">
             配置名称
-            <input value={profileDraft.name} onChange={(event) => onProfileChange({ ...profileDraft, name: event.target.value })} />
-          </label>
-          <label>
+            <Input value={profileDraft.name} onChange={(event) => onProfileChange({ ...profileDraft, name: event.target.value })} />
+          </Label>
+          <Label className="grid gap-1.5 text-xs text-muted-foreground">
             接口地址
-            <input value={profileDraft.baseUrl} onChange={(event) => onProfileChange({ ...profileDraft, baseUrl: event.target.value })} />
-          </label>
-          <label>
+            <Input value={profileDraft.baseUrl} onChange={(event) => onProfileChange({ ...profileDraft, baseUrl: event.target.value })} />
+          </Label>
+          <Label className="grid gap-1.5 text-xs text-muted-foreground">
             API 密钥
-            <input
+            <Input
               value={profileApiKey}
               type="password"
               placeholder={mode === 'edit' && profileDraft.apiKeyStored ? '留空保持不变' : 'sk-...'}
               onChange={(event) => onApiKeyChange(event.target.value)}
             />
-          </label>
+          </Label>
           {profileDraft.enabledUsages.includes('image') ? (
             <>
-              <label>
+              <Label className="grid gap-1.5 text-xs text-muted-foreground">
                 图片默认模型
-                <input
+                <Input
                   value={profileDraft.defaultImageModel}
                   onChange={(event) => onProfileChange({ ...profileDraft, defaultImageModel: event.target.value })}
                 />
-              </label>
-              <div className="field">
-                <span>生图端点</span>
+              </Label>
+              <div className="field grid gap-1.5">
+                <span className="text-xs text-muted-foreground">生图端点</span>
                 <GallerySelect
                   value={profileDraft.imageGenerationEndpoint}
                   options={[
@@ -114,32 +115,34 @@ export function ProviderProfileDialog({
             </>
           ) : null}
           {profileDraft.enabledUsages.includes('prompt') ? (
-            <label>
+            <Label className="grid gap-1.5 text-xs text-muted-foreground">
               提示词助手模型
-              <input
+              <Input
                 value={profileDraft.defaultPromptModel}
                 onChange={(event) => onProfileChange({ ...profileDraft, defaultPromptModel: event.target.value })}
               />
-            </label>
+            </Label>
           ) : null}
         </div>
-        <div className="button-row modal-actions">
+        <div className="button-row modal-actions flex justify-end gap-2">
           {mode === 'edit' && profileCount > 1 ? (
-            <button className="danger-button" type="button" onClick={onDelete}>
+            <Button className="danger-button mr-auto" variant="destructive" type="button" onClick={onDelete}>
               <Trash2 size={15} />
               删除
-            </button>
+            </Button>
           ) : null}
-          <button type="button" onClick={onClose}>
+          <Button variant="outline" type="button" onClick={onClose}>
+            <X size={15} />
             取消
-          </button>
-          <button className="primary-button" type="button" onClick={onSave}>
+          </Button>
+          <Button className="primary-button" type="button" onClick={onSave}>
             {mode === 'create' ? <Plus size={15} /> : <Save size={15} />}
             {mode === 'create' ? '添加供应商' : '保存供应商'}
-          </button>
+          </Button>
         </div>
-      </section>
-    </div>
+      </DialogContent>
+      ) : null}
+    </Dialog>
   )
 }
 

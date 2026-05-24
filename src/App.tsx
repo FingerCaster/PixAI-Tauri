@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
+import { Toaster } from '@/components/ui/sonner'
+import { TooltipProvider } from '@/components/ui/tooltip'
 import { GalleryPage } from './components/gallery/GalleryPage'
 import { MainLayout } from './components/layout/MainLayout'
 import { PromptLibraryPage } from './components/prompts/PromptLibraryPage'
@@ -9,7 +11,6 @@ import { Workspace } from './components/workspace/Workspace'
 import { registerCodexBridgeHandler } from './services/codex-bridge'
 import { isTauriRuntime, notifyWindowSentToTray, watchCloseRequested, watchWindowFocus } from './lib/platform'
 import { useAppStore } from './store/app-store'
-import './styles.css'
 
 function App() {
   const { darkMode, load, loading, reloadHistory, setView, setWindowFocused, settingsVisible, toast, view } = useAppStore()
@@ -97,19 +98,28 @@ function App() {
   }, [setView])
 
   return (
-    <div className={darkMode ? 'app theme-dark' : 'app'}>
-      <MainLayout onOpenGlobalSettings={openGlobalSettings}>
-        <main className="main-surface">
-          {loading ? <div className="loading">正在加载 PixAI 工作台...</div> : null}
-          {!loading && view === 'workspace' ? <Workspace /> : null}
-          {!loading && view === 'gallery' ? <GalleryPage /> : null}
-          {!loading && view === 'prompts' ? <PromptLibraryPage /> : null}
-        </main>
-        {view === 'workspace' && settingsVisible ? <SettingsPanel onOpenGlobalSettings={openGlobalSettings} /> : null}
-      </MainLayout>
-      <GlobalSettingsModal open={globalSettingsState.open} initialTab={globalSettingsState.tab} onClose={closeGlobalSettings} />
-      {toast ? <div className="toast">{toast}</div> : null}
-    </div>
+    <TooltipProvider delayDuration={250}>
+      <div className={darkMode ? 'dark min-h-dvh bg-background text-foreground' : 'min-h-dvh bg-background text-foreground'}>
+        <MainLayout onOpenGlobalSettings={openGlobalSettings}>
+          <main className="main-surface min-w-0 overflow-hidden bg-background">
+            {loading ? (
+              <div className="grid h-full place-items-center text-sm text-muted-foreground">正在加载 PixAI 工作台...</div>
+            ) : null}
+            {!loading && view === 'workspace' ? <Workspace /> : null}
+            {!loading && view === 'gallery' ? <GalleryPage /> : null}
+            {!loading && view === 'prompts' ? <PromptLibraryPage /> : null}
+          </main>
+          {view === 'workspace' && settingsVisible ? <SettingsPanel onOpenGlobalSettings={openGlobalSettings} /> : null}
+        </MainLayout>
+        <GlobalSettingsModal open={globalSettingsState.open} initialTab={globalSettingsState.tab} onClose={closeGlobalSettings} />
+        {toast ? (
+          <div className="fixed bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-full border border-border bg-popover px-4 py-2 text-sm font-medium text-popover-foreground shadow-xl">
+            {toast}
+          </div>
+        ) : null}
+        <Toaster richColors closeButton />
+      </div>
+    </TooltipProvider>
   )
 }
 

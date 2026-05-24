@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
-import { X } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { useAppStore } from '../../../store/app-store'
 import { ExtensionsSettingsTab } from './ExtensionsSettingsTab'
 import { GeneralSettingsTab } from './GeneralSettingsTab'
@@ -37,55 +39,40 @@ export function GlobalSettingsModal({
     void loadCodexSkillStatus()
   }, [loadCodexSkillStatus, open])
 
-  useEffect(() => {
-    if (!open) return undefined
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
-  }, [onClose, open])
-
-  if (!open) return null
-
   return (
-    <div className="modal-backdrop global-settings-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="global-settings-modal" role="dialog" aria-modal="true" aria-label="全局设置" onMouseDown={(event) => event.stopPropagation()}>
-        <nav className="global-settings-nav" aria-label="全局设置导航">
-          <div className="global-settings-nav-title">
-            <strong>全局设置</strong>
-            <span>低频配置与环境状态集中放在这里。</span>
-          </div>
-          {TAB_OPTIONS.map((tab) => (
-            <button
-              key={tab.id}
-              className={activeTab === tab.id ? 'active' : ''}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </nav>
-        <div className="global-settings-body">
-          <div className="modal-head global-settings-head">
-            <div>
-              <h2>{getTabTitle(activeTab)}</h2>
-              <span>{getTabSummary(activeTab)}</span>
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) onClose() }}>
+      <DialogContent className="global-settings-modal grid max-h-[calc(100vh-44px)] max-w-6xl grid-cols-[220px_minmax(0,1fr)] gap-0 overflow-hidden p-0" aria-label="全局设置" aria-describedby={undefined}>
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as GlobalSettingsTab)} orientation="vertical" className="contents">
+          <nav className="global-settings-nav border-r border-border bg-muted/35 p-4" aria-label="全局设置导航">
+            <div className="global-settings-nav-title mb-4 grid gap-1 border-b border-border pb-4">
+              <strong className="text-base">全局设置</strong>
+              <span className="text-xs leading-5 text-muted-foreground">低频配置与环境状态集中放在这里。</span>
             </div>
-            <button className="icon-button global-settings-close" type="button" onClick={onClose} title="关闭">
-              <X size={18} />
-            </button>
+            <TabsList className="grid h-auto justify-stretch gap-1 bg-transparent p-0">
+              {TAB_OPTIONS.map((tab) => (
+                <TabsTrigger key={tab.id} value={tab.id} className="justify-start rounded-lg px-3">
+                  {tab.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </nav>
+          <div className="global-settings-body min-w-0">
+            <DialogHeader className="modal-head global-settings-head border-b border-border px-5 py-4">
+              <DialogTitle>{getTabTitle(activeTab)}</DialogTitle>
+              <span className="text-sm text-muted-foreground">{getTabSummary(activeTab)}</span>
+            </DialogHeader>
+            <ScrollArea className="h-[min(680px,calc(100vh-150px))]">
+              <div className="global-settings-content grid gap-4 p-5">
+                {activeTab === 'general' ? <GeneralSettingsTab /> : null}
+                {activeTab === 'notifications' ? <NotificationSettingsTab /> : null}
+                {activeTab === 'services' ? <ServicesSettingsTab /> : null}
+                {activeTab === 'extensions' ? <ExtensionsSettingsTab /> : null}
+              </div>
+            </ScrollArea>
           </div>
-          <div className="global-settings-content">
-            {activeTab === 'general' ? <GeneralSettingsTab /> : null}
-            {activeTab === 'notifications' ? <NotificationSettingsTab /> : null}
-            {activeTab === 'services' ? <ServicesSettingsTab /> : null}
-            {activeTab === 'extensions' ? <ExtensionsSettingsTab /> : null}
-          </div>
-        </div>
-      </section>
-    </div>
+        </Tabs>
+      </DialogContent>
+    </Dialog>
   )
 }
 

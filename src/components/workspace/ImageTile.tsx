@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Copy, Download, Edit3, Heart, ImageDown, Trash2 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
 import type { ImageHistoryItem } from '../../shared/types'
 import { formatDuration } from '../../lib/time'
 import { DownloadCanceledError, downloadImageSource, imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
@@ -66,7 +69,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   if (item.status === 'failed') {
     return (
       <article
-        className="image-tile failed error-tile"
+        className="image-tile failed error-tile group flex min-h-[320px] flex-col overflow-hidden rounded-2xl border border-destructive/25 bg-destructive/5"
         role="button"
         tabIndex={0}
         title="点击查看错误详情"
@@ -77,13 +80,17 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           setErrorDetailsOpen(true)
         }}
       >
-        <div className="image-frame fail-content">
-          <strong>{item.errorMessage || '生成失败'}</strong>
-          {showFailedRetryChip ? <span className="retry-chip">{`重试第 ${item.retryAttempt} 次`}</span> : null}
-          <span>点击查看错误详情</span>
+        <div className="image-frame fail-content grid flex-1 place-items-center p-4 text-center">
+          <div className="grid gap-2">
+            <strong className="text-sm text-destructive">{item.errorMessage || '生成失败'}</strong>
+            {showFailedRetryChip ? <Badge variant="destructive" className="retry-chip justify-self-center">{`重试第 ${item.retryAttempt} 次`}</Badge> : null}
+            <span className="text-xs text-muted-foreground">点击查看错误详情</span>
+          </div>
         </div>
-        <div className="tile-actions">
-          <button
+        <div className="tile-actions flex justify-end gap-1 border-t border-destructive/15 p-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
             type="button"
             onClick={(event) => {
               event.stopPropagation()
@@ -92,7 +99,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
             title="删除"
           >
             <Trash2 size={15} />
-          </button>
+          </Button>
         </div>
         {errorDetailsOpen ? <ErrorDetailsModal item={item} onClose={() => setErrorDetailsOpen(false)} /> : null}
       </article>
@@ -100,40 +107,40 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   }
 
   return (
-    <article className="image-tile">
-      <button className="image-frame image-preview-trigger" type="button" title="查看大图" onClick={openPreview}>
-        {imageSource ? <img src={imageSource} alt={item.prompt} /> : null}
+    <article className="image-tile group flex min-h-[320px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      <button className="image-frame image-preview-trigger aspect-square w-full overflow-hidden bg-muted" type="button" title="查看大图" onClick={openPreview}>
+        {imageSource ? <img className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]" src={imageSource} alt={item.prompt} /> : null}
       </button>
-      <div className="tile-body">
-        <strong>{item.prompt}</strong>
-        <span>
+      <div className="tile-body grid gap-1 p-3">
+        <strong className="line-clamp-2 text-sm leading-5">{item.prompt}</strong>
+        <span className="truncate text-xs text-muted-foreground">
           {item.model} · {item.size || item.ratio}
           {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
         </span>
       </div>
-      <div className="tile-actions">
-        <button type="button" onClick={copyPrompt} title="复制提示词">
+      <div className="tile-actions mt-auto flex items-center gap-1 border-t border-border p-2">
+        <Button variant="ghost" size="icon-sm" type="button" onClick={copyPrompt} title="复制提示词">
           <Copy size={15} />
-        </button>
+        </Button>
         {imageSource ? (
           <>
-            <button type="button" onClick={() => void copyImage()} title="复制图片">
+            <Button variant="ghost" size="icon-sm" type="button" onClick={() => void copyImage()} title="复制图片">
               <ImageDown size={15} />
-            </button>
-            <button type="button" onClick={() => void downloadImage()} title="下载图片">
+            </Button>
+            <Button variant="ghost" size="icon-sm" type="button" onClick={() => void downloadImage()} title="下载图片">
               <Download size={15} />
-            </button>
-            <button type="button" onClick={() => void addHistoryAsReference(item.id)} title="作为参考图编辑">
+            </Button>
+            <Button variant="ghost" size="icon-sm" type="button" onClick={() => void addHistoryAsReference(item.id)} title="作为参考图编辑">
               <Edit3 size={15} />
-            </button>
+            </Button>
           </>
         ) : null}
-        <button type="button" onClick={() => void toggleFavorite(item)} title="收藏">
+        <Button className={cn('ml-auto', item.favorite ? 'text-rose-600' : '')} variant="ghost" size="icon-sm" type="button" onClick={() => void toggleFavorite(item)} title="收藏">
           <Heart size={15} fill={item.favorite ? 'currentColor' : 'none'} />
-        </button>
-        <button type="button" onClick={() => void deleteHistory(item.id)} title="删除">
+        </Button>
+        <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deleteHistory(item.id)} title="删除">
           <Trash2 size={15} />
-        </button>
+        </Button>
       </div>
       {previewOpen ? <ImagePreviewModal item={item} onClose={() => setPreviewOpen(false)} /> : null}
     </article>
