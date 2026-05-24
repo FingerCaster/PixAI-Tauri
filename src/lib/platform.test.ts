@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetPlatformStateForTests,
+  downloadImageSource,
   imageSourceForDisplay,
   imageSourceForDisplaySync,
   getSystemNotificationPermission,
@@ -37,6 +38,34 @@ describe('platform image display sources', () => {
     await imageSourceForDisplay('data:image/png;base64,aGVsbG8=', 'browser-memory/images/example.png')
 
     expect(imageSourceForDisplaySync(null, 'browser-memory/images/example.png')).toBe('data:image/png;base64,aGVsbG8=')
+  })
+
+  it('downloads data urls through a temporary object url instead of navigating to the image', async () => {
+    const originalCreateObjectUrl = URL.createObjectURL
+    const originalRevokeObjectUrl = URL.revokeObjectURL
+    const createObjectUrl = vi.fn(() => 'blob:pixai-download')
+    const revokeObjectUrl = vi.fn()
+    const clicked: HTMLAnchorElement[] = []
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function click(this: HTMLAnchorElement) {
+      clicked.push(this)
+    })
+    Object.defineProperty(URL, 'createObjectURL', { value: createObjectUrl, configurable: true })
+    Object.defineProperty(URL, 'revokeObjectURL', { value: revokeObjectUrl, configurable: true })
+
+    try {
+      await downloadImageSource('data:image/png;base64,aGVsbG8=', 'image.png')
+
+      expect(createObjectUrl).toHaveBeenCalledWith(expect.any(Blob))
+      expect(clicked).toHaveLength(1)
+      expect(clicked[0].href).toBe('blob:pixai-download')
+      expect(clicked[0].download).toBe('image.png')
+      expect(clicked[0].isConnected).toBe(false)
+      expect(revokeObjectUrl).toHaveBeenCalledWith('blob:pixai-download')
+    } finally {
+      clickSpy.mockRestore()
+      Object.defineProperty(URL, 'createObjectURL', { value: originalCreateObjectUrl, configurable: true })
+      Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectUrl, configurable: true })
+    }
   })
 })
 

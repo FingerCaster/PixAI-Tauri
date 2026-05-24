@@ -14,7 +14,7 @@ use std::{
         mpsc, Mutex, OnceLock,
     },
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -38,6 +38,7 @@ static KEYRING_READY: OnceLock<bool> = OnceLock::new();
 static CODEX_BRIDGE_STARTED: OnceLock<()> = OnceLock::new();
 static HTTP_PROXY_CLIENT: OnceLock<Client> = OnceLock::new();
 static CODEX_BRIDGE_READY: AtomicBool = AtomicBool::new(false);
+static CODEX_BRIDGE_ACTIVE_PORT: AtomicU64 = AtomicU64::new(0);
 static CODEX_BRIDGE_NEXT_ID: AtomicU64 = AtomicU64::new(1);
 static CODEX_BRIDGE_PENDING: OnceLock<
     Mutex<HashMap<String, mpsc::Sender<CodexBridgeTransportResponse>>>,
@@ -559,6 +560,21 @@ fn read_binary_file_base64(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn write_binary_file(path: String, bytes_base64: String) -> Result<String, String> {
+    let resolved = PathBuf::from(path);
+    if let Some(parent) = resolved.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        bytes_base64,
+    )
+    .map_err(|error| format!("图片数据无效：{error}"))?;
+    fs::write(&resolved, bytes).map_err(|error| error.to_string())?;
+    Ok(resolved.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn copy_binary_file(source: String, directory: String, filename: String) -> Result<String, String> {
     let source_path = PathBuf::from(source);
     if !source_path.is_file() {
@@ -623,6 +639,11 @@ fn install_codex_skill_in(
         fs::write(output_path, file.content).map_err(|error| error.to_string())?;
     }
 
+    let active_port = CODEX_BRIDGE_ACTIVE_PORT.load(Ordering::Acquire);
+    if skill_name == "pixai-image-workbench" && active_port > 0 {
+        write_codex_bridge_state(active_port as u16);
+    }
+
     codex_skill_status_in(skills_dir, skill_name)
 }
 
@@ -638,6 +659,33 @@ fn codex_skill_status_in(
         path: path.to_string_lossy().to_string(),
         skill_md_path: skill_md_path.to_string_lossy().to_string(),
     })
+}
+
+fn write_codex_bridge_state(port: u16) {
+    let Ok(skills_dir) = codex_skills_dir() else {
+        return;
+    };
+    let skill_path = skills_dir.join("pixai-image-workbench");
+    if !skill_path.is_dir() {
+        return;
+    }
+    let payload = serde_json::json!({
+        "url": format!("http://{CODEX_BRIDGE_HOST}:{port}"),
+        "host": CODEX_BRIDGE_HOST,
+        "port": port,
+        "updatedAt": current_timestamp()
+    });
+    let _ = fs::write(
+        skill_path.join("bridge.json"),
+        format!("{}\n", payload),
+    );
+}
+
+fn current_timestamp() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -860,21 +908,18 @@ fn start_codex_bridge(app: AppHandle) {
         return;
     }
 
-    let port = env::var("PIXAI_CODEX_PORT")
+    let preferred_port = env::var("PIXAI_CODEX_PORT")
         .ok()
         .and_then(|value| value.parse::<u16>().ok())
         .unwrap_or(CODEX_BRIDGE_PORT);
 
     thread::spawn(move || {
-        let listener = match TcpListener::bind((CODEX_BRIDGE_HOST, port)) {
-            Ok(listener) => listener,
-            Err(error) => {
-                eprintln!(
-                    "[PixAI Codex] Bridge failed to bind {CODEX_BRIDGE_HOST}:{port}: {error}"
-                );
-                return;
-            }
+        let (listener, port) = match bind_codex_bridge_listener(preferred_port) {
+            Some(result) => result,
+            None => return,
         };
+        CODEX_BRIDGE_ACTIVE_PORT.store(port as u64, Ordering::Release);
+        write_codex_bridge_state(port);
         eprintln!("[PixAI Codex] Bridge listening on http://{CODEX_BRIDGE_HOST}:{port}");
         for stream in listener.incoming() {
             match stream {
@@ -886,6 +931,36 @@ fn start_codex_bridge(app: AppHandle) {
             }
         }
     });
+}
+
+fn bind_codex_bridge_listener(preferred_port: u16) -> Option<(TcpListener, u16)> {
+    match TcpListener::bind((CODEX_BRIDGE_HOST, preferred_port)) {
+        Ok(listener) => return Some((listener, preferred_port)),
+        Err(error) => {
+            eprintln!(
+                "[PixAI Codex] Bridge failed to bind {CODEX_BRIDGE_HOST}:{preferred_port}: {error}"
+            );
+        }
+    }
+    if env::var("PIXAI_CODEX_PORT").is_ok() {
+        return None;
+    }
+    match TcpListener::bind((CODEX_BRIDGE_HOST, 0)) {
+        Ok(listener) => {
+            let port = listener
+                .local_addr()
+                .map(|address| address.port())
+                .unwrap_or(CODEX_BRIDGE_PORT);
+            eprintln!(
+                "[PixAI Codex] Bridge falling back to http://{CODEX_BRIDGE_HOST}:{port}"
+            );
+            Some((listener, port))
+        }
+        Err(error) => {
+            eprintln!("[PixAI Codex] Bridge failed to bind fallback port: {error}");
+            None
+        }
+    }
 }
 
 fn handle_codex_bridge_stream(app: AppHandle, mut stream: TcpStream, port: u16) {
@@ -1423,6 +1498,24 @@ mod tests {
     }
 
     #[test]
+    fn falls_back_to_an_ephemeral_port_when_the_preferred_port_is_occupied() {
+        if env::var("PIXAI_CODEX_PORT").is_ok() {
+            return;
+        }
+
+        let occupied = TcpListener::bind(("127.0.0.1", 0)).expect("bind occupied port");
+        let occupied_port = occupied.local_addr().expect("occupied port").port();
+
+        let (listener, fallback_port) =
+            bind_codex_bridge_listener(occupied_port).expect("fallback listener");
+
+        assert_ne!(fallback_port, occupied_port);
+        assert_ne!(fallback_port, 0);
+        drop(listener);
+        drop(occupied);
+    }
+
+    #[test]
     fn rejects_codex_skill_path_traversal() {
         let skills_dir = env::temp_dir().join("pixai-skill-path-traversal-test");
         let request = CodexSkillInstallRequest {
@@ -1478,6 +1571,7 @@ mod tests {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -1501,6 +1595,7 @@ pub fn run() {
             read_local_image_file,
             write_data_url_file,
             read_binary_file_base64,
+            write_binary_file,
             copy_binary_file,
             store_data_url_file,
             codex_skill_status,

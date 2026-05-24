@@ -1,4 +1,5 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
+import { save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import type { CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
@@ -352,6 +353,29 @@ export async function writeDataUrlFile(directory: string, filename: string, data
   return invoke<string>('write_data_url_file', { directory, filename, dataUrl })
 }
 
+export async function downloadImageSource(source: string | null, filename: string, storagePath?: string | null): Promise<void> {
+  const blob = await resolveDownloadBlob(source, storagePath)
+  if (!blob) throw new Error('图片内容不可用，无法下载。')
+  if (isTauriRuntime()) {
+    const selectedPath = await save({
+      defaultPath: filename,
+      filters: [
+        {
+          name: '图片',
+          extensions: ['png', 'jpg', 'jpeg', 'webp']
+        }
+      ]
+    })
+    if (!selectedPath) throw new DownloadCanceledError()
+    await invoke('write_binary_file', {
+      path: selectedPath,
+      bytesBase64: await blobToBase64(blob)
+    })
+    return
+  }
+  await downloadBlob(blob, filename)
+}
+
 export async function readBinaryFileBase64(path: string): Promise<string> {
   if (!isTauriRuntime()) throw new Error('读取图片文件只能在 Tauri 应用中执行。')
   return invoke<string>('read_binary_file_base64', { path })
@@ -454,6 +478,54 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([bytes], { type: match[1] })
 }
 
+async function resolveDownloadBlob(source: string | null, storagePath?: string | null): Promise<Blob | null> {
+  if (!source && !storagePath) return null
+  if (source?.startsWith('data:')) return dataUrlToBlob(source)
+
+  const localPath = storagePath || (source && isLocalFilePath(source) ? source : null)
+  if (localPath && isTauriRuntime()) {
+    return dataUrlToBlob(await readLocalImageDataUrl(localPath))
+  }
+
+  if (source && /^(?:https?|blob|asset):/i.test(source)) {
+    const response = await fetch(source)
+    if (!response.ok) throw new Error('图片下载失败。')
+    return await response.blob()
+  }
+
+  if (source) return dataUrlToBlob(source)
+  return null
+}
+
+async function downloadBlob(blob: Blob, filename: string): Promise<void> {
+  if (typeof document === 'undefined') throw new Error('下载只能在浏览器环境中执行。')
+  const objectUrl = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = objectUrl
+  link.download = filename
+  link.rel = 'noreferrer'
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(objectUrl)
+}
+
+async function blobToBase64(blob: Blob): Promise<string> {
+  const buffer = await blob.arrayBuffer()
+  const bytes = new Uint8Array(buffer)
+  let binary = ''
+  for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index])
+  return btoa(binary)
+}
+
+export class DownloadCanceledError extends Error {
+  constructor() {
+    super('已取消下载')
+    this.name = 'DownloadCanceledError'
+  }
+}
+
 function mimeTypeFromDataUrl(dataUrl: string): string {
   return /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || 'image/png'
 }
@@ -461,6 +533,10 @@ function mimeTypeFromDataUrl(dataUrl: string): string {
 function storagePathFromAssetUrl(value: string): string | null {
   const encoded = /^https?:\/\/asset\.localhost\/(.+)$/i.exec(value)?.[1]
   return encoded ? decodeURIComponent(encoded) : null
+}
+
+function isLocalFilePath(value: string): boolean {
+  return /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\')
 }
 
 export async function getCodexSkillStatus(name: string): Promise<CodexSkillStatus> {

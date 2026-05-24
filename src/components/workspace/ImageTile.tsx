@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Copy, Download, Edit3, Heart, ImageDown, Trash2 } from 'lucide-react'
 import type { ImageHistoryItem } from '../../shared/types'
 import { formatDuration } from '../../lib/time'
-import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
+import { DownloadCanceledError, downloadImageSource, imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
@@ -45,13 +45,19 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
       notify('图片数据已复制')
     }
   }
-  const downloadImage = () => {
+  const downloadImage = async () => {
     if (!imageSource) return
-    const link = document.createElement('a')
-    link.href = imageSource
-    link.download = `${item.id}.${extensionFromDataUrl(item.dataUrl || item.storagePath || imageSource)}`
-    link.click()
-    notify('图片下载已开始')
+    try {
+      await downloadImageSource(
+        item.dataUrl || imageSource,
+        `${item.id}.${extensionFromDataUrl(item.dataUrl || item.storagePath || imageSource)}`,
+        item.storagePath
+      )
+      notify('图片已保存')
+    } catch (error) {
+      if (error instanceof DownloadCanceledError) return
+      notify(error instanceof Error ? error.message : '图片下载失败')
+    }
   }
   const openPreview = () => {
     if (imageSource) setPreviewOpen(true)
@@ -114,7 +120,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
             <button type="button" onClick={() => void copyImage()} title="复制图片">
               <ImageDown size={15} />
             </button>
-            <button type="button" onClick={downloadImage} title="下载图片">
+            <button type="button" onClick={() => void downloadImage()} title="下载图片">
               <Download size={15} />
             </button>
             <button type="button" onClick={() => void addHistoryAsReference(item.id)} title="作为参考图编辑">

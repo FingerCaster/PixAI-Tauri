@@ -29,3 +29,4 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 base64 = "0.22"
 tokio = { version = "1", features = ["time"] }
 tauri-plugin-notification = "2"
+tauri-plugin-dialog = "2"

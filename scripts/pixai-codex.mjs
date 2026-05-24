@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
-const DEFAULT_BASE_URL = process.env.PIXAI_CODEX_URL || 'http://127.0.0.1:43117'
+import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { fileURLToPath } from 'node:url'
+
+const FALLBACK_BASE_URL = 'http://127.0.0.1:43117'
+const PIXAI_CODEX_SKILL_NAME = 'pixai-image-workbench'
+const BRIDGE_STATE_PATH = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bridge.json')
 
 const commands = new Map([
   ['health', { method: 'GET', path: '/health' }],
@@ -33,7 +40,7 @@ async function main() {
   if (!command) throw new Error(`Unknown command "${commandName}". Run: pnpm codex help`)
 
   const options = parseArgs(args)
-  const baseUrl = String(options.url || DEFAULT_BASE_URL).replace(/\/+$/, '')
+  const baseUrl = await resolveBridgeBaseUrl(options)
   const id = command.id ? readRequiredOption(options, 'id') : undefined
   const path = typeof command.path === 'function' ? command.path({ id }) : command.path
   const url = new URL(`${baseUrl}${path}`)
@@ -67,6 +74,34 @@ async function main() {
   process.stdout.write(text)
 }
 
+async function resolveBridgeBaseUrl(options) {
+  const explicitUrl = options.url || process.env.PIXAI_CODEX_URL
+  if (explicitUrl) return String(explicitUrl).replace(/\/+$/, '')
+  const stateUrl = await readBridgeStateUrl()
+  if (stateUrl) return stateUrl.replace(/\/+$/, '')
+  return FALLBACK_BASE_URL
+}
+
+async function readBridgeStateUrl() {
+  for (const path of bridgeStatePaths()) {
+    try {
+      const payload = JSON.parse(await readFile(path, 'utf8'))
+      if (typeof payload.url === 'string' && payload.url.trim()) return payload.url.trim()
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null
+}
+
+function bridgeStatePaths() {
+  const codexHome = process.env.CODEX_HOME || join(homedir(), '.codex')
+  return [
+    BRIDGE_STATE_PATH,
+    join(codexHome, 'skills', PIXAI_CODEX_SKILL_NAME, 'bridge.json')
+  ]
+}
+
 function parseArgs(args) {
   const options = {}
   for (let index = 0; index < args.length; index += 1) {
@@ -97,7 +132,6 @@ function parseOptionValue(value) {
 async function buildBody(options, optionalBody = false) {
   if (options.json !== undefined) return JSON.parse(String(options.json))
   if (options.file !== undefined) {
-    const { readFile } = await import('node:fs/promises')
     return JSON.parse(await readFile(String(options.file), 'utf8'))
   }
 
@@ -134,7 +168,7 @@ function readRequiredOption(options, key) {
 function printHelp() {
   console.log(`PixAI Codex Bridge client
 
-The PixAI desktop app must be running. Default bridge URL: ${DEFAULT_BASE_URL}
+The PixAI desktop app must be running. The client reads the current bridge URL from bridge.json, then falls back to ${FALLBACK_BASE_URL}.
 
 Commands:
   health
@@ -152,6 +186,6 @@ Commands:
   enrich --prompt "short prompt"
 
 Global:
-  --url http://127.0.0.1:43117
+  --url http://127.0.0.1:<port>
 `)
 }

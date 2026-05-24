@@ -1,6 +1,7 @@
 import { Download, Heart, Search, Square, SquareCheckBig, Trash2, WandSparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { ImageTile } from '../workspace/ImageTile'
+import { DownloadCanceledError, downloadImageSource } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 
 export function GalleryPage() {
@@ -22,9 +23,23 @@ export function GalleryPage() {
     setSelectedIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]))
   }
 
-  const downloadSelected = () => {
-    selectedItems.filter((item) => item.dataUrl).forEach((item) => downloadDataUrl(item.dataUrl as string, item.id))
-    notify(`已开始下载 ${selectedItems.filter((item) => item.dataUrl).length} 张图片`)
+  const downloadSelected = async () => {
+    const downloadable = selectedItems.filter((item) => item.dataUrl || item.storagePath)
+    let count = 0
+    for (const item of downloadable) {
+      try {
+        await downloadImageSource(
+          item.dataUrl,
+          `${item.id}.${extensionFromDataUrl(item.dataUrl || item.storagePath || '')}`,
+          item.storagePath
+        )
+        count += 1
+      } catch (error) {
+        if (error instanceof DownloadCanceledError) break
+        // Keep batch downloads moving when one history item is no longer available.
+      }
+    }
+    notify(count > 0 ? `已保存 ${count} 张图片` : '没有可下载的图片')
   }
 
   const deleteSelected = async () => {
@@ -67,7 +82,7 @@ export function GalleryPage() {
             {allSelected ? <SquareCheckBig size={15} /> : <Square size={15} />}
             全选
           </button>
-          <button type="button" onClick={downloadSelected} disabled={selectedItems.length === 0}>
+          <button type="button" onClick={() => void downloadSelected()} disabled={selectedItems.length === 0}>
             <Download size={15} />
             下载
           </button>
@@ -111,13 +126,6 @@ export function GalleryPage() {
       )}
     </section>
   )
-}
-
-function downloadDataUrl(dataUrl: string, id: string): void {
-  const link = document.createElement('a')
-  link.href = dataUrl
-  link.download = `${id}.${extensionFromDataUrl(dataUrl)}`
-  link.click()
 }
 
 function extensionFromDataUrl(dataUrl: string): string {
