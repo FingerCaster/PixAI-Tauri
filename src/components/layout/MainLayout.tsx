@@ -3,8 +3,15 @@ import { BookOpen, GalleryHorizontalEnd, ImagePlus, Moon, PanelRightClose, Panel
 import appLogo from '../../assets/app-logo.png'
 import { IMAGE_QUALITY_LABELS, buildImageEndpoint } from '../../shared/image-options'
 import { useAppStore } from '../../store/app-store'
+import type { GlobalSettingsTab } from '../settings/global/GlobalSettingsModal'
 
-export function MainLayout({ children }: { children: ReactNode }) {
+export function MainLayout({
+  children,
+  onOpenGlobalSettings
+}: {
+  children: ReactNode
+  onOpenGlobalSettings: (tab?: GlobalSettingsTab) => void
+}) {
   const {
     conversations,
     activeConversationId,
@@ -39,9 +46,9 @@ export function MainLayout({ children }: { children: ReactNode }) {
           <code>{endpoint}</code>
         </div>
         <nav className="top-actions">
-          <button type="button" onClick={toggleSettings} title={settingsVisible ? '隐藏设置区' : '显示设置区'}>
+          <button type="button" onClick={toggleSettings} title={settingsVisible ? '隐藏参数栏' : '显示参数栏'}>
             {settingsVisible ? <PanelRightClose size={16} /> : <PanelRightOpen size={16} />}
-            设置
+            参数栏
           </button>
           <button className={view === 'workspace' ? 'active-soft' : ''} type="button" onClick={() => setView('workspace')}>
             <ImagePlus size={16} />
@@ -115,7 +122,7 @@ export function MainLayout({ children }: { children: ReactNode }) {
               <span>{darkMode ? '深色模式' : '白天模式'}</span>
               {darkMode ? <Sun size={16} /> : <Moon size={16} />}
             </button>
-            <button className="icon-button" type="button" onClick={toggleSettings} title="设置">
+            <button className="icon-button" type="button" onClick={() => onOpenGlobalSettings('general')} title="全局设置">
               <Settings size={16} />
             </button>
           </div>

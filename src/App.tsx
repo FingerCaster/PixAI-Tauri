@@ -1,8 +1,9 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { GalleryPage } from './components/gallery/GalleryPage'
 import { MainLayout } from './components/layout/MainLayout'
 import { PromptLibraryPage } from './components/prompts/PromptLibraryPage'
+import { GlobalSettingsModal, type GlobalSettingsTab } from './components/settings/global/GlobalSettingsModal'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { Workspace } from './components/workspace/Workspace'
 import { registerCodexBridgeHandler } from './services/codex-bridge'
@@ -12,8 +13,14 @@ import './styles.css'
 
 function App() {
   const { darkMode, load, loading, reloadHistory, setView, setWindowFocused, settingsVisible, toast, view } = useAppStore()
+  const [globalSettingsState, setGlobalSettingsState] = useState<{ open: boolean; tab: GlobalSettingsTab }>({
+    open: false,
+    tab: 'general'
+  })
 
   const closeToTray = useAppStore((state) => state.preferences?.closeToTray ?? true)
+  const openGlobalSettings = (tab: GlobalSettingsTab = 'general') => setGlobalSettingsState({ open: true, tab })
+  const closeGlobalSettings = () => setGlobalSettingsState((state) => ({ ...state, open: false }))
 
   useEffect(() => {
     void load()
@@ -91,15 +98,16 @@ function App() {
 
   return (
     <div className={darkMode ? 'app theme-dark' : 'app'}>
-      <MainLayout>
+      <MainLayout onOpenGlobalSettings={openGlobalSettings}>
         <main className="main-surface">
           {loading ? <div className="loading">正在加载 PixAI 工作台...</div> : null}
           {!loading && view === 'workspace' ? <Workspace /> : null}
           {!loading && view === 'gallery' ? <GalleryPage /> : null}
           {!loading && view === 'prompts' ? <PromptLibraryPage /> : null}
         </main>
-        {view === 'workspace' && settingsVisible ? <SettingsPanel /> : null}
+        {view === 'workspace' && settingsVisible ? <SettingsPanel onOpenGlobalSettings={openGlobalSettings} /> : null}
       </MainLayout>
+      <GlobalSettingsModal open={globalSettingsState.open} initialTab={globalSettingsState.tab} onClose={closeGlobalSettings} />
       {toast ? <div className="toast">{toast}</div> : null}
     </div>
   )

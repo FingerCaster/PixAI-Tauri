@@ -5,17 +5,19 @@ type AppUpdateSectionProps = {
   appUpdate: AppUpdateState
   onCheck: () => void
   onInstall: () => void
+  variant?: 'panel' | 'card'
 }
 
-export function AppUpdateSection({ appUpdate, onCheck, onInstall }: AppUpdateSectionProps) {
+export function AppUpdateSection({ appUpdate, onCheck, onInstall, variant = 'panel' }: AppUpdateSectionProps) {
   const checking = appUpdate.status === 'checking'
   const installing = appUpdate.status === 'downloading' || appUpdate.status === 'installing'
   const canInstall = appUpdate.status === 'available' && Boolean(appUpdate.availableUpdate)
   const status = getUpdateStatusText(appUpdate)
   const progressText = getProgressText(appUpdate)
+  const rootClassName = variant === 'card' ? 'settings-status-card' : 'settings-section'
 
   return (
-    <section className="settings-section">
+    <section className={rootClassName}>
       <div className="section-title">
         <h2>关于应用 / 更新</h2>
         <span className={`pill tiny ${appUpdate.status === 'available' ? 'warn' : appUpdate.status === 'error' ? 'bad' : 'good'}`}>
