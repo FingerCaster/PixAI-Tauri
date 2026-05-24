@@ -244,6 +244,11 @@ export async function getAppDataDir(): Promise<string> {
   return 'browser-memory'
 }
 
+export async function getAppInstallerType(): Promise<'msi' | 'nsis' | 'unknown'> {
+  if (!isTauriRuntime()) return 'unknown'
+  return invoke<'msi' | 'nsis' | 'unknown'>('app_installer_type')
+}
+
 export async function getWindowFocused(): Promise<boolean> {
   if (!isTauriRuntime()) return document.hasFocus()
   return getCurrentWindow().isFocused()

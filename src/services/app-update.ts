@@ -2,7 +2,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
-import { fetchJsonThroughPlatform, isTauriRuntime } from '../lib/platform'
+import { fetchJsonThroughPlatform, getAppInstallerType, isTauriRuntime } from '../lib/platform'
 import { getBundledAppVersion } from '../shared/app-version'
 import type { AppUpdateCheckResult, AppUpdateInstallResult, AppVersionInfo, AvailableAppUpdate } from '../shared/types'
 
@@ -30,7 +30,8 @@ export class AppUpdateService {
     return {
       version: await getVersion(),
       platform: 'desktop',
-      runtime: 'tauri'
+      runtime: 'tauri',
+      installerType: await getAppInstallerType()
     }
   }
 
@@ -39,11 +40,11 @@ export class AppUpdateService {
     if (!isTauriRuntime()) {
       throw new Error('更新检查仅在桌面应用中可用。')
     }
-    const update = await checkTauriUpdater()
-    pendingUpdate = update
+    const tauriResult = await checkTauriUpdater()
+    pendingUpdate = tauriResult.update
     pendingGithubUpdate = null
-    if (!update) {
-      const githubUpdate = await checkGithubRelease(versionInfo.version)
+    if (tauriResult.source === 'github') {
+      const githubUpdate = await checkGithubRelease(versionInfo.version, versionInfo.installerType || 'unknown')
       pendingGithubUpdate = githubUpdate
       return {
         currentVersion: versionInfo.version,
@@ -51,8 +52,8 @@ export class AppUpdateService {
       }
     }
     return {
-      currentVersion: update?.currentVersion || versionInfo.version,
-      update: update ? toAvailableAppUpdate(update) : null
+      currentVersion: tauriResult.update?.currentVersion || versionInfo.version,
+      update: tauriResult.update ? toAvailableAppUpdate(tauriResult.update) : null
     }
   }
 
@@ -63,7 +64,7 @@ export class AppUpdateService {
       return { action: 'openedDownload' }
     }
     if (!pendingUpdate) {
-      pendingUpdate = await checkTauriUpdater()
+      pendingUpdate = (await checkTauriUpdater()).update
     }
     if (!pendingUpdate) throw new Error('当前没有可安装的更新。')
     let downloadedBytes = 0
@@ -96,17 +97,28 @@ export class AppUpdateService {
   }
 }
 
-async function checkTauriUpdater(): Promise<Update | null> {
+async function checkTauriUpdater(): Promise<{ source: 'tauri' | 'github'; update: Update | null }> {
   try {
-    return await check()
+    return {
+      source: 'tauri',
+      update: await check()
+    }
   } catch (error) {
     const normalizedError = normalizeUpdateError(error)
-    if (shouldFallbackToGithubRelease(normalizedError)) return null
+    if (shouldFallbackToGithubRelease(normalizedError)) {
+      return {
+        source: 'github',
+        update: null
+      }
+    }
     throw normalizedError
   }
 }
 
-async function checkGithubRelease(currentVersion: string): Promise<AvailableAppUpdate | null> {
+async function checkGithubRelease(
+  currentVersion: string,
+  installerType: AppVersionInfo['installerType'] = 'unknown'
+): Promise<AvailableAppUpdate | null> {
   const releaseHtml = await fetchGithubHtml(GITHUB_LATEST_RELEASE_URL, '检查失败')
   const releaseUrl = extractLatestReleaseUrl(releaseHtml) || GITHUB_LATEST_RELEASE_URL
   const releaseTag = extractReleaseTag(releaseUrl)
@@ -116,7 +128,7 @@ async function checkGithubRelease(currentVersion: string): Promise<AvailableAppU
   if (!isVersionNewer(latestVersion, currentVersion)) return null
 
   const assets = await fetchGithubReleaseAssets(releaseTag)
-  const installer = selectInstallerAsset(assets)
+  const installer = selectInstallerAsset(assets, installerType)
   return {
     version: latestVersion,
     date: extractPublishedDate(releaseHtml),
@@ -160,9 +172,26 @@ function shouldFallbackToGithubRelease(error: Error): boolean {
     || lowerCaseMessage.includes('signature')
 }
 
-function selectInstallerAsset(assets: GithubReleaseAsset[]): GithubReleaseAsset | null {
-  return assets.find((asset) => /_x64-setup\.exe$/i.test(asset.name))
-    || assets.find((asset) => /\.msi$/i.test(asset.name))
+function selectInstallerAsset(
+  assets: GithubReleaseAsset[],
+  installerType: AppVersionInfo['installerType'] = 'unknown'
+): GithubReleaseAsset | null {
+  const isNsis = (asset: GithubReleaseAsset) => /_x64-setup\.exe$/i.test(asset.name)
+  const isMsi = (asset: GithubReleaseAsset) => /\.msi$/i.test(asset.name)
+  if (installerType === 'nsis') {
+    return assets.find(isNsis)
+      || assets.find(isMsi)
+      || assets.find((asset) => /\.exe$/i.test(asset.name))
+      || null
+  }
+  if (installerType === 'msi') {
+    return assets.find(isMsi)
+      || assets.find(isNsis)
+      || assets.find((asset) => /\.exe$/i.test(asset.name))
+      || null
+  }
+  return assets.find(isNsis)
+    || assets.find(isMsi)
     || assets.find((asset) => /\.exe$/i.test(asset.name))
     || null
 }

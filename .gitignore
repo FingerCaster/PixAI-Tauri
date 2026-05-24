@@ -11,6 +11,7 @@ node_modules
 dist
 dist-ssr
 artifacts
+artifacts/local-updater
 src-tauri/target
 .serena
 .tmp-edge-profile*

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { BookOpen, GalleryHorizontalEnd, ImagePlus, Moon, PanelRightClose, PanelRightOpen, Plus, Settings, Sun, Trash2 } from 'lucide-react'
+import { ArrowRight, BookOpen, Download, GalleryHorizontalEnd, ImagePlus, Moon, PanelRightClose, PanelRightOpen, Plus, Settings, Sun, Trash2 } from 'lucide-react'
 import appLogo from '../../assets/app-logo.png'
 import { IMAGE_QUALITY_LABELS, buildImageEndpoint } from '../../shared/image-options'
 import { useAppStore } from '../../store/app-store'
@@ -30,6 +30,7 @@ export function MainLayout({
   } = useAppStore()
   const imageProfile = settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId)
   const endpoint = imageProfile ? buildImageEndpoint(imageProfile.baseUrl) : ''
+  const hasAvailableUpdate = appUpdate.status === 'available' && Boolean(appUpdate.availableUpdate)
 
   return (
     <div className="shell app-frame">
@@ -117,6 +118,23 @@ export function MainLayout({
             <strong>PixAI</strong>
             <span>v{appUpdate.currentVersion}</span>
           </div>
+          {hasAvailableUpdate ? (
+            <button
+              className="sidebar-update-banner"
+              type="button"
+              onClick={() => onOpenGlobalSettings('general')}
+              title={`发现新版本 v${appUpdate.availableUpdate?.version}`}
+            >
+              <span className="sidebar-update-copy">
+                <span className="sidebar-update-label">
+                  <Download size={14} />
+                  有新版本
+                </span>
+                <strong>v{appUpdate.availableUpdate?.version} 可更新</strong>
+              </span>
+              <ArrowRight size={14} />
+            </button>
+          ) : null}
           <div className="icon-row">
             <button className="theme-toggle" type="button" onClick={toggleTheme} title="切换主题">
               <span>{darkMode ? '深色模式' : '白天模式'}</span>

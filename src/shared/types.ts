@@ -96,6 +96,7 @@ export type AppVersionInfo = {
   version: string
   platform: 'desktop' | 'browser'
   runtime: 'tauri' | 'browser'
+  installerType?: 'msi' | 'nsis' | 'unknown'
 }
 
 export type AvailableAppUpdate = {

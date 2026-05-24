@@ -24,34 +24,34 @@ steps:
 checks:
   - item: "AppUpdateState 覆盖 idle、checking、upToDate、available、downloading、downloaded、installing、error，并包含 currentVersion、availableUpdate、lastCheckedAt、errorMessage"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "pixaiApi.appUpdate 提供 getVersionInfo、check、downloadAndInstall、relaunch 或等价重启入口"
     source: 名词契约
-    status: pending
+    status: passed
   - item: "启动自动检查只在应用生命周期内静默触发一次，失败不阻塞工作台"
     source: 编排骨架
-    status: pending
+    status: passed
   - item: "手动检查复用同一检查流程，检查中禁用重复点击，失败展示可重试原因"
     source: 流程级约束
-    status: pending
+    status: passed
   - item: "下载并重启只在 availableUpdate 存在时可触发，下载/安装中禁止并发触发"
     source: 流程级约束
-    status: pending
+    status: passed
   - item: "Tauri 插件、发布配置说明、capability 权限、store 启动流程、设置页区块、侧边栏版本展示六个挂载点均已接入"
     source: 挂载点
-    status: pending
+    status: passed
   - item: "不存在强制更新或阻止用户继续使用旧版本的分支"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "启动时不会自动调用下载、安装或重启"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "React 组件中没有硬编码发布源 URL 或 updater public key"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "没有新增渠道选择、灰度策略或测试版开关"
     source: 范围守护
-    status: pending
+    status: passed
   - item: "无更新、有更新、检查失败、下载安装失败、浏览器 dev 兜底和侧边栏版本展示场景均有可观察验证"
     source: 验收场景
-    status: pending
+    status: passed

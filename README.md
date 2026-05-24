@@ -54,6 +54,73 @@ Before producing a public installer, add updater configuration to `src-tauri/tau
 
 Generate and keep the Tauri updater private key outside the repository, then set `TAURI_SIGNING_PRIVATE_KEY` and, if needed, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` in the release environment before running `pnpm dist`. Without configured updater endpoints and signing keys, update checks fail gracefully and do not affect image generation.
 
+### Local updater verification
+
+Real releases can keep using GitHub Release and `latest.json`. For local updater verification, use the separate local feed workflow instead of uploading test builds to GitHub.
+
+1. Generate a local updater signing key once:
+
+```bash
+pnpm updater:local:keygen
+```
+
+2. Build and install a baseline local-test app version. This is the app instance you will launch and click "检查更新" from:
+
+```bash
+pnpm updater:local:build -- --version 0.0.2 --port 14333
+```
+
+This build:
+
+- overrides the app version for both Tauri and the frontend version label
+- points the updater to `http://127.0.0.1:14333/latest.json`
+- enables updater artifact generation
+- signs the build with the local test key under `artifacts/local-updater/keys/`
+
+Install the generated NSIS package from:
+
+```text
+src-tauri/target/release/bundle/nsis/PixAI_0.0.2_x64-setup.exe
+```
+
+3. Build the newer version that the installed app should discover:
+
+```bash
+pnpm updater:local:build -- --version 0.0.3 --port 14333
+```
+
+4. Publish the generated updater artifacts into a local feed:
+
+```bash
+pnpm updater:local:publish -- --version 0.0.3 --port 14333
+```
+
+5. Start the local feed server:
+
+```bash
+pnpm updater:local:serve -- --port 14333
+```
+
+6. Launch the installed `0.0.2` local-test app and trigger "检查更新" inside the app. It should discover `0.0.3` from the local feed and stay entirely off GitHub during verification.
+
+Local feed output is written to:
+
+```text
+artifacts/local-updater/feed/
+```
+
+Local updater keys are written to:
+
+```text
+artifacts/local-updater/keys/
+```
+
+Notes:
+
+- The local feed preserves Windows installer type boundaries: MSI installs update from MSI artifacts, and NSIS installs update from NSIS artifacts.
+- If the app is built without the local updater config, it will continue using the production GitHub updater endpoint.
+- The GitHub release fallback is only used when the configured Tauri updater source is unavailable or invalid; a normal "no update" result does not redirect to GitHub.
+
 ## Codex Bridge
 
 When the Tauri app is running it starts a local bridge at:

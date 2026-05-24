@@ -2,9 +2,10 @@
 doc_type: requirement
 slug: app-update
 pitch: 让用户随时知道应用是不是最新版本，并能一键检查更新。
-status: draft
+status: current
 last_reviewed: 2026-05-24
-implemented_by: []
+implemented_by:
+  - 2026-05-24-app-update
 tags: [update, settings, version, windows]
 ---
 
@@ -30,3 +31,15 @@ tags: [update, settings, version, windows]
 - 不做静默强更或后台无感替换。
 - 不负责修复安装包以外的系统问题。
 - 只解决“知不知道有更新、能不能方便去更新”这件事。
+
+## 当前实现
+
+- 设置页展示当前运行时版本和更新状态。
+- 桌面端启动后自动静默检查一次更新。
+- 用户可以手动检查更新，并在发现新版本后执行下载并重启，或在 GitHub fallback 场景下直接打开下载页。
+- 正式发布继续走 GitHub Release / `latest.json`。
+- 本地 updater 验证新增独立脚本链路，不需要为了测试上传 GitHub Release。
+
+## 变更记录
+
+- 2026-05-24：能力已落地，状态从 `draft` 升级为 `current`，补充本地 updater 验证工作流。

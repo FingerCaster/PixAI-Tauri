@@ -1,7 +1,7 @@
 {
   "name": "pixai-tauri",
   "private": true,
-  "version": "0.0.2",
+  "version": "0.0.3",
   "type": "module",
   "packageManager": "pnpm@10.26.2",
   "scripts": {
@@ -13,7 +13,12 @@
     "test:watch": "vitest",
     "check": "tsc --noEmit && vitest run",
     "dist": "pnpm tauri build",
-    "codex": "node scripts/pixai-codex.mjs"
+    "codex": "node scripts/pixai-codex.mjs",
+    "updater:local": "node scripts/local-updater.mjs",
+    "updater:local:keygen": "node scripts/local-updater.mjs keygen",
+    "updater:local:build": "node scripts/local-updater.mjs build",
+    "updater:local:publish": "node scripts/local-updater.mjs publish",
+    "updater:local:serve": "node scripts/local-updater.mjs serve"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

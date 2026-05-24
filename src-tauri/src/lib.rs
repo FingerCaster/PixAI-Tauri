@@ -21,6 +21,8 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 };
 use tauri::{AppHandle, Emitter, Manager};
+#[cfg(target_os = "windows")]
+use tauri::utils::{config::BundleType, platform::bundle_type};
 #[cfg(not(target_os = "windows"))]
 use tauri_plugin_notification::NotificationExt;
 #[cfg(target_os = "windows")]
@@ -184,6 +186,23 @@ struct CodexBridgeHttpResponse {
 #[tauri::command]
 fn app_data_dir(app: AppHandle) -> Result<String, String> {
     Ok(app_data_path(&app)?.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn app_installer_type() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        return match bundle_type() {
+            Some(BundleType::Msi) => "msi".to_string(),
+            Some(BundleType::Nsis) => "nsis".to_string(),
+            _ => "unknown".to_string(),
+        };
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        "unknown".to_string()
+    }
 }
 
 #[tauri::command]
@@ -1583,6 +1602,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             app_data_dir,
+            app_installer_type,
             activate_main_window,
             hide_main_window,
             quit_app,

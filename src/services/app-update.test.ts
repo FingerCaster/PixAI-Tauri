@@ -2,6 +2,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { check } from '@tauri-apps/plugin-updater'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as platformModule from '../lib/platform'
 import { AppUpdateService } from './app-update'
 
 vi.mock('@tauri-apps/api/app', () => ({
@@ -43,6 +44,7 @@ describe('AppUpdateService', () => {
     vi.mocked(getVersion).mockResolvedValue('0.0.1')
     vi.mocked(openUrl).mockResolvedValue(undefined)
     vi.mocked(check).mockRejectedValue(new Error('HTTP status client error (404 Not Found): latest.json'))
+    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('unknown')
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       value: {
         invoke: vi.fn(async (command: string, args?: { request?: { url?: string } }) => {
@@ -97,5 +99,40 @@ describe('AppUpdateService', () => {
     await expect(service.downloadAndInstall()).resolves.toEqual({ action: 'openedDownload' })
 
     expect(openUrl).toHaveBeenCalledWith('https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64-setup.exe')
+  })
+
+  it('prefers the MSI asset when the current app was installed via MSI', async () => {
+    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('msi')
+
+    const result = await new AppUpdateService().check()
+
+    expect(result.update).toMatchObject({
+      installMode: 'github',
+      downloadUrl: 'https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64_en-US.msi'
+    })
+  })
+
+  it('prefers the NSIS asset when the current app was installed via NSIS', async () => {
+    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('nsis')
+
+    const result = await new AppUpdateService().check()
+
+    expect(result.update).toMatchObject({
+      installMode: 'github',
+      downloadUrl: 'https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64-setup.exe'
+    })
+  })
+
+  it('does not fall back to GitHub when Tauri updater reports no update', async () => {
+    vi.mocked(check).mockResolvedValue(null)
+    const service = new AppUpdateService()
+
+    const result = await service.check()
+
+    expect(result).toEqual({
+      currentVersion: '0.0.1',
+      update: null
+    })
+    expect(openUrl).not.toHaveBeenCalled()
   })
 })
