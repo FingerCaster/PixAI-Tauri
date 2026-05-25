@@ -1,252 +1,318 @@
 # PixAI Tauri
 
-PixAI rebuilt as a Tauri 2 desktop app. The old Electron repository at `D:\UGit\PixAI` is a reference only; this repository is a clean Tauri implementation.
+PixAI Tauri 是一个基于 Tauri 2 重建的桌面图片生成工作台。它保留 PixAI 的多会话生图、参考图、图库和 Codex 自动化工作流，但当前仓库是独立的 Tauri 实现，不再沿用旧 Electron 项目的运行时、数据目录或打包方式。
 
-## What is included
+当前版本号由 `package.json`、`src-tauri/Cargo.toml` 和 `src-tauri/tauri.conf.json` 共同维护。
 
-- Tauri 2 desktop shell with React 19, TypeScript, Vite, Zustand, and pnpm.
-- Multi-provider profile center with independent image-generation and prompt-assistant profile selection.
-- Provider adapter boundary with an initial `openai-compatible` adapter for `/v1/images/generations`, `/v1/images/edits`, and `/v1/responses`.
-- Local app data for conversations, generation runs, history, reference images, and prompt templates.
-- Tauri-side secret boundary using system keyring when available, with a documented app-data fallback for local/dev environments.
-- Workspace, gallery, prompt library, prompt assistant, retries, timeout, cancellation hooks, reference image management, and error details.
-- Local Codex Bridge for same-machine automation over `http://127.0.0.1:43117`.
+## 当前能力
 
-## Local test provider
+- React 19 + TypeScript + Vite + Tailwind v4 + shadcn/ui 前端工作台。
+- Tauri 2 桌面壳，支持系统托盘、系统通知、文件保存对话框、应用更新和本地文件打开。
+- OpenAI-compatible Provider 管理，支持图片生成 Provider 和提示词助手 Provider 分开选择。
+- 图片生成接口支持 `/v1/images/generations`、`/v1/images/edits` 和 `/v1/responses`。
+- 多会话工作区：每个会话保存 prompt 草稿、模型、比例、尺寸、质量、数量、高级参数和参考图。
+- 参考图工作流：上传参考图、从历史图加入参考、预览参考图、文生图 / 图生图自动切换。
+- 本地历史与图库：搜索、排序、收藏、删除、下载、批量操作、参数回填和重新编辑。
+- 提示词库与提示词助手：模板管理、灵感生成和提示词丰富。
+- 全局设置：常规、通知、服务、扩展和应用更新集中管理。
+- Codex Bridge：桌面应用运行时提供本机 HTTP bridge，方便 Codex 或本机脚本自动调用 PixAI。
 
-The default provider profile points at:
+## 参考项目
+
+本仓库整理自 PixAI / PixAI-Codex 的产品思路和交互经验，但不是旧仓库的原地迁移。
+
+- 原始参考项目：[fengxinzi-mulan/PixAI](https://github.com/fengxinzi-mulan/PixAI)
+- Electron + Codex Bridge 参考版本：`PixAI-Codex`
+- 当前项目：`PixAI-Tauri`，使用 Tauri 2 重建桌面壳、数据边界、更新系统和前端 UI。
+
+开发工作区里可能存在 `.omx/reference/PixAI-Codex/` 这样的本地参考快照。它只用于对照旧实现，不是当前项目的运行依赖，也不会随 Tauri 应用发布。
+
+## 环境要求
+
+- Node.js 22 或兼容版本
+- pnpm 10.26.2
+- Rust stable toolchain
+- Tauri 2 所需系统依赖
+- Windows 桌面运行时需要 WebView2
+- 一个 OpenAI-compatible 图片生成服务和 API Key
+
+安装依赖：
+
+```bash
+pnpm install
+```
+
+启动前端开发服务：
+
+```bash
+pnpm dev
+```
+
+启动 Tauri 桌面开发环境：
+
+```bash
+pnpm tauri dev
+```
+
+## 常用命令
+
+```bash
+pnpm dev                 # 启动 Vite 前端开发服务
+pnpm tauri dev           # 启动 Tauri 桌面开发环境
+pnpm test                # 运行 Vitest 测试
+pnpm check               # TypeScript 检查 + 测试
+pnpm build               # TypeScript 检查 + 前端生产构建
+pnpm dist                # 构建当前平台 Tauri 安装包
+pnpm codex -- health     # 检查 Codex Bridge 是否可用
+```
+
+Tauri 安装包输出在：
+
+```text
+src-tauri/target/release/bundle/
+```
+
+前端构建输出在：
+
+```text
+dist/
+```
+
+## Provider 配置
+
+应用默认不提交任何可用 Provider 或 API Key。首次启动后，在「全局设置 -> 服务」里添加 Provider：
+
+- 类型：`openai-compatible`
+- Base URL：例如 `https://api.openai.com` 或你的兼容服务地址
+- API Key：写入本机安全存储；不可用时会降级到应用数据目录并在界面提示
+- 图片模型：默认建议 `gpt-image-2`
+- 提示词模型：默认建议 `gpt-5.4-mini`
+- 图片接口：可选择 Images API 或 Responses API
+
+请求路径按 Provider 的 Base URL 拼接：
+
+```text
+POST {baseUrl}/v1/images/generations
+POST {baseUrl}/v1/images/edits
+POST {baseUrl}/v1/responses
+```
+
+测试和本地 mock provider 中常用的地址是：
 
 ```text
 http://127.0.0.1:37123
 ```
 
-Use `sk-123456789` as the local test API key when your mock provider is running. The key is not committed as a default secret; enter it in the Provider profile editor or set it from tests.
-
-## Commands
-
-```bash
-pnpm install
-pnpm dev
-pnpm test
-pnpm build
-pnpm tauri dev
-pnpm dist
-pnpm codex -- health
-```
-
-## App updates
-
-PixAI uses the Tauri updater plugin for in-app update checks. The settings panel shows the current runtime version, can check for updates manually, and checks once on desktop startup when the updater is configured.
-
-If the updater keypair is missing, the app still works normally for image generation, settings, and manual installer downloads. What breaks is the signed in-app auto-update path only; PixAI falls back to the GitHub release page when `latest.json`, signatures, or updater key config are unavailable.
-
-### Production updater release
-
-Production builds now use the GitHub release feed already configured in `src-tauri/tauri.conf.json`:
-
-```json
-"plugins": {
-  "updater": {
-    "endpoints": ["https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json"],
-    "pubkey": "YOUR_TAURI_UPDATER_PUBLIC_KEY"
-  }
-}
-```
-
-1. Generate the long-lived production updater key once:
-
-```bash
-pnpm updater:release:keygen
-```
-
-This writes the private key to:
-
-```text
-artifacts/release-updater/keys/updater.key
-```
-
-and the public key to:
-
-```text
-artifacts/release-updater/keys/updater.key.pub
-```
-
-The `artifacts/` directory is gitignored. Keep `updater.key` stable across releases; if you rotate it, older installed builds signed with the previous public key will stop trusting future in-app updates.
-
-If you develop on multiple machines, do not keep the only copy inside one workspace. The release script also accepts:
-
-```text
-PIXAI_RELEASE_UPDATER_KEY_PATH
-```
-
-or Tauri's native:
-
-```text
-TAURI_SIGNING_PRIVATE_KEY_PATH
-```
-
-So each machine can point at the same exported private key copy, for example from a synced secrets folder, password manager attachment, secure network share, or CI secret mount.
-
-If you store the key in 1Password, the repo can pull it back into the default local path:
-
-```bash
-pnpm updater:release:pull-key
-```
-
-By default this reads:
-
-- vault: `PixAI Release`
-- document: `PixAI updater.key`
-- document: `PixAI updater.key.pub`
-
-Override those names with:
-
-```text
-PIXAI_1PASSWORD_VAULT
-PIXAI_1PASSWORD_UPDATER_KEY_TITLE
-PIXAI_1PASSWORD_UPDATER_PUBKEY_TITLE
-```
-
-2. Build the signed production installers and updater signatures:
-
-```bash
-pnpm updater:release:build -- --version 0.0.3
-```
-
-This command:
-
-- uses `TAURI_SIGNING_PRIVATE_KEY_PATH` with the local production key
-- also accepts `PIXAI_RELEASE_UPDATER_KEY_PATH` when you want the repo to read the key from another location
-- temporarily enables `bundle.createUpdaterArtifacts`
-- generates signed MSI / NSIS updater artifacts under `src-tauri/target/release/bundle/`
-
-3. Stage `latest.json` for a GitHub release tag:
-
-```bash
-pnpm updater:release:manifest -- --version 0.0.3 --tag 0.0.3
-```
-
-The staged release payload is written to:
-
-```text
-artifacts/release-updater/staging/0.0.3/
-```
-
-4. Upload the staged updater manifest and matching installers to an existing GitHub release:
-
-```bash
-pnpm updater:release:publish -- --version 0.0.3 --tag 0.0.3
-```
-
-This uploads:
-
-- `latest.json`
-- `PixAI_0.0.3_x64_en-US.msi`
-- `PixAI_0.0.3_x64-setup.exe`
-
-The app then checks updates from:
-
-```text
-https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json
-```
-
-Notes:
-
-- The updater public key committed in `src-tauri/tauri.conf.json` must match `artifacts/release-updater/keys/updater.key.pub`.
-- Older installs built before the public key was baked into the app will still fall back to the GitHub release page once; installs built after this setup use the signed updater path normally.
-- If 1Password CLI asks for approval often on Windows, that is usually the desktop app integration policy doing its job. The least noisy setup is: keep the 1Password desktop app unlocked, enable Windows Hello, and enable `Settings > Developer > Integrate with 1Password CLI`. For fully non-interactive release automation, move signing to a dedicated CI or release machine instead of a daily dev machine.
-
-### Local updater verification
-
-Real releases can keep using GitHub Release and `latest.json`. For local updater verification, use the separate local feed workflow instead of uploading test builds to GitHub.
-
-1. Generate a local updater signing key once:
-
-```bash
-pnpm updater:local:keygen
-```
-
-2. Build and install a baseline local-test app version. This is the app instance you will launch and click "检查更新" from:
-
-```bash
-pnpm updater:local:build -- --version 0.0.2 --port 14333
-```
-
-This build:
-
-- overrides the app version for both Tauri and the frontend version label
-- points the updater to `http://127.0.0.1:14333/latest.json`
-- enables updater artifact generation
-- signs the build with the local test key under `artifacts/local-updater/keys/`
-
-Install the generated NSIS package from:
-
-```text
-src-tauri/target/release/bundle/nsis/PixAI_0.0.2_x64-setup.exe
-```
-
-3. Build the newer version that the installed app should discover:
-
-```bash
-pnpm updater:local:build -- --version 0.0.3 --port 14333
-```
-
-4. Publish the generated updater artifacts into a local feed:
-
-```bash
-pnpm updater:local:publish -- --version 0.0.3 --port 14333
-```
-
-5. Start the local feed server:
-
-```bash
-pnpm updater:local:serve -- --port 14333
-```
-
-6. Launch the installed `0.0.2` local-test app and trigger "检查更新" inside the app. It should discover `0.0.3` from the local feed and stay entirely off GitHub during verification.
-
-Local feed output is written to:
-
-```text
-artifacts/local-updater/feed/
-```
-
-Local updater keys are written to:
-
-```text
-artifacts/local-updater/keys/
-```
-
-Notes:
-
-- The local feed preserves Windows installer type boundaries: MSI installs update from MSI artifacts, and NSIS installs update from NSIS artifacts.
-- If the app is built without the local updater config, it will continue using the production GitHub updater endpoint.
-- The GitHub release fallback is only used when the configured Tauri updater source is unavailable or invalid; a normal "no update" result does not redirect to GitHub.
+这个地址只是开发测试约定，不是生产默认配置。
 
 ## Codex Bridge
 
-When the Tauri app is running it starts a local bridge at:
+桌面应用运行时会启动本机 bridge：
 
 ```text
 http://127.0.0.1:43117
 ```
 
-Set `PIXAI_CODEX_PORT` before launch to change the port, or `PIXAI_CODEX_BRIDGE=0` to disable it. The bridge binds to `127.0.0.1` only and is intended for local Codex automation.
+可通过环境变量调整：
 
-Useful commands:
+```text
+PIXAI_CODEX_PORT=<port>
+PIXAI_CODEX_BRIDGE=0
+```
+
+bridge 只绑定 `127.0.0.1`，用于同一台机器上的 Codex 或脚本自动化。
+
+常用命令：
 
 ```bash
 pnpm codex -- health
-pnpm codex -- generate --prompt "一座清晨玻璃温室，自然光，干净摄影风格" --ratio 1:1 --n 1
+pnpm codex -- settings
+pnpm codex -- conversations
 pnpm codex -- history --limit 5
+pnpm codex -- generate --prompt "一座清晨玻璃温室，自然光，干净摄影风格" --ratio 1:1 --n 1
 pnpm codex -- inspire
 pnpm codex -- enrich --prompt "清爽产品摄影"
 ```
 
-## Data and migration
+生成、重编辑、导出等复杂请求也可以用 JSON：
 
-This app intentionally uses a new Tauri app data directory. Electron data migration from the reference app is out of scope for the first version.
+```bash
+pnpm codex -- generate --json '{"prompt":"a glass greenhouse","ratio":"1:1","n":1}'
+pnpm codex -- reedit --id <historyId> --json '{"prompt":"make it dusk"}'
+pnpm codex -- export --ids id1,id2 --directory <output-directory>
+```
 
-## Recommended IDE Setup
+## 应用更新
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+PixAI 使用 Tauri updater plugin。生产配置位于 `src-tauri/tauri.conf.json`：
+
+```json
+{
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/FingerCaster/PixAI-Tauri/releases/latest/download/latest.json"],
+      "pubkey": "<tauri-updater-public-key>"
+    }
+  }
+}
+```
+
+应用内更新检查失败时，界面会保留正常使用能力，并在需要时退回到 GitHub Release 下载页。正常“没有新版本”的结果不会跳转 GitHub。
+
+### 正式发布更新
+
+正式更新使用 GitHub Release + `latest.json`。私钥必须长期稳定保存，仓库只提交 public key。
+
+首次生成正式 updater key：
+
+```bash
+pnpm updater:release:keygen
+```
+
+默认写入：
+
+```text
+artifacts/release-updater/keys/updater.key
+artifacts/release-updater/keys/updater.key.pub
+```
+
+`artifacts/` 已被 gitignore。请备份 `updater.key`，如果更换私钥，旧安装版本将不再信任后续更新。
+
+如果私钥保存在 1Password，可拉取到默认路径：
+
+```bash
+pnpm updater:release:pull-key
+```
+
+默认读取：
+
+```text
+PIXAI_1PASSWORD_VAULT=PixAI Release
+PIXAI_1PASSWORD_UPDATER_KEY_TITLE=PixAI updater.key
+PIXAI_1PASSWORD_UPDATER_PUBKEY_TITLE=PixAI updater.key.pub
+```
+
+构建签名安装包：
+
+```bash
+pnpm updater:release:build -- --version <version>
+```
+
+生成发布用 `latest.json` 和 staging 目录：
+
+```bash
+pnpm updater:release:manifest -- --version <version> --tag <tag>
+```
+
+上传到已有 GitHub Release：
+
+```bash
+pnpm updater:release:publish -- --version <version> --tag <tag>
+```
+
+staging 输出：
+
+```text
+artifacts/release-updater/staging/<version>/
+```
+
+上传内容包括：
+
+```text
+latest.json
+PixAI_<version>_x64_en-US.msi
+PixAI_<version>_x64-setup.exe
+```
+
+### 本地 updater 验证
+
+本地验证不需要上传 GitHub Release，使用独立本地 feed。
+
+生成本地测试 key：
+
+```bash
+pnpm updater:local:keygen
+```
+
+构建一个旧版本并安装：
+
+```bash
+pnpm updater:local:build -- --version <old-version> --port 14333
+```
+
+构建新版本：
+
+```bash
+pnpm updater:local:build -- --version <new-version> --port 14333
+```
+
+发布本地 feed：
+
+```bash
+pnpm updater:local:publish -- --version <new-version> --port 14333
+```
+
+启动本地 feed：
+
+```bash
+pnpm updater:local:serve -- --port 14333
+```
+
+然后打开已安装的旧版本，在「全局设置 -> 常规 -> 关于应用 / 更新」里点击「检查更新」。它应从本地 feed 发现新版本，不访问 GitHub。
+
+本地验证输出：
+
+```text
+artifacts/local-updater/keys/
+artifacts/local-updater/feed/
+```
+
+## 数据与迁移
+
+当前 Tauri 版本使用新的应用数据目录，保存 Provider 设置、偏好、会话、生成记录、历史图片、参考图和提示词模板。
+
+旧 Electron 版本的数据迁移不属于当前版本范围。如果需要迁移历史数据，应单独设计导入流程，不要假设旧项目目录和当前 Tauri 数据结构兼容。
+
+## 项目结构
+
+```text
+src/
+├─ adapters/      # Provider adapter 与 OpenAI-compatible 请求构造
+├─ assets/        # 前端静态资源
+├─ components/    # React 页面、业务组件和 shadcn/ui primitives
+├─ lib/           # 平台桥接、工具函数、主题同步等通用逻辑
+├─ services/      # 数据服务、Provider 设置、更新、Codex Bridge 等应用服务
+├─ shared/        # 前后端共享类型和图片参数常量
+├─ store/         # Zustand 应用状态
+└─ test/          # 测试环境设置
+
+src-tauri/
+├─ capabilities/  # Tauri 权限配置
+├─ icons/         # 桌面应用图标
+├─ src/           # Rust 侧命令、窗口、托盘、HTTP bridge、文件和更新逻辑
+├─ tauri.conf.json
+└─ tauri.local-updater.conf.json
+
+scripts/
+├─ pixai-codex.mjs
+├─ local-updater.mjs
+└─ release-updater.mjs
+```
+
+## 质量检查
+
+提交前建议运行：
+
+```bash
+pnpm check
+pnpm build
+```
+
+如果只改 README 或文档，也要留意不要重新加入本机绝对路径、固定旧版本号或旧 Electron 打包命令。
+
+## 维护提示
+
+- 不要把 `artifacts/`、`src-tauri/target/`、`node_modules/` 或本地参考快照提交进仓库。
+- README 中的版本示例优先使用 `<version>`、`<old-version>`、`<new-version>`，避免发布后过时。
+- 新增 Provider 类型时，同步更新 Provider 配置、能力说明和 Codex Bridge 请求示例。
+- 新增发布脚本或更新策略时，同步更新「应用更新」章节。
