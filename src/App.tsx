@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { listen } from '@tauri-apps/api/event'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
@@ -10,6 +10,7 @@ import { SettingsPanel } from './components/settings/SettingsPanel'
 import { Workspace } from './components/workspace/Workspace'
 import { registerCodexBridgeHandler } from './services/codex-bridge'
 import { isTauriRuntime, notifyWindowSentToTray, watchCloseRequested, watchWindowFocus } from './lib/platform'
+import { applyDocumentTheme } from './lib/theme'
 import { useAppStore } from './store/app-store'
 
 function App() {
@@ -22,6 +23,8 @@ function App() {
   const closeToTray = useAppStore((state) => state.preferences?.closeToTray ?? true)
   const openGlobalSettings = (tab: GlobalSettingsTab = 'general') => setGlobalSettingsState({ open: true, tab })
   const closeGlobalSettings = () => setGlobalSettingsState((state) => ({ ...state, open: false }))
+
+  useLayoutEffect(() => applyDocumentTheme(darkMode), [darkMode])
 
   useEffect(() => {
     void load()
@@ -99,7 +102,7 @@ function App() {
 
   return (
     <TooltipProvider delayDuration={250}>
-      <div className={darkMode ? 'dark min-h-dvh bg-background text-foreground' : 'min-h-dvh bg-background text-foreground'}>
+      <div className="min-h-dvh bg-background text-foreground">
         <MainLayout onOpenGlobalSettings={openGlobalSettings}>
           <main className="main-surface min-w-0 overflow-hidden bg-background">
             {loading ? (
@@ -117,7 +120,7 @@ function App() {
             {toast}
           </div>
         ) : null}
-        <Toaster richColors closeButton />
+        <Toaster richColors closeButton theme={darkMode ? 'dark' : 'light'} />
       </div>
     </TooltipProvider>
   )
