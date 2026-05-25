@@ -69,7 +69,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   if (item.status === 'failed') {
     return (
       <article
-        className="image-tile failed error-tile group flex min-h-[320px] flex-col overflow-hidden rounded-2xl border border-destructive/25 bg-destructive/5"
+        className="image-tile failed error-tile group flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-destructive/25 bg-destructive/5"
         role="button"
         tabIndex={0}
         title="点击查看错误详情"
@@ -107,7 +107,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   }
 
   return (
-    <article className="image-tile group flex min-h-[320px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+    <article className="image-tile group flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
       <button className="image-frame image-preview-trigger aspect-square w-full overflow-hidden bg-muted" type="button" title="查看大图" onClick={openPreview}>
         {imageSource ? <img className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]" src={imageSource} alt={item.prompt} /> : null}
       </button>

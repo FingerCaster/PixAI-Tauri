@@ -15,7 +15,7 @@ import { ImageTile } from './ImageTile'
 const pageSizeOptions = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
 const pageSizeSelectOptions: Array<GallerySelectOption<number>> = pageSizeOptions.map((value) => ({
   value,
-  label: `${value} / 页`
+  label: `${value}张`
 }))
 
 export function CanvasArea({
@@ -149,7 +149,7 @@ export function CanvasArea({
           </div>
         </div>
       </div>
-      <div className="preview-grid grid min-h-0 flex-1 auto-rows-fr grid-cols-[repeat(auto-fill,minmax(210px,1fr))] gap-3 overflow-auto p-4">
+      <div className="preview-grid grid min-h-0 flex-1 auto-rows-max grid-cols-[repeat(auto-fill,minmax(210px,1fr))] content-start items-start gap-3 overflow-auto p-4">
         {workspaceEntries.length === 0 && !generating ? (
           <div className="empty-state grid-empty col-span-full grid min-h-80 place-items-center rounded-2xl border border-dashed border-border bg-muted/35 text-sm text-muted-foreground">
             生成后的图片会显示在这里
@@ -158,11 +158,11 @@ export function CanvasArea({
         {visibleEntries.map((entry) => renderWorkspaceEntry(entry, generationClockMs))}
       </div>
       {workspaceEntries.length > 0 ? (
-        <div className="gallery-pagination workspace-pagination flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <div className="gallery-pagination workspace-pagination flex min-w-0 shrink-0 flex-nowrap items-center justify-end gap-2 overflow-hidden border-t border-border px-4 py-3">
           <Button variant="outline" size="sm" type="button" disabled={page <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>
             上一页
           </Button>
-          <span className="text-sm text-muted-foreground">{page} / {pageCount}</span>
+          <span className="shrink-0 whitespace-nowrap text-sm text-muted-foreground">{page}/{pageCount}</span>
           <Button variant="outline" size="sm" type="button" disabled={page >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}>
             下一页
           </Button>
@@ -170,7 +170,7 @@ export function CanvasArea({
             value={pageSize}
             options={pageSizeSelectOptions}
             ariaLabel="每页数量"
-            className="page-size-select"
+            className="page-size-select h-9 w-20 shrink-0 px-3 *:data-[slot=select-value]:line-clamp-none *:data-[slot=select-value]:leading-none"
             onChange={(value) => {
               setPageSize(value)
               setPage(1)

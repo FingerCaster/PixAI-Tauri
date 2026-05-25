@@ -113,7 +113,7 @@ export function GalleryPage() {
         <ScrollArea className="min-h-0 flex-1">
           <div className="gallery-list grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-4 pr-3">
             {filtered.map((item) => (
-              <Card className="gallery-item overflow-hidden rounded-2xl p-2 shadow-none" key={item.id}>
+              <Card className="gallery-item overflow-hidden rounded-2xl border border-border/80 p-2 shadow-sm ring-0" key={item.id}>
                 <label className="selection-row mb-2 flex items-center gap-2 rounded-lg px-1 text-sm text-muted-foreground">
                   <Checkbox checked={selectedIds.includes(item.id)} onCheckedChange={() => toggleSelected(item.id)} aria-label="选择图片" />
                   选择

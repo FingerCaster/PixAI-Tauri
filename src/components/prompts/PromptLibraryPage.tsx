@@ -82,7 +82,7 @@ export function PromptLibraryPage() {
       <ScrollArea className="min-h-0 flex-1">
         <div className="template-grid grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-4 pr-3">
           {filtered.map((template) => (
-            <Card className="template-card rounded-2xl shadow-none" key={template.id}>
+            <Card className="template-card rounded-2xl border border-border/80 shadow-sm ring-0" key={template.id}>
               <CardHeader>
                 <span className="text-xs font-medium text-muted-foreground">{template.category}</span>
                 <CardTitle className="line-clamp-1 text-base">{template.title}</CardTitle>

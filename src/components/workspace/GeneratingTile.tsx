@@ -60,7 +60,7 @@ export function GeneratingTile({
 
   return (
     <article
-      className={`image-tile generating-card flex min-h-[320px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm${canOpenRetryDetails ? ' retry-details-card cursor-pointer' : ''}`}
+      className={`image-tile generating-card flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm${canOpenRetryDetails ? ' retry-details-card cursor-pointer' : ''}`}
       aria-label={canOpenRetryDetails ? '重试中，点击查看上次失败详情' : '生成中'}
       role={canOpenRetryDetails ? 'button' : undefined}
       tabIndex={canOpenRetryDetails ? 0 : undefined}
