@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import type { ImageHistoryItem } from '../../shared/types'
 import { ImageTile } from './ImageTile'
 
-function succeededItem(): ImageHistoryItem {
+function succeededItem(overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem {
   return {
     id: 'history-preview-test',
     conversationId: 'conversation-preview-test',
@@ -25,7 +25,8 @@ function succeededItem(): ImageHistoryItem {
     favorite: false,
     generationMode: 'text-to-image',
     referenceImages: [],
-    createdAt: '2026-05-22T14:14:51.341Z'
+    createdAt: '2026-05-22T14:14:51.341Z',
+    ...overrides
   }
 }
 
@@ -36,6 +37,40 @@ describe('ImageTile', () => {
     const root = createRoot(host)
     await act(async () => {
       root.render(<ImageTile item={succeededItem()} />)
+    })
+    return { host, root }
+  }
+
+  async function renderTileWithCallLog() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(<ImageTile item={succeededItem({
+        callLog: {
+          provider: {
+            id: 'profile-1',
+            name: 'OpenAI',
+            type: 'openai-compatible',
+            baseUrl: 'https://api.openai.com',
+            imageGenerationEndpoint: 'responses-api'
+          },
+          endpoint: 'https://api.openai.com/v1/responses',
+          method: 'POST',
+          transport: 'streaming-json',
+          request: {
+            headers: {
+              Authorization: 'Bearer ***',
+              'Content-Type': 'application/json'
+            },
+            body: {
+              model: 'gpt-5.4-mini',
+              tools: [{ type: 'image_generation', action: 'edit', model: 'gpt-image-2' }]
+            }
+          },
+          createdAt: '2026-05-29T12:00:00.000Z'
+        }
+      })} />)
     })
     return { host, root }
   }
@@ -67,6 +102,24 @@ describe('ImageTile', () => {
     })
 
     expect(document.querySelector('[aria-label="图片预览"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('opens the generation call log from the tile actions', async () => {
+    const { host, root } = await renderTileWithCallLog()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="查看调用日志"]')?.click()
+    })
+
+    expect(document.querySelector('[aria-label="调用日志"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('https://api.openai.com/v1/responses')
+    expect(document.body.textContent).toContain('Bearer ***')
+    expect(document.body.textContent).toContain('action')
 
     await act(async () => {
       root.unmount()

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { openAiCompatibleAdapter } from './openai-compatible'
 import type { ProviderRuntimeProfile } from './types'
+import type { ImageGenerationCallLog } from '../shared/types'
 
 type TauriStreamPayload = {
   streamId: string
@@ -52,6 +53,7 @@ describe('openAiCompatibleAdapter', () => {
   })
 
   it('routes text-to-image requests to image generations endpoint', async () => {
+    let callLog: ImageGenerationCallLog | null = null
     await openAiCompatibleAdapter.generateImage(profile, {
       input: {
         conversationId: 'c1',
@@ -61,10 +63,35 @@ describe('openAiCompatibleAdapter', () => {
         quality: 'high',
         n: 1
       },
-      referenceImages: []
+      referenceImages: [],
+      onCallLog: (log) => {
+        callLog = log
+      }
     })
 
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/generations', expect.objectContaining({ method: 'POST' }))
+    expect(callLog).toMatchObject({
+      provider: {
+        id: 'profile-1',
+        name: 'Local mock',
+        type: 'openai-compatible',
+        imageGenerationEndpoint: 'images-api'
+      },
+      endpoint: 'http://127.0.0.1:37123/v1/images/generations',
+      method: 'POST',
+      transport: 'json',
+      request: {
+        headers: {
+          Authorization: 'Bearer ***',
+          'Content-Type': 'application/json'
+        },
+        body: {
+          model: 'gpt-image-1',
+          prompt: 'test',
+          size: '1024x1024'
+        }
+      }
+    })
   })
 
   it('extracts images endpoint stream results', async () => {
@@ -318,6 +345,7 @@ describe('openAiCompatibleAdapter', () => {
 
   it('routes responses image-to-image requests through streaming responses with input images', async () => {
     const referenceDataUrl = `data:image/png;base64,${'c'.repeat(120)}`
+    const callLogs: ImageGenerationCallLog[] = []
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
       [
         'event: response.image_generation_call.completed',
@@ -343,7 +371,10 @@ describe('openAiCompatibleAdapter', () => {
         inputFidelity: 'low',
         referenceImageIds: ['r1']
       },
-      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl }]
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl }],
+      onCallLog: (log) => {
+        callLogs.push(log)
+      }
     })
 
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
@@ -369,6 +400,19 @@ describe('openAiCompatibleAdapter', () => {
       }
     ])
     expect(images[0].b64_json).toBe('d'.repeat(120))
+    const loggedCall = callLogs[0]
+    expect(loggedCall).toBeTruthy()
+    expect(loggedCall).toMatchObject({
+      endpoint: 'http://127.0.0.1:37123/v1/responses',
+      transport: 'streaming-json',
+      request: {
+        headers: {
+          Authorization: 'Bearer ***',
+          'Content-Type': 'application/json'
+        }
+      }
+    })
+    expect(JSON.stringify(loggedCall.request.body)).toContain('[data-url:image/png;base64:120]')
   })
 
   it('defaults responses image-to-image requests to high input fidelity', async () => {

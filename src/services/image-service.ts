@@ -5,7 +5,7 @@ import { createId } from '../lib/ids'
 import { PlatformHttpProxyError, readLocalImageDataUrl, storeDataUrlFile } from '../lib/platform'
 import { elapsedMs, nowIso } from '../lib/time'
 import { getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds, normalizeRetryCount } from '../shared/image-options'
-import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageHistoryItem, ReferenceImage } from '../shared/types'
+import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageGenerationCallLog, ImageHistoryItem, ReferenceImage } from '../shared/types'
 import type { AppDatabase } from './app-database'
 import type { ProviderSettingsStore } from './provider-settings'
 
@@ -111,6 +111,7 @@ export class ImageService {
               globalVisible,
               generationMode,
               referenceImages: stripReferenceImagePayloads(referenceImages),
+              callLog: generated.callLog,
               createdAt: nowIso()
             })
           )
@@ -171,22 +172,26 @@ export class ImageService {
     controller: AbortController
     maxRetries: number
     startedAt: number
-  }): Promise<{ image: ImageApiData; retryAttempt: number } | { image: null; item: ImageHistoryItem; retryAttempt: number }> {
+  }): Promise<{ image: ImageApiData; retryAttempt: number; callLog: ImageGenerationCallLog | null } | { image: null; item: ImageHistoryItem; retryAttempt: number }> {
     const settings = await this.providers.get()
     const runtimeProfile = await this.providers.getRuntimeProfile(settings.selectedImageProfileId)
     const adapter = getAdapter(runtimeProfile.type)
     const conversation = await this.database.getConversation(input.conversationId)
     const references = await hydrateReferencesForRequest((conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id)))
+    let callLog: ImageGenerationCallLog | null = null
     for (let retryAttempt = 0; retryAttempt <= maxRetries; retryAttempt += 1) {
       const timeout = createTimeoutController(controller.signal, normalizeImageGenerationTimeoutSeconds(input.generationTimeoutSeconds) * 1000)
       try {
         const images = await adapter.generateImage(runtimeProfile, {
           input,
           referenceImages: references,
-          signal: timeout.signal
+          signal: timeout.signal,
+          onCallLog: (log) => {
+            callLog = log
+          }
         })
         const image = images.at(-1)
-        if (image) return { image, retryAttempt }
+        if (image) return { image, retryAttempt, callLog }
         if (retryAttempt < maxRetries) continue
         throw new Error('图片接口没有返回图片。')
       } catch (error) {
@@ -208,7 +213,7 @@ export class ImageService {
           }
         })
         if (retryAttempt < maxRetries) continue
-        const item = await this.createFailureItem(input, run, model, requestIndex, retryAttempt, error, elapsedMs(startedAt))
+        const item = await this.createFailureItem(input, run, model, requestIndex, retryAttempt, error, elapsedMs(startedAt), callLog)
         return { image: null, item, retryAttempt }
       } finally {
         timeout.cleanup()
@@ -217,7 +222,7 @@ export class ImageService {
     throw new Error('图片生成重试流程异常退出。')
   }
 
-  private async createFailureItem(input: GenerateImageInput, run: GenerationRun, model: string, requestIndex: number, retryAttempt: number, error: unknown, durationMs: number): Promise<ImageHistoryItem> {
+  private async createFailureItem(input: GenerateImageInput, run: GenerationRun, model: string, requestIndex: number, retryAttempt: number, error: unknown, durationMs: number, callLog: ImageGenerationCallLog | null = null): Promise<ImageHistoryItem> {
     const errorMessage = getGenerationErrorMessage(error)
     const details = getFailureDetails(error)
     const conversation = await this.database.getConversation(input.conversationId)
@@ -242,6 +247,7 @@ export class ImageService {
       globalVisible: conversation?.autoSaveHistory !== false,
       generationMode: run.generationMode,
       referenceImages: run.referenceImages,
+      callLog,
       createdAt: nowIso()
     })
   }

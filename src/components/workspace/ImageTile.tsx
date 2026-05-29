@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Copy, Download, Edit3, Heart, ImageDown, Trash2 } from 'lucide-react'
+import { Copy, Download, Edit3, Heart, ImageDown, ScrollText, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -9,11 +9,13 @@ import { DownloadCanceledError, downloadImageSource, imageSourceForDisplay, imag
 import { useAppStore } from '../../store/app-store'
 import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
+import { ImageCallLogModal } from './ImageCallLogModal'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const { addHistoryAsReference, deleteHistory, notify, toggleFavorite } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
+  const [callLogOpen, setCallLogOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [imageSource, setImageSource] = useState<string | null>(() => imageSourceForDisplaySync(item.dataUrl, item.storagePath))
   const showFailedRetryChip = shouldShowFailedImageRetryChip(item.retryAttempt)
@@ -88,6 +90,20 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           </div>
         </div>
         <div className="tile-actions flex justify-end gap-1 border-t border-destructive/15 p-2">
+          {item.callLog ? (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation()
+                setCallLogOpen(true)
+              }}
+              title="查看调用日志"
+            >
+              <ScrollText size={15} />
+            </Button>
+          ) : null}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -102,6 +118,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           </Button>
         </div>
         {errorDetailsOpen ? <ErrorDetailsModal item={item} onClose={() => setErrorDetailsOpen(false)} /> : null}
+        {callLogOpen ? <ImageCallLogModal item={item} onClose={() => setCallLogOpen(false)} /> : null}
       </article>
     )
   }
@@ -135,6 +152,11 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
             </Button>
           </>
         ) : null}
+        {item.callLog ? (
+          <Button variant="ghost" size="icon-sm" type="button" onClick={() => setCallLogOpen(true)} title="查看调用日志">
+            <ScrollText size={15} />
+          </Button>
+        ) : null}
         <Button className={cn('ml-auto', item.favorite ? 'text-rose-600' : '')} variant="ghost" size="icon-sm" type="button" onClick={() => void toggleFavorite(item)} title="收藏">
           <Heart size={15} fill={item.favorite ? 'currentColor' : 'none'} />
         </Button>
@@ -143,6 +165,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
         </Button>
       </div>
       {previewOpen ? <ImagePreviewModal item={item} onClose={() => setPreviewOpen(false)} /> : null}
+      {callLogOpen ? <ImageCallLogModal item={item} onClose={() => setCallLogOpen(false)} /> : null}
     </article>
   )
 }

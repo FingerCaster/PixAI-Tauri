@@ -12,7 +12,7 @@ import {
   fetchMultipartThroughPlatform,
   fetchTextStreamThroughPlatform
 } from '../lib/platform'
-import type { ImageApiData } from '../shared/types'
+import type { ImageApiData, ImageGenerationCallLog } from '../shared/types'
 import type { ImageGenerationRequest, ProviderAdapter, ProviderRuntimeProfile } from './types'
 
 type ImageApiResponse = {
@@ -215,28 +215,31 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
 
 async function requestImageGeneration(endpoint: string, profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Promise<Response> {
   const { input } = request
+  const body = {
+    model: input.model || profile.defaultImageModel,
+    prompt: input.prompt.trim(),
+    size: input.size || getDefaultImageSize(input.ratio),
+    quality: input.quality,
+    n: Math.min(10, Math.max(1, input.n || 1)),
+    ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
+    ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
+    ...(input.background ? { background: input.background } : {}),
+    ...(input.moderation ? { moderation: input.moderation } : {}),
+    ...(input.stream ? { stream: input.stream } : {}),
+    ...(input.stream && input.partialImages ? { partial_images: input.partialImages } : {})
+  }
+  recordImageGenerationCallLog(profile, request, endpoint, input.stream ? 'streaming-json' : 'json', buildHeaders(profile.apiKey || ''), body)
   return fetchJsonThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
     signal: request.signal,
-    body: JSON.stringify({
-      model: input.model || profile.defaultImageModel,
-      prompt: input.prompt.trim(),
-      size: input.size || getDefaultImageSize(input.ratio),
-      quality: input.quality,
-      n: Math.min(10, Math.max(1, input.n || 1)),
-      ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
-      ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
-      ...(input.background ? { background: input.background } : {}),
-      ...(input.moderation ? { moderation: input.moderation } : {}),
-      ...(input.stream ? { stream: input.stream } : {}),
-      ...(input.stream && input.partialImages ? { partial_images: input.partialImages } : {})
-    })
+    body: JSON.stringify(body)
   })
 }
 
 async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Promise<Response> {
   const { input } = request
+  const logBody = buildImageEditLogBody(profile, request)
   const form = new FormData()
   form.set('model', input.model || profile.defaultImageModel)
   form.set('prompt', input.prompt.trim())
@@ -263,6 +266,14 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
     signal: request.signal,
     body: form
   }
+  recordImageGenerationCallLog(
+    profile,
+    request,
+    endpoint,
+    input.stream ? 'streaming-multipart' : 'multipart',
+    { Authorization: `Bearer ${profile.apiKey || ''}`, 'Content-Type': 'multipart/form-data' },
+    logBody
+  )
   if (input.stream) {
     const response = await fetchMultipartTextStreamThroughPlatform(endpoint, requestInit, {
       timeoutMs: Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000),
@@ -285,31 +296,33 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
   const inputFidelity = hasReferences && supportsImageInputFidelity(imageModel)
     ? input.inputFidelity || 'high'
     : undefined
+  const body = {
+    model: profile.defaultPromptModel,
+    input: buildResponsesImageInput(input.prompt, request.referenceImages),
+    stream: true,
+    tool_choice: { type: 'image_generation' },
+    tools: [
+      {
+        type: 'image_generation',
+        action: hasReferences ? 'edit' : 'generate',
+        model: imageModel,
+        size: input.size || getDefaultImageSize(input.ratio),
+        quality: input.quality,
+        ...(inputFidelity ? { input_fidelity: inputFidelity } : {}),
+        ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
+        ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
+        ...(input.background ? { background: input.background } : {}),
+        ...(input.moderation ? { moderation: input.moderation } : {}),
+        ...(input.partialImages ? { partial_images: input.partialImages } : {})
+      }
+    ]
+  }
+  recordImageGenerationCallLog(profile, request, endpoint, 'streaming-json', buildHeaders(profile.apiKey || ''), body)
   const response = await fetchTextStreamThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
     signal: request.signal,
-    body: JSON.stringify({
-      model: profile.defaultPromptModel,
-      input: buildResponsesImageInput(input.prompt, request.referenceImages),
-      stream: true,
-      tool_choice: { type: 'image_generation' },
-      tools: [
-        {
-          type: 'image_generation',
-          action: hasReferences ? 'edit' : 'generate',
-          model: imageModel,
-          size: input.size || getDefaultImageSize(input.ratio),
-          quality: input.quality,
-          ...(inputFidelity ? { input_fidelity: inputFidelity } : {}),
-          ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
-          ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
-          ...(input.background ? { background: input.background } : {}),
-          ...(input.moderation ? { moderation: input.moderation } : {}),
-          ...(input.partialImages ? { partial_images: input.partialImages } : {})
-        }
-      ]
-    })
+    body: JSON.stringify(body)
   }, { timeoutMs, firstByteTimeoutMs: Math.min(timeoutMs, RESPONSES_IMAGE_TEST_TIMEOUT_MS) })
   const text = response.text
   const payload = parseResponsesPayload(text)
@@ -621,6 +634,93 @@ function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {
     bytes[index] = binary.charCodeAt(index)
   }
   return new Blob([bytes], { type: match[1] || fallbackMimeType })
+}
+
+function buildImageEditLogBody(profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Record<string, unknown> {
+  const { input } = request
+  return {
+    model: input.model || profile.defaultImageModel,
+    prompt: input.prompt.trim(),
+    size: input.size || getDefaultImageSize(input.ratio),
+    quality: input.quality,
+    n: String(Math.min(10, Math.max(1, input.n || 1))),
+    ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
+    ...(input.outputCompression != null ? { output_compression: String(input.outputCompression) } : {}),
+    ...(input.background ? { background: input.background } : {}),
+    ...(input.moderation ? { moderation: input.moderation } : {}),
+    ...(input.stream ? { stream: 'true' } : {}),
+    ...(input.stream && input.partialImages ? { partial_images: String(input.partialImages) } : {}),
+    ...(input.inputFidelity && supportsImageInputFidelity(input.model || profile.defaultImageModel) ? { input_fidelity: input.inputFidelity } : {}),
+    'image[]': request.referenceImages.map((reference) => ({
+      filename: reference.name,
+      mimeType: reference.mimeType,
+      dataUrl: summarizeDataUrl(reference.dataUrl)
+    }))
+  }
+}
+
+function recordImageGenerationCallLog(
+  profile: ProviderRuntimeProfile,
+  request: ImageGenerationRequest,
+  endpoint: string,
+  transport: ImageGenerationCallLog['transport'],
+  headers: Record<string, string>,
+  body: unknown
+): void {
+  if (!request.onCallLog) return
+  try {
+    request.onCallLog({
+      provider: {
+        id: profile.id,
+        name: profile.name,
+        type: profile.type,
+        baseUrl: profile.baseUrl,
+        imageGenerationEndpoint: profile.imageGenerationEndpoint
+      },
+      endpoint,
+      method: 'POST',
+      transport,
+      request: {
+        headers: sanitizeHeaders(headers),
+        body: sanitizeRequestBody(body)
+      },
+      createdAt: new Date().toISOString()
+    })
+  } catch {
+    // Call logs are diagnostic metadata; they should never break generation.
+  }
+}
+
+function sanitizeHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [
+      key,
+      key.toLowerCase() === 'authorization' && value ? 'Bearer ***' : value
+    ])
+  )
+}
+
+function sanitizeRequestBody(value: unknown): unknown {
+  if (typeof value === 'string') {
+    if (isDataUrl(value)) return summarizeDataUrl(value)
+    if (isLikelyBase64Image(value)) return `[base64:${value.length}]`
+    return value.length > 2000 ? `${value.slice(0, 2000)}...[${value.length} chars]` : value
+  }
+  if (Array.isArray(value)) return value.map(sanitizeRequestBody)
+  if (!isRecord(value)) return value
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [key, sanitizeRequestBody(nested)])
+  )
+}
+
+function isDataUrl(value: string): boolean {
+  return /^data:[^;]+;base64,/i.test(value)
+}
+
+function summarizeDataUrl(value: string): string {
+  const match = /^data:([^;]+);base64,(.*)$/i.exec(value)
+  if (!match) return value.length > 2000 ? `${value.slice(0, 2000)}...[${value.length} chars]` : value
+  return `[data-url:${match[1]};base64:${match[2].length}]`
 }
 
 export class ProviderHttpError extends Error {

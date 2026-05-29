@@ -41,7 +41,7 @@ describe('service routing', () => {
     const imageService = new ImageService(database, providers)
     const promptService = new PromptService(providers)
 
-    await imageService.generate({
+    const result = await imageService.generate({
       conversationId: conversation.id,
       prompt: 'a luminous city',
       ratio: '1:1',
@@ -53,6 +53,20 @@ describe('service routing', () => {
 
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/generations', expect.anything())
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37124/v1/responses', expect.anything())
+    expect(result.items[0].callLog).toMatchObject({
+      provider: {
+        name: 'Image provider'
+      },
+      endpoint: 'http://127.0.0.1:37123/v1/images/generations',
+      request: {
+        headers: {
+          Authorization: 'Bearer ***'
+        },
+        body: {
+          prompt: 'a luminous city'
+        }
+      }
+    })
   })
 
   it('honors auto-save history and failure-detail conversation toggles', async () => {

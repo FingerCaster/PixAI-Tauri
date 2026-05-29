@@ -148,6 +148,24 @@ export type ConnectionTestResult = {
   latencyMs?: number
 }
 
+export type ImageGenerationCallLog = {
+  provider: {
+    id: string
+    name: string
+    type: ProviderType
+    baseUrl: string
+    imageGenerationEndpoint: ImageGenerationEndpoint
+  }
+  endpoint: string
+  method: 'POST'
+  transport: 'json' | 'multipart' | 'streaming-json' | 'streaming-multipart'
+  request: {
+    headers: Record<string, string>
+    body: unknown
+  }
+  createdAt: string
+}
+
 export type GenerateImageInput = {
   conversationId: string
   prompt: string
@@ -254,6 +272,7 @@ export type ImageHistoryItem = {
   globalVisible?: boolean
   generationMode: GenerationMode
   referenceImages: ReferenceImage[]
+  callLog?: ImageGenerationCallLog | null
   createdAt: string
 }
 
