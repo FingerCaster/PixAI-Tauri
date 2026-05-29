@@ -10,6 +10,8 @@
 
 ### 运行与本地起服务
 
+- 真实 Tauri 客户端测试用 `pnpm dev:client`，不要用 `pnpm tauri dev`；前者使用独立 dev identifier，可和已安装 PixAI 客户端共存。
+
 ### 测试
 
 ### 命令与脚本陷阱

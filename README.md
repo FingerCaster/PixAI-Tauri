@@ -51,14 +51,17 @@ pnpm dev
 启动 Tauri 桌面开发环境：
 
 ```bash
-pnpm tauri dev
+pnpm dev:client
 ```
+
+`pnpm dev:client` 使用 `src-tauri/tauri.dev.conf.json`，产品名是 `PixAI Dev`，应用标识是 `com.fingercaster.pixai.tauri.dev`。它可以和已经安装并打开的正式 PixAI 客户端同时运行，适合真实客户端测试。`pnpm tauri dev` 仍使用正式标识，已安装客户端运行时可能触发单实例冲突。
 
 ## 常用命令
 
 ```bash
 pnpm dev                 # 启动 Vite 前端开发服务
-pnpm tauri dev           # 启动 Tauri 桌面开发环境
+pnpm dev:client          # 启动可与已安装 PixAI 共存的 Tauri 测试客户端
+pnpm tauri dev           # 使用正式标识启动 Tauri，已安装客户端运行时可能冲突
 pnpm test                # 运行 Vitest 测试
 pnpm check               # TypeScript 检查 + 测试
 pnpm build               # TypeScript 检查 + 前端生产构建

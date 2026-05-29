@@ -6,6 +6,7 @@
   "packageManager": "pnpm@10.26.2",
   "scripts": {
     "dev": "vite",
+    "dev:client": "tauri dev --config src-tauri/tauri.dev.conf.json",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
