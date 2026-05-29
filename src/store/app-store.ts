@@ -21,7 +21,8 @@ import type {
   PromptTemplateInput,
   ProviderProfileInput,
   ProviderSettings,
-  ProviderSettingsUpdate
+  ProviderSettingsUpdate,
+  ReferenceImageFilePayload
 } from '../shared/types'
 import {
   beginConversationGeneration,
@@ -82,6 +83,7 @@ type AppState = {
   checkForAppUpdate: (options?: { silent?: boolean }) => Promise<void>
   downloadAndInstallAppUpdate: () => Promise<void>
   importReferenceFiles: (files: File[]) => Promise<void>
+  importReferencePayloads: (payloads: ReferenceImageFilePayload[]) => Promise<void>
   addHistoryAsReference: (historyId: string) => Promise<void>
   removeReferenceImage: (referenceImageId: string) => Promise<void>
   reorderReferenceImages: (referenceImageIds: string[]) => Promise<void>
@@ -104,6 +106,7 @@ type AppState = {
 
 let generationClockTimer: number | null = null
 let startupUpdateCheckStarted = false
+const conversationUpdateVersions = new Map<string, number>()
 
 const initialAppUpdateState: AppUpdateState = {
   status: 'idle',
@@ -246,6 +249,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateActiveConversation: async (input) => {
     const id = get().activeConversationId
     if (!id) return
+    const updateVersion = nextConversationUpdateVersion(id)
     const normalized = input.ratio && input.size === undefined ? { ...input, size: getDefaultImageSize(input.ratio) } : input
     set({
       conversations: get().conversations.map((conversation) =>
@@ -253,6 +257,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
     })
     const updated = await pixaiApi.conversation.update(id, normalized)
+    if (conversationUpdateVersions.get(id) !== updateVersion) return
     set({ conversations: get().conversations.map((conversation) => (conversation.id === id ? updated : conversation)) })
   },
   updateSettings: async (input) => {
@@ -439,6 +444,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       const referenceImages = await pixaiApi.reference.importFiles(id, files)
       set({ conversations: get().conversations.map((conversation) => (conversation.id === id ? { ...conversation, referenceImages } : conversation)) })
       get().notify(`已添加 ${files.length} 张参考图`)
+    } catch (error) {
+      get().notify(error instanceof Error ? error.message : '参考图添加失败')
+    }
+  },
+  importReferencePayloads: async (payloads) => {
+    const id = get().activeConversationId
+    if (!id || payloads.length === 0) return
+    try {
+      const referenceImages = await pixaiApi.reference.importPayloads(id, payloads)
+      set({ conversations: get().conversations.map((conversation) => (conversation.id === id ? { ...conversation, referenceImages } : conversation)) })
+      get().notify(`已添加 ${payloads.length} 张参考图`)
     } catch (error) {
       get().notify(error instanceof Error ? error.message : '参考图添加失败')
     }
@@ -775,6 +791,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 function getActiveConversation(state: AppState): Conversation | null {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || null
+}
+
+function nextConversationUpdateVersion(conversationId: string): number {
+  const nextVersion = (conversationUpdateVersions.get(conversationId) || 0) + 1
+  conversationUpdateVersions.set(conversationId, nextVersion)
+  return nextVersion
 }
 
 function findHistoryItem(state: AppState, id: string): ImageHistoryItem | null {

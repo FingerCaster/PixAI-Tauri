@@ -99,6 +99,45 @@ describe('useAppStore', () => {
     expect(conversation.title).toBe(template.title)
   })
 
+  it('keeps the latest active conversation update when older saves resolve later', async () => {
+    await useAppStore.getState().load()
+    const conversation = useAppStore.getState().conversations[0]
+    let resolveFirst: () => void = () => undefined
+    let resolveSecond: () => void = () => undefined
+    vi.spyOn(pixaiApi.conversation, 'update')
+      .mockImplementationOnce((id, input) => new Promise((resolve) => {
+        resolveFirst = () => resolve({
+          ...conversation,
+          ...input,
+          id,
+          draftPrompt: String(input.draftPrompt || ''),
+          updatedAt: '2026-05-29T12:00:01.000Z'
+        })
+      }))
+      .mockImplementationOnce((id, input) => new Promise((resolve) => {
+        resolveSecond = () => resolve({
+          ...conversation,
+          ...input,
+          id,
+          draftPrompt: String(input.draftPrompt || ''),
+          updatedAt: '2026-05-29T12:00:02.000Z'
+        })
+      }))
+
+    const firstSave = useAppStore.getState().updateActiveConversation({ draftPrompt: '旧输入' })
+    const secondSave = useAppStore.getState().updateActiveConversation({ draftPrompt: '最新输入' })
+
+    expect(useAppStore.getState().conversations[0].draftPrompt).toBe('最新输入')
+
+    resolveSecond()
+    await secondSave
+    expect(useAppStore.getState().conversations[0].draftPrompt).toBe('最新输入')
+
+    resolveFirst()
+    await firstSave
+    expect(useAppStore.getState().conversations[0].draftPrompt).toBe('最新输入')
+  })
+
   it('shows generation state immediately while image generation is pending', async () => {
     await useAppStore.getState().load()
     await useAppStore.getState().updateActiveConversation({ draftPrompt: '一只发光的玻璃风铃', n: 2 })

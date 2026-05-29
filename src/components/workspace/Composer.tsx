@@ -1,28 +1,62 @@
-import type { ChangeEvent, DragEvent } from 'react'
-import { useEffect, useState } from 'react'
+import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
-import { imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
+import { imageSourceForDisplay, imageSourceForDisplaySync, isTauriRuntime, readLocalImageFile } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation, ReferenceImage } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
+
+const PROMPT_DRAFT_SAVE_DELAY_MS = 250
 
 export function Composer({ conversation, generating }: { conversation: Conversation; generating: boolean }) {
   const {
     enrichPrompt,
     generate,
     importReferenceFiles,
+    importReferencePayloads,
     inspirePrompt,
+    notify,
     promptAssistantRunning,
     removeReferenceImage,
     updateActiveConversation
   } = useAppStore()
   const [referenceSources, setReferenceSources] = useState<Record<string, string>>({})
+  const [draftPrompt, setDraftPrompt] = useState(conversation.draftPrompt)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [previewReference, setPreviewReference] = useState<ReferenceImage | null>(null)
+  const composingPromptRef = useRef(false)
+  const draftPromptRef = useRef(conversation.draftPrompt)
+  const persistedDraftPromptRef = useRef(conversation.draftPrompt)
+  const promptSaveTimerRef = useRef<number | null>(null)
+  const promptSaveVersionRef = useRef(0)
+  const previousConversationIdRef = useRef(conversation.id)
+  const promptBoxRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => () => clearPromptSaveTimer(), [])
+
+  useEffect(() => {
+    if (previousConversationIdRef.current !== conversation.id) {
+      clearPromptSaveTimer()
+      composingPromptRef.current = false
+      promptSaveVersionRef.current += 1
+      previousConversationIdRef.current = conversation.id
+      persistedDraftPromptRef.current = conversation.draftPrompt
+      draftPromptRef.current = conversation.draftPrompt
+      setDraftPrompt(conversation.draftPrompt)
+      return
+    }
+
+    persistedDraftPromptRef.current = conversation.draftPrompt
+    if (composingPromptRef.current || promptSaveTimerRef.current != null) return
+    if (draftPromptRef.current === conversation.draftPrompt) return
+    draftPromptRef.current = conversation.draftPrompt
+    setDraftPrompt(conversation.draftPrompt)
+  }, [conversation.id, conversation.draftPrompt])
 
   useEffect(() => {
     let canceled = false
@@ -48,14 +82,128 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     }
   }, [conversation.referenceImages])
 
-  const onFiles = (files: FileList | null) => {
+  useEffect(() => {
+    if (!isTauriRuntime()) return
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    const importDroppedPaths = async (paths: string[]) => {
+      const imagePaths = paths.filter(isReferenceImagePath)
+      if (imagePaths.length === 0) return
+      try {
+        const payloads = await Promise.all(imagePaths.map((path) => readLocalImageFile(path)))
+        await importReferencePayloads(payloads)
+      } catch (error) {
+        notify(error instanceof Error ? error.message : '参考图添加失败')
+      }
+    }
+
+    void getCurrentWindow().onDragDropEvent((event) => {
+      const payload = event.payload
+      if (payload.type !== 'drop') return
+      if (!isTauriDropInsideElement(payload.position, promptBoxRef.current)) return
+      void importDroppedPaths(payload.paths)
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup()
+        return
+      }
+      unlisten = cleanup
+    }).catch((error) => {
+      notify(error instanceof Error ? `拖放监听启动失败：${error.message}` : '拖放监听启动失败')
+    })
+
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [importReferencePayloads, notify])
+
+  const onFiles = (files: FileList | File[] | null) => {
     if (!files?.length) return
     void importReferenceFiles(Array.from(files))
   }
 
+  function clearPromptSaveTimer(): void {
+    if (promptSaveTimerRef.current == null) return
+    window.clearTimeout(promptSaveTimerRef.current)
+    promptSaveTimerRef.current = null
+  }
+
+  async function persistDraftPromptNow(nextPrompt = draftPromptRef.current): Promise<void> {
+    clearPromptSaveTimer()
+    if (nextPrompt === persistedDraftPromptRef.current) return
+    const saveVersion = promptSaveVersionRef.current + 1
+    promptSaveVersionRef.current = saveVersion
+    await updateActiveConversation({ draftPrompt: nextPrompt })
+    if (promptSaveVersionRef.current !== saveVersion) return
+    persistedDraftPromptRef.current = nextPrompt
+  }
+
+  function scheduleDraftPromptSave(): void {
+    clearPromptSaveTimer()
+    if (composingPromptRef.current) return
+    if (draftPromptRef.current === persistedDraftPromptRef.current) return
+    promptSaveTimerRef.current = window.setTimeout(() => {
+      promptSaveTimerRef.current = null
+      void persistDraftPromptNow()
+    }, PROMPT_DRAFT_SAVE_DELAY_MS)
+  }
+
+  function updateDraftPrompt(nextPrompt: string): void {
+    draftPromptRef.current = nextPrompt
+    setDraftPrompt(nextPrompt)
+    scheduleDraftPromptSave()
+  }
+
+  function onPromptCompositionStart(): void {
+    composingPromptRef.current = true
+    clearPromptSaveTimer()
+  }
+
+  function onPromptCompositionEnd(event: CompositionEvent<HTMLTextAreaElement>): void {
+    composingPromptRef.current = false
+    updateDraftPrompt(event.currentTarget.value)
+    void persistDraftPromptNow(event.currentTarget.value)
+  }
+
+  async function onEnrichPrompt(): Promise<void> {
+    await persistDraftPromptNow()
+    await enrichPrompt()
+  }
+
+  async function onInspirePrompt(): Promise<void> {
+    clearPromptSaveTimer()
+    await inspirePrompt()
+  }
+
+  async function onGenerate(): Promise<void> {
+    await persistDraftPromptNow()
+    await generate()
+  }
+
   const onDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
+    event.stopPropagation()
     onFiles(event.dataTransfer.files)
+  }
+
+  const onPromptPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const imageFiles = imageFilesFromTransfer(event.clipboardData)
+    if (imageFiles.length === 0) return
+    event.preventDefault()
+    onFiles(imageFiles)
+  }
+
+  const onPromptDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (hasImageTransfer(event.dataTransfer)) event.preventDefault()
+  }
+
+  const onPromptDrop = (event: DragEvent<HTMLDivElement>) => {
+    const imageFiles = imageFilesFromTransfer(event.dataTransfer)
+    if (imageFiles.length === 0) return
+    event.preventDefault()
+    onFiles(imageFiles)
   }
 
   return (
@@ -69,11 +217,11 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           </div>
         </div>
         <div className="composer-actions flex items-center gap-2">
-          <Button variant="outline" size="sm" type="button" onClick={() => void inspirePrompt()} disabled={promptAssistantRunning.inspire}>
+          <Button variant="outline" size="sm" type="button" onClick={() => void onInspirePrompt()} disabled={promptAssistantRunning.inspire}>
             {promptAssistantRunning.inspire ? <Loader2 className="spin animate-spin" /> : <Sparkles />}
             灵感
           </Button>
-          <Button variant="outline" size="sm" type="button" onClick={() => void enrichPrompt()} disabled={!conversation.draftPrompt.trim() || promptAssistantRunning.enrich}>
+          <Button variant="outline" size="sm" type="button" onClick={() => void onEnrichPrompt()} disabled={!draftPrompt.trim() || promptAssistantRunning.enrich}>
             {promptAssistantRunning.enrich ? <Loader2 className="spin animate-spin" /> : <WandSparkles />}
             丰富
           </Button>
@@ -98,12 +246,15 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           ))}
         </div>
       ) : null}
-      <div className="prompt-box rounded-xl border border-input bg-background">
+      <div ref={promptBoxRef} className="prompt-box rounded-xl border border-input bg-background" onDragOver={onPromptDragOver} onDrop={onPromptDrop}>
         <Textarea
           className="prompt-textarea min-h-28 resize-none border-0 bg-transparent p-3 text-base shadow-none focus-visible:ring-0"
-          value={conversation.draftPrompt}
+          value={draftPrompt}
           placeholder="描述你想生成的画面..."
-          onChange={(event) => void updateActiveConversation({ draftPrompt: event.target.value })}
+          onChange={(event) => updateDraftPrompt(event.target.value)}
+          onCompositionStart={onPromptCompositionStart}
+          onCompositionEnd={onPromptCompositionEnd}
+          onPaste={onPromptPaste}
         />
         <div className="prompt-foot flex items-center gap-2 border-t border-border px-2 py-2">
           <label
@@ -128,7 +279,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           <Button className="prompt-expand-button" variant="ghost" size="icon-sm" type="button" onClick={() => setPromptExpanded(true)} title="放大查看提示词" aria-label="放大查看提示词">
             <Maximize2 size={16} />
           </Button>
-          <Button className="generate-button" type="button" onClick={() => void generate()} disabled={!conversation.draftPrompt.trim()}>
+          <Button className="generate-button" type="button" onClick={() => void onGenerate()} disabled={!draftPrompt.trim()}>
             {generating ? <Loader2 className="spin animate-spin" /> : <WandSparkles />}
             {generating ? '继续生成' : '生成图片'}
           </Button>
@@ -137,10 +288,13 @@ export function Composer({ conversation, generating }: { conversation: Conversat
       {promptExpanded ? (
         <PromptExpandModal
           conversation={conversation}
+          draftPrompt={draftPrompt}
           generating={generating}
           onClose={() => setPromptExpanded(false)}
-          onGenerate={() => void generate()}
-          onPromptChange={(draftPrompt) => void updateActiveConversation({ draftPrompt })}
+          onGenerate={() => void onGenerate()}
+          onPromptChange={updateDraftPrompt}
+          onPromptCompositionStart={onPromptCompositionStart}
+          onPromptCompositionEnd={onPromptCompositionEnd}
         />
       ) : null}
       {previewReference ? (
@@ -152,6 +306,37 @@ export function Composer({ conversation, generating }: { conversation: Conversat
       ) : null}
     </section>
   )
+}
+
+function imageFilesFromTransfer(transfer: DataTransfer | null): File[] {
+  if (!transfer) return []
+  const itemFiles = Array.from(transfer.items || [])
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null && isImageFile(file))
+  if (itemFiles.length > 0) return itemFiles
+  return Array.from(transfer.files || []).filter(isImageFile)
+}
+
+function hasImageTransfer(transfer: DataTransfer | null): boolean {
+  return imageFilesFromTransfer(transfer).length > 0
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.toLowerCase().startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(file.name)
+}
+
+function isReferenceImagePath(path: string): boolean {
+  return /\.(png|jpe?g|webp)$/i.test(path)
+}
+
+function isTauriDropInsideElement(position: { x: number; y: number }, element: HTMLElement | null): boolean {
+  if (!element) return false
+  const scaleFactor = Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0 ? window.devicePixelRatio : 1
+  const x = position.x / scaleFactor
+  const y = position.y / scaleFactor
+  const rect = element.getBoundingClientRect()
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
 
 function ReferencePreviewModal({ reference, source, onClose }: { reference: ReferenceImage; source: string; onClose: () => void }) {
@@ -189,16 +374,22 @@ function formatFileSize(bytes: number): string {
 
 function PromptExpandModal({
   conversation,
+  draftPrompt,
   generating,
   onClose,
   onGenerate,
-  onPromptChange
+  onPromptChange,
+  onPromptCompositionStart,
+  onPromptCompositionEnd
 }: {
   conversation: Conversation
+  draftPrompt: string
   generating: boolean
   onClose: () => void
   onGenerate: () => void
   onPromptChange: (draftPrompt: string) => void
+  onPromptCompositionStart: () => void
+  onPromptCompositionEnd: (event: CompositionEvent<HTMLTextAreaElement>) => void
 }) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -219,13 +410,15 @@ function PromptExpandModal({
         </DialogHeader>
         <Textarea
           className="prompt-expand-textarea min-h-[46vh] resize-none text-base"
-          value={conversation.draftPrompt}
+          value={draftPrompt}
           placeholder="描述你想生成的画面..."
           autoFocus
           onChange={(event) => onPromptChange(event.target.value)}
+          onCompositionStart={onPromptCompositionStart}
+          onCompositionEnd={onPromptCompositionEnd}
         />
         <div className="prompt-expand-actions flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">{conversation.draftPrompt.trim().length} 字符</span>
+          <span className="text-sm text-muted-foreground">{draftPrompt.trim().length} 字符</span>
           <Button
             className="generate-button"
             type="button"
@@ -233,7 +426,7 @@ function PromptExpandModal({
               onClose()
               onGenerate()
             }}
-            disabled={!conversation.draftPrompt.trim()}
+            disabled={!draftPrompt.trim()}
           >
             {generating ? <Loader2 className="spin animate-spin" /> : <WandSparkles />}
             {generating ? '继续生成' : '生成图片'}
