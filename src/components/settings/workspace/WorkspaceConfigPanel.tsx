@@ -28,7 +28,7 @@ import {
   getImageSizeOptions,
   supportsImageInputFidelity
 } from '../../../shared/image-options'
-import type { ImageBackground, ImageInputFidelity, ImageModeration, ImageOutputFormat } from '../../../shared/types'
+import type { ImageBackground, ImageGenerationEndpoint, ImageInputFidelity, ImageModeration, ImageOutputFormat } from '../../../shared/types'
 import { useAppStore } from '../../../store/app-store'
 import { GallerySelect } from '../../common/GallerySelect'
 import { SettingsToggleRow } from '../SettingsToggleRow'
@@ -54,6 +54,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
   const [selectedImageProfileId, setSelectedImageProfileId] = useState(settings?.selectedImageProfileId || '')
   const [selectedPromptProfileId, setSelectedPromptProfileId] = useState(settings?.selectedPromptProfileId || '')
   const [imageModel, setImageModel] = useState(DEFAULT_MODEL)
+  const [imageGenerationEndpoint, setImageGenerationEndpoint] = useState<ImageGenerationEndpoint>('images-api')
   const [promptModel, setPromptModel] = useState(DEFAULT_PROMPT_MODEL)
 
   useEffect(() => {
@@ -63,6 +64,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
     setSelectedImageProfileId(imageProfile?.id || '')
     setSelectedPromptProfileId(promptProfile?.id || '')
     setImageModel(imageProfile?.defaultImageModel || DEFAULT_MODEL)
+    setImageGenerationEndpoint(imageProfile?.imageGenerationEndpoint || 'images-api')
     setPromptModel(promptProfile?.defaultPromptModel || DEFAULT_PROMPT_MODEL)
   }, [imageProfiles, profiles, promptProfiles, settings])
 
@@ -89,10 +91,17 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
       await upsertProfile({
         ...imageProfile,
         defaultImageModel: imageModel.trim() || DEFAULT_MODEL,
+        imageGenerationEndpoint,
         defaultPromptModel: promptModel.trim() || DEFAULT_PROMPT_MODEL
       })
     } else {
-      if (imageProfile) await upsertProfile({ ...imageProfile, defaultImageModel: imageModel.trim() || DEFAULT_MODEL })
+      if (imageProfile) {
+        await upsertProfile({
+          ...imageProfile,
+          defaultImageModel: imageModel.trim() || DEFAULT_MODEL,
+          imageGenerationEndpoint
+        })
+      }
       if (promptProfile) await upsertProfile({ ...promptProfile, defaultPromptModel: promptModel.trim() || DEFAULT_PROMPT_MODEL })
     }
     await updateSettings({
@@ -132,6 +141,7 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
                 const profile = profiles.find((item) => item.id === profileId)
                 setSelectedImageProfileId(profileId)
                 setImageModel(profile?.defaultImageModel || DEFAULT_MODEL)
+                setImageGenerationEndpoint(profile?.imageGenerationEndpoint || 'images-api')
               }}
             />
           ) : (
@@ -164,6 +174,20 @@ export function WorkspaceConfigPanel({ onOpenGlobalSettings }: WorkspaceConfigPa
           图片模型
           <Input value={imageModel} disabled={!hasImageProfiles} placeholder="先添加 Provider" onChange={(event) => setImageModel(event.target.value)} />
         </Label>
+        <div className="field grid gap-1.5">
+          <span className="text-xs text-muted-foreground">生图端点</span>
+          <GallerySelect
+            value={imageGenerationEndpoint}
+            options={[
+              { value: 'images-api', label: 'Images API' },
+              { value: 'responses-api', label: 'Responses 图像工具' }
+            ]}
+            ariaLabel="生图端点"
+            className="settings-select"
+            disabled={!hasImageProfiles}
+            onChange={(endpoint) => setImageGenerationEndpoint(endpoint as ImageGenerationEndpoint)}
+          />
+        </div>
         <Label className="grid gap-1.5 text-xs text-muted-foreground">
           提示词模型
           <Input value={promptModel} disabled={!hasPromptProfiles} placeholder="先添加 Provider" onChange={(event) => setPromptModel(event.target.value)} />
