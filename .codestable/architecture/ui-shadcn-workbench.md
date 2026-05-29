@@ -4,10 +4,10 @@ slug: ui-shadcn-workbench
 scope: PixAI React 前端 UI 基座、工作台、设置系统、图库和提示词库的当前结构
 summary: 前端界面已统一到 Tailwind v4 + shadcn/ui primitives，业务状态仍由 Zustand store 提供。
 status: current
-last_reviewed: 2026-05-24
+last_reviewed: 2026-05-29
 tags: [ui, react, shadcn, tailwind, desktop-workbench]
 depends_on: []
-implements: []
+implements: [reference-image-input]
 ---
 
 ## 0. 术语
@@ -50,15 +50,17 @@ shadcn 配置固定为 TSX、CSS variables、lucide 图标和 `@/components/ui` 
 
 `Workspace` 是生成页容器，只负责选出当前会话、当前会话 runs 和生成状态，再组合 `Composer` 与 `CanvasArea`。`src/components/workspace/Workspace.tsx:5` `src/components/workspace/Workspace.tsx:21`
 
-`Composer` 承载提示词、参考图、灵感/丰富 prompt、生成按钮、提示词放大编辑和参考图预览；交互状态仍通过 `useAppStore` actions 写回会话。`src/components/workspace/Composer.tsx:13` `src/components/workspace/Composer.tsx:61`
+`Composer` 承载提示词、参考图、灵感/丰富 prompt、生成按钮、提示词放大编辑和参考图预览；提示词编辑先进入组件本地 draft buffer，中文输入法 composition 结束或短延迟后再写回 `useAppStore`，避免异步持久化回写打断中间插入；主提示词输入区可把粘贴、DOM 拖入的图片 `File` 交给 `importReferenceFiles`，也可在 Tauri runtime 中把原生拖放路径读取成 payload 后交给 `importReferencePayloads`。`src/components/workspace/Composer.tsx:16` `src/components/workspace/Composer.tsx:33` `src/components/workspace/Composer.tsx:164` `src/store/app-store.ts:451`
 
 `CanvasArea` 负责把 runs 映射为分页网格条目，生成中占位、失败清理和结果 summary 都在这里汇总。`src/components/workspace/CanvasArea.tsx:21` `src/components/workspace/CanvasArea.tsx:71` `src/components/workspace/CanvasArea.tsx:119`
 
 `ImageTile` 负责单张结果的成功/失败展示、预览、复制、下载、收藏、删除和作为参考图编辑。`src/components/workspace/ImageTile.tsx:13` `src/components/workspace/ImageTile.tsx:65` `src/components/workspace/ImageTile.tsx:110`
 
+`WorkspaceConfigPanel` 右侧工作区设置承载高频生成参数和引擎默认项；引擎卡片可直接切换图片 Provider、提示词 Provider、图片模型、提示词模型和生图端点，保存时回写对应 Provider profile 与当前会话模型。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:44` `src/components/settings/workspace/WorkspaceConfigPanel.tsx:90` `src/components/settings/workspace/WorkspaceConfigPanel.tsx:172`
+
 ### 2.4 设置系统
 
-工作区右侧 `WorkspaceConfigPanel` 只承载高频会话参数和当前默认 Provider/模型选择，并通过“管理服务”跳到全局 Services 设置。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:41` `src/components/settings/workspace/WorkspaceConfigPanel.tsx:99` `src/components/settings/workspace/WorkspaceConfigPanel.tsx:103`
+工作区右侧 `WorkspaceConfigPanel` 只承载高频会话参数和当前默认 Provider / 模型 / 生图端点选择，并通过“管理服务”跳到全局 Services 设置。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:41` `src/components/settings/workspace/WorkspaceConfigPanel.tsx:84` `src/components/settings/workspace/WorkspaceConfigPanel.tsx:178`
 
 `GlobalSettingsModal` 使用 shadcn Dialog + Tabs + ScrollArea，按 General、Notifications、Services、Extensions 四个 tab 组织低频应用级配置。`src/components/settings/global/GlobalSettingsModal.tsx:20` `src/components/settings/global/GlobalSettingsModal.tsx:42` `src/components/settings/global/GlobalSettingsModal.tsx:64`
 
@@ -101,9 +103,9 @@ UI 不直接持久化业务数据。`useAppStore` 仍拥有视图、主题、设
 ## 6. 已知约束 / 边界情况
 
 - UI 重写不得改变 `useAppStore` actions 的业务语义；视觉组件从 store 读取或调用 action，但不重新定义持久化边界。`src/store/app-store.ts:60`
-- 高频生图参数必须在工作区一层可达；Provider 完整维护在全局 Services tab 内。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:99` `src/components/settings/global/ServicesSettingsTab.tsx:118`
+- 高频生图参数必须在工作区一层可达；Provider 完整维护在全局 Services tab 内。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:121` `src/components/settings/global/ServicesSettingsTab.tsx:118`
 - 应用是桌面工作台，当前 CSS 基线设置了 `1080px × 720px` 最小尺寸，不按移动端响应式重排。`src/index.css:126`
-- 隐藏文件上传 input 仍保留在 `Composer` 中，因为浏览器文件选择能力需要真实 file input 作为入口。`src/components/workspace/Composer.tsx:117`
+- 隐藏文件上传 input 仍保留在 `Composer` 中，因为浏览器文件选择能力需要真实 file input 作为入口；粘贴 / 拖入图片只是新增入口，不能替代文件选择控件。Windows Tauri 默认文件拖放会先进入原生 `onDragDropEvent`，不能只依赖 HTML5 `DataTransfer.files`。`src/components/workspace/Composer.tsx:71` `src/components/workspace/Composer.tsx:167`
 
 ## 7. 相关文档
 
