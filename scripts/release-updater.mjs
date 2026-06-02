@@ -319,6 +319,21 @@ async function readReleaseMetadata(tag) {
 }
 
 async function readExistingLatestManifest(tag) {
+  try {
+    const raw = await runCommandCapture('gh', [
+      'release',
+      'download',
+      tag,
+      '--pattern',
+      'latest.json',
+      '--output',
+      '-'
+    ], { cwd: rootDir, env: process.env, shell: false })
+    if (raw) return JSON.parse(raw)
+  } catch {
+    // Fall back to the public release asset URL for environments without gh auth.
+  }
+
   const url = `${githubReleaseBaseUrl}/${encodeURIComponent(tag)}/latest.json`
   try {
     const response = await fetch(url, {
