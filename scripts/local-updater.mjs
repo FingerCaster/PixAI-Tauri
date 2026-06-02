@@ -108,7 +108,7 @@ async function publishLocalUpdater() {
   const port = Number(options.port || defaultPort)
   await ensureDir(feedDir)
 
-  const artifacts = await findUpdaterArtifacts({ srcTauriDir, version, macosArch: readStringOption(options.macosArch || options.arch) })
+  const artifacts = await findUpdaterArtifacts({ srcTauriDir, version, macosArch: readMacosArchOption() })
   if (!hasUpdaterArtifacts(artifacts)) {
     throw new Error(
       `No updater bundle found for version ${version}. Run "pnpm updater:local:build -- --version ${version}" first.`
@@ -252,6 +252,10 @@ function parseArgs(args) {
 
 function readStringOption(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function readMacosArchOption() {
+  return readStringOption(options.macosArch || options['macos-arch'] || options.arch)
 }
 
 async function runCommand(command, args, { cwd, env }) {

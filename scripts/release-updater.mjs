@@ -162,7 +162,7 @@ async function stageReleaseUpdater() {
 
   const version = await resolveVersion()
   const tag = resolveTag(version)
-  const artifacts = await findUpdaterArtifacts({ srcTauriDir, version, macosArch: readStringOption(options.macosArch || options.arch) })
+  const artifacts = await findUpdaterArtifacts({ srcTauriDir, version, macosArch: readMacosArchOption() })
   if (!hasUpdaterArtifacts(artifacts)) {
     throw new Error(
       `No signed updater bundle found for version ${version}. Run "pnpm updater:release:build -- --version ${version}" first.`
@@ -293,7 +293,7 @@ function resolveTag(version) {
 }
 
 function macosBuildTargetArgs() {
-  const arch = normalizeMacosArch(readStringOption(options.macosArch || options.arch))
+  const arch = normalizeMacosArch(readMacosArchOption())
   if (!arch) return []
   return ['--target', `${arch}-apple-darwin`]
 }
@@ -392,6 +392,10 @@ function parseArgs(args) {
 
 function readStringOption(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function readMacosArchOption() {
+  return readStringOption(options.macosArch || options['macos-arch'] || options.arch)
 }
 
 function normalizeMacosArch(value) {
