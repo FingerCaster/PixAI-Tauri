@@ -172,7 +172,7 @@ describe('service routing', () => {
     })
     const imageProfile = settings.profiles.at(-1)
     await providers.update({ selectedImageProfileId: imageProfile?.id })
-    vi.mocked(fetch).mockRejectedValueOnce(PlatformHttpProxyError.fromInvokeError(
+    const transportError = PlatformHttpProxyError.fromInvokeError(
       'https://ai-pixel.online/v1/images/generations',
       'POST',
       JSON.stringify({
@@ -185,7 +185,10 @@ describe('service routing', () => {
         isBody: false,
         sourceChain: ['connection closed before message completed']
       })
-    ))
+    )
+    vi.mocked(fetch)
+      .mockRejectedValueOnce(transportError)
+      .mockRejectedValueOnce(transportError)
 
     const database = new AppDatabase()
     const conversation = await database.createConversation()
@@ -205,5 +208,41 @@ describe('service routing', () => {
     expect(result.items[0].errorDetails).toContain('"stage": "transport"')
     expect(result.items[0].errorDetails).toContain('"isConnect": true')
     expect(result.items[0].errorDetails).toContain('上游可能已收到请求并完成生成')
+  })
+
+  it('retries HTTP 502 image failures with the default retry count', async () => {
+    const providers = new ProviderSettingsStore()
+    const settings = await providers.upsertProfile({
+      name: 'Image provider',
+      baseUrl: 'http://127.0.0.1:37123',
+      enabledUsages: ['image'],
+      apiKey: 'sk-123456789'
+    })
+    const imageProfile = settings.profiles.at(-1)
+    await providers.update({ selectedImageProfileId: imageProfile?.id })
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: { message: 'bad gateway' } }), { status: 502, statusText: 'Bad Gateway' }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ data: [{ b64_json: 'b'.repeat(120) }] }), { status: 200 }))
+
+    const database = new AppDatabase()
+    const conversation = await database.createConversation()
+    const imageService = new ImageService(database, providers)
+
+    const result = await imageService.generate({
+      conversationId: conversation.id,
+      prompt: 'a luminous city',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'high',
+      n: 1
+    })
+    const runs = await database.listRuns(conversation.id)
+
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(result.items[0]).toMatchObject({
+      status: 'succeeded',
+      retryAttempt: 1
+    })
+    expect(runs[0].retryFailures[0]?.errorMessage).toContain('bad gateway')
   })
 })

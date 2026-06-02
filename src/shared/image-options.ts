@@ -10,7 +10,7 @@ import type {
 export const DEFAULT_MODEL = 'gpt-image-2'
 export const DEFAULT_PROMPT_MODEL = 'gpt-5.4-mini'
 export const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = 'png'
-export const DEFAULT_IMAGE_MAX_RETRIES = 0
+export const DEFAULT_IMAGE_MAX_RETRIES = 1
 export const MAX_IMAGE_MAX_RETRIES = 10
 export const DEFAULT_IMAGE_GENERATION_TIMEOUT_SECONDS = 300
 export const IMAGE_RATIOS: ImageRatio[] = ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '9:21']

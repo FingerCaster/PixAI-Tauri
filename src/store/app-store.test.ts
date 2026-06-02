@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openAiCompatibleAdapter } from '../adapters/openai-compatible'
 import { __getSentNotificationsForTests, __setNotificationPermissionForTests, getProfileSecret } from '../lib/platform'
 import { pixaiApi } from '../services/app-api'
-import type { GenerateImageResult, GenerationRun } from '../shared/types'
+import type { GenerateImageResult, GenerationRun, ImageHistoryItem } from '../shared/types'
 import { useAppStore } from './app-store'
 
 describe('useAppStore', () => {
@@ -268,6 +268,91 @@ describe('useAppStore', () => {
 
     expect(deleteManySpy).toHaveBeenCalledWith(['history-1', 'history-2'])
     expect(deleteSpy).not.toHaveBeenCalled()
+  })
+
+  it('retries a failed history item with its original generation parameters', async () => {
+    await useAppStore.getState().load()
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      model: 'gpt-image-2',
+      ratio: '16:9' as const,
+      size: '1792x1008',
+      quality: 'high' as const,
+      maxRetries: 3
+    }
+    const failedItem: ImageHistoryItem = {
+      id: 'history-retry-store-test',
+      conversationId: conversation.id,
+      runId: 'run-retry-source',
+      prompt: '一座雨夜玻璃城市',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      requestIndex: 0,
+      durationMs: 1200,
+      dataUrl: null,
+      fileSizeBytes: null,
+      status: 'failed',
+      errorMessage: '图片请求失败，HTTP 状态码 502。',
+      errorDetails: null,
+      retryAttempt: 3,
+      favorite: false,
+      generationMode: 'text-to-image',
+      referenceImages: [],
+      createdAt: '2026-06-02T14:00:00.000Z'
+    }
+    const retryRun: GenerationRun = {
+      id: 'run-retry-new',
+      conversationId: conversation.id,
+      prompt: failedItem.prompt,
+      model: failedItem.model,
+      ratio: failedItem.ratio,
+      size: failedItem.size,
+      quality: failedItem.quality,
+      n: 1,
+      status: 'succeeded',
+      durationMs: 900,
+      errorMessage: null,
+      errorDetails: null,
+      maxRetries: conversation.maxRetries,
+      retryAttempts: {},
+      retryFailures: {},
+      generationMode: 'text-to-image',
+      referenceImages: [],
+      createdAt: '2026-06-02T14:01:00.000Z',
+      items: []
+    }
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      history: [failedItem],
+      runsByConversation: {
+        [conversation.id]: [{
+          ...retryRun,
+          id: 'run-retry-source',
+          status: 'failed',
+          items: [failedItem]
+        }]
+      }
+    })
+    const generateSpy = vi.spyOn(pixaiApi.image, 'generate').mockResolvedValue({ run: retryRun, items: [] })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([retryRun])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([])
+
+    await useAppStore.getState().retryHistory(failedItem.id)
+
+    expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: conversation.id,
+      prompt: failedItem.prompt,
+      model: failedItem.model,
+      ratio: failedItem.ratio,
+      size: failedItem.size,
+      quality: failedItem.quality,
+      n: 1,
+      maxRetries: 3
+    }))
+    expect(useAppStore.getState().toast).toContain('重试完成')
   })
 })
 

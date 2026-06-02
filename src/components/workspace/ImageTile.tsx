@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Copy, Download, Edit3, Heart, ImageDown, ScrollText, Trash2 } from 'lucide-react'
+import { Copy, Download, Edit3, Heart, ImageDown, RotateCcw, ScrollText, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -14,7 +14,7 @@ import { ImageCallLogModal } from './ImageCallLogModal'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 export function ImageTile({ item }: { item: ImageHistoryItem }) {
-  const { addHistoryAsReference, deleteHistory, notify, toggleFavorite } = useAppStore()
+  const { addHistoryAsReference, deleteHistory, notify, retryHistory, toggleFavorite } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
   const [callLogOpen, setCallLogOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -95,6 +95,18 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           </div>
         </div>
         <div className="tile-actions flex justify-end gap-1 border-t border-destructive/15 p-2">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void retryHistory(item.id)
+            }}
+            title="重试"
+          >
+            <RotateCcw size={15} />
+          </Button>
           {item.callLog ? (
             <Button
               variant="ghost"

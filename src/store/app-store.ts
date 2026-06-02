@@ -90,6 +90,7 @@ type AppState = {
   inspirePrompt: () => Promise<void>
   enrichPrompt: () => Promise<void>
   generate: () => Promise<void>
+  retryHistory: (id: string) => Promise<void>
   cancelGeneration: (runId?: string, requestIndex?: number) => Promise<void>
   refreshConversationResults: (conversationId: string) => Promise<void>
   reloadHistory: (options?: Partial<HistoryListOptions>) => Promise<void>
@@ -589,6 +590,107 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!result.canceled) await notifyGenerationFinished(result.items, result.errorMessage || null, get, durationText)
     } catch (error) {
       const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `生成失败：${error.message}` : '生成失败'
+      get().notify(message)
+      await notifyGenerationFinished([], message, get, '')
+    } finally {
+      const endedGenerationState = endConversationGeneration(conversation.id, {
+        generatingByConversation: get().generatingByConversation,
+        startedAtByConversation: get().generationStartedAtByConversation,
+        removedIndexesByRunId: get().removedGenerationIndexesByRunId
+      })
+      set({
+        generatingByConversation: endedGenerationState.generatingByConversation,
+        generationStartedAtByConversation: endedGenerationState.startedAtByConversation,
+        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId
+      })
+      if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
+    }
+  },
+  retryHistory: async (id) => {
+    const item = findHistoryItem(get(), id) || await pixaiApi.history.get(id)
+    if (!item || item.status !== 'failed') {
+      get().notify('未找到可重试的失败记录')
+      return
+    }
+    if (!item.conversationId) {
+      get().notify('这条失败记录没有关联会话，无法重试')
+      return
+    }
+    const storedConversation = get().conversations.find((conversation) => conversation.id === item.conversationId)
+    const fetchedConversation = storedConversation ? null : await pixaiApi.conversation.get(item.conversationId)
+    const conversation = storedConversation || fetchedConversation
+    if (!conversation) {
+      get().notify('未找到原会话，无法重试')
+      return
+    }
+    const generationStartedAt = Date.now()
+    set({
+      activeConversationId: conversation.id,
+      view: 'workspace',
+      generationClockMs: generationStartedAt,
+      conversations: storedConversation ? get().conversations : [conversation, ...get().conversations]
+    })
+    startGenerationClock()
+    const referenceImageIds = item.referenceImages
+      .map((reference) => reference.id)
+      .filter((referenceId) => conversation.referenceImages.some((reference) => reference.id === referenceId))
+    const input: GenerateImageInput = {
+      conversationId: conversation.id,
+      prompt: item.prompt.trim(),
+      model: item.model || conversation.model || getSelectedImageProfile(get().settings)?.defaultImageModel || DEFAULT_MODEL,
+      ratio: item.ratio,
+      size: item.size && isImageSizeCompatible(item.ratio, item.size) ? item.size : getDefaultImageSize(item.ratio),
+      quality: item.quality,
+      n: 1,
+      outputFormat: conversation.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
+      outputCompression: conversation.outputCompression ?? undefined,
+      background: conversation.background,
+      moderation: conversation.moderation,
+      stream: conversation.stream,
+      partialImages: conversation.partialImages ?? undefined,
+      inputFidelity: conversation.inputFidelity ?? undefined,
+      maxRetries: conversation.maxRetries,
+      generationTimeoutSeconds: normalizeImageGenerationTimeoutSeconds(conversation.generationTimeoutSeconds),
+      referenceImageIds
+    }
+    const nextGenerationState = beginConversationGeneration(conversation.id, {
+      generatingByConversation: get().generatingByConversation,
+      startedAtByConversation: get().generationStartedAtByConversation,
+      removedIndexesByRunId: get().removedGenerationIndexesByRunId
+    }, generationStartedAt)
+    set({
+      generatingByConversation: nextGenerationState.generatingByConversation,
+      generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
+      removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+    })
+    try {
+      const resultPromise = pixaiApi.image.generate(input)
+      void get().refreshConversationResults(conversation.id)
+      const result = await resultPromise
+      const runs = await pixaiApi.conversation.runs(conversation.id)
+      const history = await pixaiApi.history.list({
+        query: get().query,
+        favoritesOnly: get().favoritesOnly,
+        sort: 'newest'
+      })
+      const runsByConversation = { ...get().runsByConversation, [conversation.id]: runs }
+      const runningRunIds = collectRunningRunIds(runsByConversation)
+      const prunedGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
+        generatingByConversation: get().generatingByConversation,
+        startedAtByConversation: get().generationStartedAtByConversation,
+        removedIndexesByRunId: get().removedGenerationIndexesByRunId
+      })
+      set({
+        runsByConversation,
+        history,
+        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
+      })
+      const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
+      const completionMessage = result.errorMessage ? `重试失败：${result.errorMessage}${durationText}` : `重试完成${durationText}`
+      get().notify(completionMessage)
+      await notifyGenerationFinished(result.items, result.errorMessage || null, get, durationText)
+    } catch (error) {
+      const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `重试失败：${error.message}` : '重试失败'
       get().notify(message)
       await notifyGenerationFinished([], message, get, '')
     } finally {

@@ -1,7 +1,7 @@
 import type { GenerationRunRetryFailure } from './shared/types'
 
-export function shouldShowFailedImageRetryChip(_retryAttempt: number): boolean {
-  return false
+export function shouldShowFailedImageRetryChip(retryAttempt: number): boolean {
+  return retryAttempt > 0
 }
 
 export function shouldShowRetryAttemptChip({

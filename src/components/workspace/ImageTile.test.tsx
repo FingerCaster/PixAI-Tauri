@@ -33,11 +33,13 @@ function succeededItem(overrides: Partial<ImageHistoryItem> = {}): ImageHistoryI
 
 describe('ImageTile', () => {
   const originalDeleteHistory = useAppStore.getState().deleteHistory
+  const originalRetryHistory = useAppStore.getState().retryHistory
 
   beforeEach(() => {
     vi.restoreAllMocks()
     useAppStore.setState({
       deleteHistory: originalDeleteHistory,
+      retryHistory: originalRetryHistory
     })
   })
 
@@ -199,4 +201,28 @@ describe('ImageTile', () => {
     host.remove()
   })
 
+  it('retries a failed image record from the failed tile actions', async () => {
+    const retryHistory = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ retryHistory })
+    const { host, root } = await renderTileForItem(succeededItem({
+      id: 'history-failed-retry-test',
+      status: 'failed',
+      errorMessage: '图片请求失败，HTTP 状态码 502。',
+      dataUrl: '',
+      fileSizeBytes: 0,
+      retryAttempt: 2
+    }))
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="重试"]')?.click()
+    })
+
+    expect(retryHistory).toHaveBeenCalledWith('history-failed-retry-test')
+    expect(document.body.textContent).toContain('重试第 2 次')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })
