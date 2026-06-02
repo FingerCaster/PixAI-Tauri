@@ -2,7 +2,7 @@
 
 ## draft
 
-- 无
+- `macos-desktop-distribution` - 让 PixAI 能构建、分发并更新 macOS 桌面版本。
 
 ## current
 
