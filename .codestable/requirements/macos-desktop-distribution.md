@@ -2,9 +2,10 @@
 doc_type: requirement
 slug: macos-desktop-distribution
 pitch: 让 PixAI 能构建、分发并更新 macOS 桌面版本。
-status: draft
+status: implemented
 last_reviewed: 2026-06-03
-implemented_by: []
+implemented_by:
+  - 2026-06-03-macos-distribution-support
 tags: [macos, tauri, distribution, updater]
 ---
 
@@ -37,9 +38,12 @@ tags: [macos, tauri, distribution, updater]
 ## 当前实现
 
 - `src-tauri/tauri.conf.json` 已包含 `icon.icns`，说明仓库已有 macOS bundle 基础资源。
-- Windows 已有正式和本地 updater 发布脚本，但它们当前只处理 MSI / NSIS。
-- 应用内更新当前按 Windows 安装器类型选择 target，非 Windows 会落入 `unknown` 路径。
+- macOS 原生环境已可生成 `.app`、`.dmg`、`.app.tar.gz` 和 `.app.tar.gz.sig`。
+- 应用内更新已从 installer-only 识别升级为 OS / arch / installerType 平台契约；macOS 使用 `darwin-aarch64` / `darwin-x86_64` updater target。
+- Windows 保留 `windows-x86_64-msi` / `windows-x86_64-nsis` target，避免 MSI / NSIS 交叉更新。
+- 正式和本地 updater 发布脚本已支持 macOS updater 资产、手动安装 `.dmg` 资产、同版本 `latest.json` 平台条目合并。
 
 ## 变更记录
 
 - 2026-06-03：新增需求草案，准备把 PixAI 从 Windows-only 发布链扩展到 macOS 构建与分发能力。
+- 2026-06-03：完成 macOS 构建、分发和 updater 支持，实现跨平台 `latest.json` 合并。

@@ -96,6 +96,8 @@ export type AppVersionInfo = {
   version: string
   platform: 'desktop' | 'browser'
   runtime: 'tauri' | 'browser'
+  os?: 'windows' | 'macos' | 'linux' | 'unknown'
+  arch?: 'x86_64' | 'aarch64' | 'i686' | 'armv7' | 'unknown'
   installerType?: 'msi' | 'nsis' | 'unknown'
 }
 

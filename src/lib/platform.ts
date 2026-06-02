@@ -2,7 +2,7 @@ import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
+import type { AppVersionInfo, CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
 
 type SecretWriteResult = {
   insecure_storage: boolean
@@ -52,6 +52,13 @@ type StoredDataUrlFileResult = {
 }
 
 type CloseRequestAction = 'hide' | 'quit' | false
+type DesktopPlatformInfo = Required<Pick<AppVersionInfo, 'os' | 'arch' | 'installerType'>>
+type DesktopPlatformInfoResult = {
+  os?: string
+  arch?: string
+  installerType?: string
+  installer_type?: string
+}
 
 const memoryStorage = new Map<string, string>()
 const memorySecrets = new Map<string, string>()
@@ -246,7 +253,47 @@ export async function getAppDataDir(): Promise<string> {
 
 export async function getAppInstallerType(): Promise<'msi' | 'nsis' | 'unknown'> {
   if (!isTauriRuntime()) return 'unknown'
-  return invoke<'msi' | 'nsis' | 'unknown'>('app_installer_type')
+  return normalizeInstallerType(await invoke<string>('app_installer_type'))
+}
+
+export async function getDesktopPlatformInfo(): Promise<DesktopPlatformInfo> {
+  if (!isTauriRuntime()) {
+    return {
+      os: 'unknown',
+      arch: 'unknown',
+      installerType: 'unknown'
+    }
+  }
+
+  try {
+    const result = await invoke<DesktopPlatformInfoResult>('desktop_platform_info')
+    return {
+      os: normalizeDesktopOs(result.os),
+      arch: normalizeDesktopArch(result.arch),
+      installerType: normalizeInstallerType(result.installerType ?? result.installer_type)
+    }
+  } catch {
+    return {
+      os: 'unknown',
+      arch: 'unknown',
+      installerType: await getAppInstallerType()
+    }
+  }
+}
+
+function normalizeDesktopOs(value: unknown): DesktopPlatformInfo['os'] {
+  if (value === 'windows' || value === 'macos' || value === 'linux') return value
+  return 'unknown'
+}
+
+function normalizeDesktopArch(value: unknown): DesktopPlatformInfo['arch'] {
+  if (value === 'x86_64' || value === 'aarch64' || value === 'i686' || value === 'armv7') return value
+  return 'unknown'
+}
+
+function normalizeInstallerType(value: unknown): DesktopPlatformInfo['installerType'] {
+  if (value === 'msi' || value === 'nsis') return value
+  return 'unknown'
 }
 
 export async function getWindowFocused(): Promise<boolean> {

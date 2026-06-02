@@ -35,6 +35,7 @@ const CODEX_BRIDGE_HOST: &str = "127.0.0.1";
 const CODEX_BRIDGE_PORT: u16 = 43117;
 const MAX_CODEX_BRIDGE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 const CODEX_BRIDGE_REQUEST_EVENT: &str = "pixai://codex-bridge/request";
+#[cfg(target_os = "windows")]
 const SYSTEM_NOTIFICATION_ACTIVATED_EVENT: &str = "pixai://system-notification/activated";
 const TRAY_MENU_SHOW_ID: &str = "show";
 const TRAY_MENU_QUIT_ID: &str = "quit";
@@ -59,6 +60,14 @@ struct SecretReadResult {
     value: Option<String>,
     insecure_storage: bool,
     backend: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DesktopPlatformInfo {
+    os: String,
+    arch: String,
+    installer_type: String,
 }
 
 #[derive(Deserialize)]
@@ -206,6 +215,41 @@ fn app_installer_type() -> String {
     #[cfg(not(target_os = "windows"))]
     {
         "unknown".to_string()
+    }
+}
+
+#[tauri::command]
+fn desktop_platform_info() -> DesktopPlatformInfo {
+    DesktopPlatformInfo {
+        os: desktop_os().to_string(),
+        arch: desktop_arch().to_string(),
+        installer_type: app_installer_type(),
+    }
+}
+
+fn desktop_os() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "unknown"
+    }
+}
+
+fn desktop_arch() -> &'static str {
+    if cfg!(target_arch = "x86_64") {
+        "x86_64"
+    } else if cfg!(target_arch = "aarch64") {
+        "aarch64"
+    } else if cfg!(target_arch = "x86") {
+        "i686"
+    } else if cfg!(target_arch = "arm") {
+        "armv7"
+    } else {
+        "unknown"
     }
 }
 
@@ -800,6 +844,11 @@ fn data_file_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
 }
 
 fn activate_main_window_for(app: &AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.show();
+    }
+
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Main window not found.".to_string())?;
@@ -1664,6 +1713,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             app_data_dir,
             app_installer_type,
+            desktop_platform_info,
             activate_main_window,
             hide_main_window,
             quit_app,
@@ -1686,6 +1736,12 @@ pub fn run() {
             codex_bridge_respond,
             codex_bridge_ready
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                let _ = activate_main_window_for(app);
+            }
+        });
 }

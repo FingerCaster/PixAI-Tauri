@@ -2,7 +2,7 @@ import { getVersion } from '@tauri-apps/api/app'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { relaunch } from '@tauri-apps/plugin-process'
 import { check, type DownloadEvent, type Update } from '@tauri-apps/plugin-updater'
-import { fetchJsonThroughPlatform, getAppInstallerType, isTauriRuntime } from '../lib/platform'
+import { fetchJsonThroughPlatform, getDesktopPlatformInfo, isTauriRuntime } from '../lib/platform'
 import { getBundledAppVersion } from '../shared/app-version'
 import type { AppUpdateCheckResult, AppUpdateInstallResult, AppVersionInfo, AvailableAppUpdate } from '../shared/types'
 
@@ -14,6 +14,8 @@ const GITHUB_LATEST_RELEASE_URL = 'https://github.com/FingerCaster/PixAI-Tauri/r
 const GITHUB_RELEASE_ASSETS_URL = 'https://github.com/FingerCaster/PixAI-Tauri/releases/expanded_assets'
 const WINDOWS_X64_MSI_UPDATER_TARGET = 'windows-x86_64-msi'
 const WINDOWS_X64_NSIS_UPDATER_TARGET = 'windows-x86_64-nsis'
+const DARWIN_X64_UPDATER_TARGET = 'darwin-x86_64'
+const DARWIN_ARM64_UPDATER_TARGET = 'darwin-aarch64'
 
 export type AppUpdateDownloadProgress = {
   downloadedBytes: number | null
@@ -29,11 +31,14 @@ export class AppUpdateService {
         runtime: 'browser'
       }
     }
+    const platformInfo = await getDesktopPlatformInfo()
     return {
       version: await getVersion(),
       platform: 'desktop',
       runtime: 'tauri',
-      installerType: await getAppInstallerType()
+      os: platformInfo.os,
+      arch: platformInfo.arch,
+      installerType: platformInfo.installerType
     }
   }
 
@@ -42,12 +47,11 @@ export class AppUpdateService {
     if (!isTauriRuntime()) {
       throw new Error('更新检查仅在桌面应用中可用。')
     }
-    const installerType = versionInfo.installerType || 'unknown'
-    const tauriResult = await checkTauriUpdater(installerType)
+    const tauriResult = await checkTauriUpdater(versionInfo)
     pendingUpdate = tauriResult.update
     pendingGithubUpdate = null
     if (tauriResult.source === 'github') {
-      const githubUpdate = await checkGithubRelease(versionInfo.version, installerType)
+      const githubUpdate = await checkGithubRelease(versionInfo)
       pendingGithubUpdate = githubUpdate
       return {
         currentVersion: versionInfo.version,
@@ -68,7 +72,7 @@ export class AppUpdateService {
     }
     if (!pendingUpdate) {
       const versionInfo = await this.getVersionInfo()
-      pendingUpdate = (await checkTauriUpdater(versionInfo.installerType || 'unknown')).update
+      pendingUpdate = (await checkTauriUpdater(versionInfo)).update
     }
     if (!pendingUpdate) throw new Error('当前没有可安装的更新。')
     let downloadedBytes = 0
@@ -102,12 +106,12 @@ export class AppUpdateService {
 }
 
 async function checkTauriUpdater(
-  installerType: AppVersionInfo['installerType'] = 'unknown'
+  platformInfo: UpdatePlatformInfo
 ): Promise<{ source: 'tauri' | 'github'; update: Update | null }> {
   try {
     return {
       source: 'tauri',
-      update: await check(buildUpdaterCheckOptions(installerType))
+      update: await check(buildUpdaterCheckOptions(platformInfo))
     }
   } catch (error) {
     const normalizedError = normalizeUpdateError(error)
@@ -121,31 +125,45 @@ async function checkTauriUpdater(
   }
 }
 
-function buildUpdaterCheckOptions(installerType: AppVersionInfo['installerType'] = 'unknown'): { target?: string } | undefined {
-  const target = getUpdaterTarget(installerType)
+function buildUpdaterCheckOptions(platformInfo: UpdatePlatformInfo): { target?: string } | undefined {
+  const target = getUpdaterTarget(platformInfo)
   return target ? { target } : undefined
 }
 
-function getUpdaterTarget(installerType: AppVersionInfo['installerType'] = 'unknown'): string | null {
+function getUpdaterTarget(platformInfo: UpdatePlatformInfo): string | null {
+  const installerType = platformInfo.installerType || 'unknown'
+  const os = platformInfo.os || (installerType === 'msi' || installerType === 'nsis' ? 'windows' : 'unknown')
+  const arch = platformInfo.arch || 'unknown'
+
+  if (os === 'macos') {
+    if (arch === 'aarch64') return DARWIN_ARM64_UPDATER_TARGET
+    if (arch === 'x86_64') return DARWIN_X64_UPDATER_TARGET
+    throw new Error('无法识别当前 macOS 架构，请重新安装对应架构的 PixAI 后再检查更新。')
+  }
+
+  if (os === 'linux') {
+    throw new Error('当前版本暂不支持 Linux 应用内更新。')
+  }
+
   if (installerType === 'msi') return WINDOWS_X64_MSI_UPDATER_TARGET
   if (installerType === 'nsis') return WINDOWS_X64_NSIS_UPDATER_TARGET
-  throw new Error('无法识别当前安装器类型，请重新安装 MSI 或 NSIS 版本后再检查更新。')
+  if (os === 'windows') {
+    throw new Error('无法识别当前 Windows 安装器类型，请重新安装 MSI 或 NSIS 版本后再检查更新。')
+  }
+  throw new Error('无法识别当前桌面平台，请重新安装对应平台的 PixAI 后再检查更新。')
 }
 
-async function checkGithubRelease(
-  currentVersion: string,
-  installerType: AppVersionInfo['installerType'] = 'unknown'
-): Promise<AvailableAppUpdate | null> {
+async function checkGithubRelease(versionInfo: AppVersionInfo): Promise<AvailableAppUpdate | null> {
   const releaseHtml = await fetchGithubHtml(GITHUB_LATEST_RELEASE_URL, '检查失败')
   const releaseUrl = extractLatestReleaseUrl(releaseHtml) || GITHUB_LATEST_RELEASE_URL
   const releaseTag = extractReleaseTag(releaseUrl)
   if (!releaseTag) throw new Error('GitHub Release 检查失败：无法识别最新版本。')
 
   const latestVersion = normalizeVersion(releaseTag)
-  if (!isVersionNewer(latestVersion, currentVersion)) return null
+  if (!isVersionNewer(latestVersion, versionInfo.version)) return null
 
   const assets = await fetchGithubReleaseAssets(releaseTag)
-  const installer = selectInstallerAsset(assets, installerType)
+  const installer = selectInstallerAsset(assets, versionInfo)
   return {
     version: latestVersion,
     date: extractPublishedDate(releaseHtml),
@@ -181,6 +199,7 @@ function shouldFallbackToGithubRelease(error: Error): boolean {
     || message.includes('EmptyEndpoints')
     || message.includes('Could not fetch a valid release JSON from the remote')
     || message.includes('ReleaseNotFound')
+    || (lowerCaseMessage.includes('platform') && lowerCaseMessage.includes('was not found') && lowerCaseMessage.includes('platforms'))
     || message.includes('HTTP status client error (404')
     || message.includes('status code: 404')
     || message.includes('latest.json')
@@ -191,10 +210,21 @@ function shouldFallbackToGithubRelease(error: Error): boolean {
 
 function selectInstallerAsset(
   assets: GithubReleaseAsset[],
-  installerType: AppVersionInfo['installerType'] = 'unknown'
+  platformInfo: UpdatePlatformInfo
 ): GithubReleaseAsset | null {
   const isNsis = (asset: GithubReleaseAsset) => /_x64-setup\.exe$/i.test(asset.name)
   const isMsi = (asset: GithubReleaseAsset) => /\.msi$/i.test(asset.name)
+  const isDmg = (asset: GithubReleaseAsset) => /\.dmg$/i.test(asset.name)
+  const installerType = platformInfo.installerType || 'unknown'
+  const os = platformInfo.os || (installerType === 'msi' || installerType === 'nsis' ? 'windows' : 'unknown')
+  const arch = platformInfo.arch || 'unknown'
+
+  if (os === 'macos') {
+    return assets.find((asset) => isDmg(asset) && macosAssetMatchesArch(asset, arch))
+      || assets.find(isDmg)
+      || null
+  }
+
   if (installerType === 'nsis') {
     return assets.find(isNsis)
       || assets.find(isMsi)
@@ -210,7 +240,14 @@ function selectInstallerAsset(
   return assets.find(isNsis)
     || assets.find(isMsi)
     || assets.find((asset) => /\.exe$/i.test(asset.name))
+    || assets.find(isDmg)
     || null
+}
+
+function macosAssetMatchesArch(asset: GithubReleaseAsset, arch: AppVersionInfo['arch'] = 'unknown'): boolean {
+  if (arch === 'aarch64') return /(?:aarch64|arm64)/i.test(asset.name)
+  if (arch === 'x86_64') return /(?:x86_64|x64|amd64)/i.test(asset.name)
+  return true
 }
 
 function normalizeVersion(version: string): string {
@@ -370,3 +407,5 @@ type GithubReleaseAsset = {
   name: string
   browser_download_url: string
 }
+
+type UpdatePlatformInfo = Pick<AppVersionInfo, 'os' | 'arch' | 'installerType'>

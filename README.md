@@ -201,6 +201,8 @@ PIXAI_1PASSWORD_UPDATER_PUBKEY_TITLE=PixAI updater.key.pub
 pnpm updater:release:build -- --version <version>
 ```
 
+在 macOS 原生环境中执行同一命令会生成 macOS bundle。Tauri updater 官方要求 macOS 更新资产使用 `target/release/bundle/macos/*.app.tar.gz` 与同名 `.sig`，手动下载资产使用 `.dmg`。
+
 生成发布用 `latest.json` 和 staging 目录：
 
 ```bash
@@ -225,6 +227,15 @@ artifacts/release-updater/staging/<version>/
 latest.json
 PixAI_<version>_x64_en-US.msi
 PixAI_<version>_x64-setup.exe
+PixAI_<version>_macos-aarch64.app.tar.gz
+PixAI_<version>_macos-aarch64.dmg
+```
+
+Windows 和 macOS 可以在不同机器上分开构建、分开执行 `manifest` / `publish`。正式脚本会读取同一 tag 已有的 `latest.json`，版本相同时合并 `platforms` 条目，避免后发布的平台覆盖先发布的平台。跨架构 macOS 产物可在 manifest/publish 时指定：
+
+```bash
+pnpm updater:release:manifest -- --version <version> --tag <tag> --macos-arch aarch64
+pnpm updater:release:publish -- --version <version> --tag <tag> --macos-arch x86_64
 ```
 
 ### 本地 updater 验证
@@ -253,6 +264,12 @@ pnpm updater:local:build -- --version <new-version> --port 14333
 
 ```bash
 pnpm updater:local:publish -- --version <new-version> --port 14333
+```
+
+如果本地发布的是 macOS 交叉目标产物，补充架构参数：
+
+```bash
+pnpm updater:local:publish -- --version <new-version> --port 14333 --macos-arch aarch64
 ```
 
 启动本地 feed：
@@ -299,7 +316,8 @@ src-tauri/
 scripts/
 ├─ pixai-codex.mjs
 ├─ local-updater.mjs
-└─ release-updater.mjs
+├─ release-updater.mjs
+└─ updater-artifacts.mjs
 ```
 
 ## 质量检查

@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 
 import { createServer } from 'node:http'
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import {
+  findUpdaterArtifacts,
+  hasUpdaterArtifacts,
+  stageUpdaterArtifacts,
+  writeLatestManifest
+} from './updater-artifacts.mjs'
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const srcTauriDir = join(rootDir, 'src-tauri')
-const targetBundleDir = join(srcTauriDir, 'target', 'release', 'bundle')
 const localUpdaterDir = join(rootDir, 'artifacts', 'local-updater')
 const keysDir = join(localUpdaterDir, 'keys')
 const feedDir = join(localUpdaterDir, 'feed')
@@ -18,8 +23,6 @@ const keyPath = join(keysDir, 'updater.key')
 const pubKeyPath = `${keyPath}.pub`
 const defaultPort = 14333
 const defaultVersion = '0.0.3'
-const windowsMsiTarget = 'windows-x86_64-msi'
-const windowsNsisTarget = 'windows-x86_64-nsis'
 
 const command = process.argv[2] || 'help'
 const options = parseArgs(process.argv.slice(3))
@@ -105,8 +108,8 @@ async function publishLocalUpdater() {
   const port = Number(options.port || defaultPort)
   await ensureDir(feedDir)
 
-  const artifacts = await findUpdaterArtifacts(version)
-  if (!artifacts.msi && !artifacts.nsis) {
+  const artifacts = await findUpdaterArtifacts({ srcTauriDir, version, macosArch: readStringOption(options.macosArch || options.arch) })
+  if (!hasUpdaterArtifacts(artifacts)) {
     throw new Error(
       `No updater bundle found for version ${version}. Run "pnpm updater:local:build -- --version ${version}" first.`
     )
@@ -116,20 +119,11 @@ async function publishLocalUpdater() {
   await rm(feedVersionDir, { recursive: true, force: true })
   await mkdir(feedVersionDir, { recursive: true })
 
-  const platforms = {}
-  for (const [target, artifact] of [
-    [windowsMsiTarget, artifacts.msi],
-    [windowsNsisTarget, artifacts.nsis]
-  ]) {
-    if (!artifact) continue
-    const destinationArtifact = join(feedVersionDir, artifact.filename)
-    await cp(artifact.path, destinationArtifact)
-    const rawSignature = await readFile(artifact.signaturePath, 'utf8')
-    platforms[target] = {
-      url: `http://127.0.0.1:${port}/${version}/${artifact.filename}`,
-      signature: rawSignature.trim()
-    }
-  }
+  const { platforms, copiedAssets } = await stageUpdaterArtifacts({
+    artifacts,
+    destinationDir: feedVersionDir,
+    urlForFilename: (filename) => `http://127.0.0.1:${port}/${version}/${filename}`
+  })
 
   const latestJson = {
     version,
@@ -138,14 +132,12 @@ async function publishLocalUpdater() {
     platforms
   }
 
-  await writeFile(join(feedDir, 'latest.json'), JSON.stringify(latestJson, null, 2))
+  await writeLatestManifest(join(feedDir, 'latest.json'), latestJson)
 
   console.log(`Published local feed for ${version}`)
-  if (artifacts.msi) {
-    console.log(`MSI: ${relative(rootDir, join(feedVersionDir, artifacts.msi.filename))}`)
-  }
-  if (artifacts.nsis) {
-    console.log(`NSIS: ${relative(rootDir, join(feedVersionDir, artifacts.nsis.filename))}`)
+  for (const asset of copiedAssets) {
+    const target = asset.platformTarget ? ` (${asset.platformTarget})` : ''
+    console.log(`${asset.label}${target}: ${relative(rootDir, asset.path)}`)
   }
   console.log(`Feed: http://127.0.0.1:${port}/latest.json`)
 }
@@ -212,57 +204,6 @@ async function ensureKeypair({ force }) {
   ], { cwd: rootDir })
 }
 
-async function findUpdaterArtifacts(version) {
-  return {
-    msi: await findMsiUpdaterArtifact(version),
-    nsis: await findNsisUpdaterArtifact(version)
-  }
-}
-
-async function findNsisUpdaterArtifact(version) {
-  const nsisDir = join(targetBundleDir, 'nsis')
-  const entries = await safeReaddir(nsisDir)
-  const expectedPrefix = `PixAI_${version}_`
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue
-    if (!entry.name.startsWith(expectedPrefix)) continue
-    if (!entry.name.endsWith('-setup.exe')) continue
-    const artifactPath = join(nsisDir, entry.name)
-    const signaturePath = `${artifactPath}.sig`
-    if (!await pathExists(signaturePath)) continue
-    return {
-      filename: entry.name,
-      path: artifactPath,
-      signaturePath
-    }
-  }
-
-  return null
-}
-
-async function findMsiUpdaterArtifact(version) {
-  const msiDir = join(targetBundleDir, 'msi')
-  const entries = await safeReaddir(msiDir)
-  const expectedPrefix = `PixAI_${version}_`
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue
-    if (!entry.name.startsWith(expectedPrefix)) continue
-    if (!entry.name.endsWith('.msi')) continue
-    const artifactPath = join(msiDir, entry.name)
-    const signaturePath = `${artifactPath}.sig`
-    if (!await pathExists(signaturePath)) continue
-    return {
-      filename: entry.name,
-      path: artifactPath,
-      signaturePath
-    }
-  }
-
-  return null
-}
-
 function inferVersionFromBundle() {
   const raw = readStringOption(options.version)
   if (raw) return raw
@@ -287,14 +228,6 @@ async function pathExists(path) {
     return true
   } catch {
     return false
-  }
-}
-
-async function safeReaddir(path) {
-  try {
-    return await readdir(path, { withFileTypes: true })
-  } catch {
-    return []
   }
 }
 
@@ -324,10 +257,10 @@ function readStringOption(value) {
 async function runCommand(command, args, { cwd, env }) {
   const commandLine = [command, ...args].join(' ')
   await new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(commandLine, [], {
+    const child = spawn(command, args, {
       cwd,
       env,
-      shell: true,
+      shell: process.platform === 'win32',
       stdio: 'inherit'
     })
     child.on('error', rejectPromise)
@@ -353,6 +286,7 @@ Commands:
 Notes:
   - Real releases can keep using GitHub release + latest.json.
   - This helper builds a separate local update feed for updater verification.
-  - Windows local feeds preserve MSI/NSIS installer types and never cross-publish them.
+  - Windows local feeds preserve MSI/NSIS installer types and macOS feeds use darwin-aarch64/darwin-x86_64.
+  - Use --macos-arch aarch64 or --macos-arch x86_64 when publishing cross-compiled macOS bundles.
 `)
 }

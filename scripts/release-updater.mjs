@@ -1,13 +1,19 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { dirname, extname, join, relative, resolve } from 'node:path'
+import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import {
+  findUpdaterArtifacts,
+  hasUpdaterArtifacts,
+  mergeLatestManifest,
+  stageUpdaterArtifacts,
+  writeLatestManifest
+} from './updater-artifacts.mjs'
 
 const rootDir = dirname(dirname(fileURLToPath(import.meta.url)))
 const srcTauriDir = join(rootDir, 'src-tauri')
-const targetBundleDir = join(srcTauriDir, 'target', 'release', 'bundle')
 const tauriConfigPath = join(srcTauriDir, 'tauri.conf.json')
 const releaseUpdaterDir = join(rootDir, 'artifacts', 'release-updater')
 const keysDir = join(releaseUpdaterDir, 'keys')
@@ -18,8 +24,6 @@ const keyPath = resolveKeyPath()
 const pubKeyPath = `${keyPath}.pub`
 const githubRepo = 'FingerCaster/PixAI-Tauri'
 const githubReleaseBaseUrl = `https://github.com/${githubRepo}/releases/download`
-const windowsMsiTarget = 'windows-x86_64-msi'
-const windowsNsisTarget = 'windows-x86_64-nsis'
 const onePasswordVault = readStringOption(process.env.PIXAI_1PASSWORD_VAULT) || 'PixAI Release'
 const onePasswordPrivateKeyTitle = readStringOption(process.env.PIXAI_1PASSWORD_UPDATER_KEY_TITLE) || 'PixAI updater.key'
 const onePasswordPublicKeyTitle = readStringOption(process.env.PIXAI_1PASSWORD_UPDATER_PUBKEY_TITLE) || 'PixAI updater.key.pub'
@@ -80,7 +84,8 @@ async function buildReleaseUpdater() {
     'build',
     '--config',
     tempConfigPath,
-    '--ci'
+    '--ci',
+    ...macosBuildTargetArgs()
   ], {
     cwd: rootDir,
     env: {
@@ -157,8 +162,8 @@ async function stageReleaseUpdater() {
 
   const version = await resolveVersion()
   const tag = resolveTag(version)
-  const artifacts = await findUpdaterArtifacts(version)
-  if (!artifacts.msi && !artifacts.nsis) {
+  const artifacts = await findUpdaterArtifacts({ srcTauriDir, version, macosArch: readStringOption(options.macosArch || options.arch) })
+  if (!hasUpdaterArtifacts(artifacts)) {
     throw new Error(
       `No signed updater bundle found for version ${version}. Run "pnpm updater:release:build -- --version ${version}" first.`
     )
@@ -173,41 +178,34 @@ async function stageReleaseUpdater() {
     || new Date().toISOString()
 
   const releaseDir = join(stagingDir, version)
+  const existingManifest = await readExistingLatestManifest(tag)
   await rm(releaseDir, { recursive: true, force: true })
   await mkdir(releaseDir, { recursive: true })
 
-  const platforms = {}
-  const copiedAssets = []
-
-  for (const [target, artifact] of [
-    [windowsMsiTarget, artifacts.msi],
-    [windowsNsisTarget, artifacts.nsis]
-  ]) {
-    if (!artifact) continue
-    const destinationArtifact = join(releaseDir, artifact.filename)
-    await cp(artifact.path, destinationArtifact)
-    copiedAssets.push(destinationArtifact)
-    const signature = (await readFile(artifact.signaturePath, 'utf8')).trim()
-    platforms[target] = {
-      url: `${githubReleaseBaseUrl}/${encodeURIComponent(tag)}/${artifact.filename}`,
-      signature
-    }
-  }
+  const { platforms, copiedAssets } = await stageUpdaterArtifacts({
+    artifacts,
+    destinationDir: releaseDir,
+    urlForFilename: (filename) => `${githubReleaseBaseUrl}/${encodeURIComponent(tag)}/${filename}`
+  })
 
   const manifestPath = join(releaseDir, 'latest.json')
-  const latestJson = {
+  const latestJson = mergeLatestManifest(existingManifest, {
     version,
     notes,
     pub_date: pubDate,
     platforms
-  }
+  })
 
-  await writeFile(manifestPath, JSON.stringify(latestJson, null, 2))
+  await writeLatestManifest(manifestPath, latestJson)
 
   console.log(`Staged production updater manifest for ${version}`)
   console.log(`Manifest: ${relative(rootDir, manifestPath)}`)
-  for (const assetPath of copiedAssets) {
-    console.log(`Asset: ${relative(rootDir, assetPath)}`)
+  for (const asset of copiedAssets) {
+    const target = asset.platformTarget ? ` (${asset.platformTarget})` : ''
+    console.log(`Asset ${asset.label}${target}: ${relative(rootDir, asset.path)}`)
+  }
+  if (existingManifest?.version && normalizeVersion(existingManifest.version) === version) {
+    console.log(`Merged existing latest.json platforms: ${Object.keys(existingManifest.platforms || {}).join(', ') || 'none'}`)
   }
   if (!releaseMetadata) {
     console.log(`Release metadata fallback: notes/pub_date were generated locally for tag ${tag}`)
@@ -217,7 +215,7 @@ async function stageReleaseUpdater() {
     tag,
     version,
     manifestPath,
-    assetPaths: copiedAssets
+    assetPaths: copiedAssets.map((asset) => asset.path)
   }
 }
 
@@ -294,6 +292,12 @@ function resolveTag(version) {
   return readStringOption(options.tag) || version
 }
 
+function macosBuildTargetArgs() {
+  const arch = normalizeMacosArch(readStringOption(options.macosArch || options.arch))
+  if (!arch) return []
+  return ['--target', `${arch}-apple-darwin`]
+}
+
 async function readReleaseMetadata(tag) {
   try {
     const raw = await runCommandCapture('gh', [
@@ -309,6 +313,19 @@ async function readReleaseMetadata(tag) {
       publishedAt: typeof parsed.publishedAt === 'string' ? parsed.publishedAt : null,
       url: typeof parsed.url === 'string' ? parsed.url : null
     }
+  } catch {
+    return null
+  }
+}
+
+async function readExistingLatestManifest(tag) {
+  const url = `${githubReleaseBaseUrl}/${encodeURIComponent(tag)}/latest.json`
+  try {
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(10_000)
+    })
+    if (!response.ok) return null
+    return await response.json()
   } catch {
     return null
   }
@@ -330,57 +347,6 @@ async function requireGithubRelease(tag) {
   }
 }
 
-async function findUpdaterArtifacts(version) {
-  return {
-    msi: await findMsiUpdaterArtifact(version),
-    nsis: await findNsisUpdaterArtifact(version)
-  }
-}
-
-async function findNsisUpdaterArtifact(version) {
-  const nsisDir = join(targetBundleDir, 'nsis')
-  const entries = await safeReaddir(nsisDir)
-  const expectedPrefix = `PixAI_${version}_`
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue
-    if (!entry.name.startsWith(expectedPrefix)) continue
-    if (!entry.name.endsWith('-setup.exe')) continue
-    const artifactPath = join(nsisDir, entry.name)
-    const signaturePath = `${artifactPath}.sig`
-    if (!await pathExists(signaturePath)) continue
-    return {
-      filename: entry.name,
-      path: artifactPath,
-      signaturePath
-    }
-  }
-
-  return null
-}
-
-async function findMsiUpdaterArtifact(version) {
-  const msiDir = join(targetBundleDir, 'msi')
-  const entries = await safeReaddir(msiDir)
-  const expectedPrefix = `PixAI_${version}_`
-
-  for (const entry of entries) {
-    if (!entry.isFile()) continue
-    if (!entry.name.startsWith(expectedPrefix)) continue
-    if (extname(entry.name).toLowerCase() !== '.msi') continue
-    const artifactPath = join(msiDir, entry.name)
-    const signaturePath = `${artifactPath}.sig`
-    if (!await pathExists(signaturePath)) continue
-    return {
-      filename: entry.name,
-      path: artifactPath,
-      signaturePath
-    }
-  }
-
-  return null
-}
-
 async function ensureDir(path) {
   await mkdir(path, { recursive: true })
 }
@@ -391,14 +357,6 @@ async function pathExists(path) {
     return true
   } catch {
     return false
-  }
-}
-
-async function safeReaddir(path) {
-  try {
-    return await readdir(path, { withFileTypes: true })
-  } catch {
-    return []
   }
 }
 
@@ -436,20 +394,21 @@ function readStringOption(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
-async function runCommand(command, args, { cwd, env, shell = true }) {
+function normalizeMacosArch(value) {
+  if (value === 'arm64') return 'aarch64'
+  if (value === 'x64') return 'x86_64'
+  if (value === 'aarch64' || value === 'x86_64') return value
+  if (!value) return null
+  throw new Error(`Unsupported macOS arch "${value}". Use aarch64, arm64, x86_64, or x64.`)
+}
+
+async function runCommand(command, args, { cwd, env, shell = process.platform === 'win32' }) {
   const commandLine = [command, ...args].join(' ')
   await new Promise((resolvePromise, rejectPromise) => {
-    const child = shell
-      ? spawn(commandLine, [], {
-        cwd,
-        env,
-        shell: true,
-        stdio: 'inherit'
-      })
-      : spawn(command, args, {
+    const child = spawn(command, args, {
       cwd,
       env,
-      shell: false,
+      shell,
       stdio: 'inherit'
     })
     child.on('error', rejectPromise)
@@ -463,20 +422,13 @@ async function runCommand(command, args, { cwd, env, shell = true }) {
   })
 }
 
-async function runCommandCapture(command, args, { cwd, env, shell = true }) {
+async function runCommandCapture(command, args, { cwd, env, shell = process.platform === 'win32' }) {
   const commandLine = [command, ...args].join(' ')
   return await new Promise((resolvePromise, rejectPromise) => {
-    const child = shell
-      ? spawn(commandLine, [], {
-        cwd,
-        env,
-        shell: true,
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-      : spawn(command, args, {
+    const child = spawn(command, args, {
       cwd,
       env,
-      shell: false,
+      shell,
       stdio: ['ignore', 'pipe', 'pipe']
     })
     let stdout = ''
@@ -512,6 +464,8 @@ Notes:
   - Keep artifacts/release-updater/keys/updater.key private and stable across releases.
   - pull-key reads "PixAI updater.key" and "PixAI updater.key.pub" from the "PixAI Release" vault by default.
   - src-tauri/tauri.conf.json must contain the matching updater public key.
-  - publish uploads latest.json plus the matching MSI / NSIS installers to an existing GitHub release.
+  - publish uploads latest.json plus the matching Windows and/or macOS assets to an existing GitHub release.
+  - latest.json is merged with an existing same-version release manifest so split Windows/macOS publishing keeps prior platform entries.
+  - Use --macos-arch aarch64 or --macos-arch x86_64 when publishing cross-compiled macOS bundles.
 `)
 }

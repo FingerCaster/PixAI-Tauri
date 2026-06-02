@@ -36,6 +36,8 @@ const latestReleaseHtml = `
 const expandedAssetsHtml = `
   <a href="/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64_en-US.msi">PixAI_0.0.2_x64_en-US.msi</a>
   <a href="/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_x64-setup.exe">PixAI_0.0.2_x64-setup.exe</a>
+  <a href="/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_macos-aarch64.dmg">PixAI_0.0.2_macos-aarch64.dmg</a>
+  <a href="/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_macos-x64.dmg">PixAI_0.0.2_macos-x64.dmg</a>
 `
 
 describe('AppUpdateService', () => {
@@ -44,7 +46,11 @@ describe('AppUpdateService', () => {
     vi.mocked(getVersion).mockResolvedValue('0.0.1')
     vi.mocked(openUrl).mockResolvedValue(undefined)
     vi.mocked(check).mockRejectedValue(new Error('HTTP status client error (404 Not Found): latest.json'))
-    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('nsis')
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'windows',
+      arch: 'x86_64',
+      installerType: 'nsis'
+    })
     Object.defineProperty(window, '__TAURI_INTERNALS__', {
       value: {
         invoke: vi.fn(async (command: string, args?: { request?: { url?: string } }) => {
@@ -102,7 +108,11 @@ describe('AppUpdateService', () => {
   })
 
   it('prefers the MSI asset when the current app was installed via MSI', async () => {
-    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('msi')
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'windows',
+      arch: 'x86_64',
+      installerType: 'msi'
+    })
 
     const result = await new AppUpdateService().check()
 
@@ -114,7 +124,11 @@ describe('AppUpdateService', () => {
   })
 
   it('prefers the NSIS asset when the current app was installed via NSIS', async () => {
-    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('nsis')
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'windows',
+      arch: 'x86_64',
+      installerType: 'nsis'
+    })
 
     const result = await new AppUpdateService().check()
 
@@ -125,17 +139,58 @@ describe('AppUpdateService', () => {
     })
   })
 
-  it('does not let the updater fall back to a generic Windows target when the installer type is unknown', async () => {
-    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('unknown')
+  it('uses the darwin updater target and dmg fallback on Apple Silicon macOS', async () => {
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'macos',
+      arch: 'aarch64',
+      installerType: 'unknown'
+    })
 
-    await expect(new AppUpdateService().check()).rejects.toThrow('无法识别当前安装器类型')
+    const result = await new AppUpdateService().check()
+
+    expect(check).toHaveBeenCalledWith({ target: 'darwin-aarch64' })
+    expect(result.update).toMatchObject({
+      installMode: 'github',
+      downloadUrl: 'https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_macos-aarch64.dmg'
+    })
+  })
+
+  it('falls back to GitHub when latest.json exists but misses the macOS platform entry', async () => {
+    vi.mocked(check).mockRejectedValue(new Error('the platform `darwin-aarch64` was not found in the response `platforms` object'))
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'macos',
+      arch: 'aarch64',
+      installerType: 'unknown'
+    })
+
+    const result = await new AppUpdateService().check()
+
+    expect(check).toHaveBeenCalledWith({ target: 'darwin-aarch64' })
+    expect(result.update).toMatchObject({
+      installMode: 'github',
+      downloadUrl: 'https://github.com/FingerCaster/PixAI-Tauri/releases/download/0.0.2/PixAI_0.0.2_macos-aarch64.dmg'
+    })
+  })
+
+  it('does not let the updater fall back to a generic Windows target when the installer type is unknown', async () => {
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'windows',
+      arch: 'x86_64',
+      installerType: 'unknown'
+    })
+
+    await expect(new AppUpdateService().check()).rejects.toThrow('无法识别当前 Windows 安装器类型')
 
     expect(check).not.toHaveBeenCalled()
   })
 
   it('does not fall back to GitHub when Tauri updater reports no update', async () => {
     vi.mocked(check).mockResolvedValue(null)
-    vi.spyOn(platformModule, 'getAppInstallerType').mockResolvedValue('msi')
+    vi.spyOn(platformModule, 'getDesktopPlatformInfo').mockResolvedValue({
+      os: 'windows',
+      arch: 'x86_64',
+      installerType: 'msi'
+    })
     const service = new AppUpdateService()
 
     const result = await service.check()

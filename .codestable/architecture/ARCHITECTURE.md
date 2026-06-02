@@ -37,17 +37,19 @@ PixAI rebuilt as a Tauri 2 desktop app.
   - `src/store/app-store.ts`
   - `src/components/settings/AppUpdateSection.tsx`
   - `src-tauri/tauri.conf.json`
-  - 负责运行时版本展示、更新检查、更新下载安装与 GitHub fallback。
+  - 负责运行时版本展示、OS / arch / installerType 平台识别、更新检查、更新下载安装与 GitHub fallback。
 - **本地 updater 验证工具**
   - `scripts/local-updater.mjs`
+  - `scripts/updater-artifacts.mjs`
   - `src-tauri/tauri.local-updater.conf.json`
   - `README.md`
-  - 负责在不上传 GitHub Release 的前提下，生成本地签名更新包、`latest.json` 和本地 feed。
+  - 负责在不上传 GitHub Release 的前提下，生成本地签名更新包、跨平台 `latest.json` 和本地 feed。
 - **正式 updater 发布工具**
   - `scripts/release-updater.mjs`
+  - `scripts/updater-artifacts.mjs`
   - `src-tauri/tauri.conf.json`
   - `README.md`
-  - 负责用长期公私钥生成正式签名更新包、组装 GitHub Release `latest.json` 并上传现有 release 资产。
+  - 负责用长期公私钥生成正式签名更新包、合并 GitHub Release `latest.json` 平台条目并上传现有 release 资产。
 
 ## 4. 关键架构决定
 
@@ -56,6 +58,9 @@ PixAI rebuilt as a Tauri 2 desktop app.
 - Provider 维护不再和工作区参数混排，而是作为 `Services` 分区内的独立管理流存在。
 - 更新、通知权限、技能安装统一按状态卡表达，减少和普通表单字段的视觉冲突。
 - 正式更新源与本地验证更新源分离：正式分发继续走 GitHub Release，本地验证通过独立脚本和本地 HTTP feed 完成。
+- updater 平台目标采用跨平台模型：Windows 按安装器保留 `windows-x86_64-msi/nsis`，macOS 按架构使用 `darwin-aarch64/x86_64`。
+- macOS 手动安装资产是 `.dmg`，Tauri updater 资产是 `.app.tar.gz` 加同名 `.sig`；发布脚本会同时 staging 手动安装包和 updater 包。
+- Windows 和 macOS 可以在不同机器上分开发同一 tag；正式发布脚本会在同版本下合并已有 `latest.json` 的 `platforms`，避免覆盖另一平台条目。
 - 正式 updater 私钥只保存在本机 gitignored 的 `artifacts/release-updater/keys/`；仓库只提交公钥。
 
 ## 5. 已知约束 / 硬边界
