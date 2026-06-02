@@ -6,6 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ImageTile } from '../workspace/ImageTile'
+import { confirmDestructiveAction } from '../../lib/confirm'
 import { DownloadCanceledError, downloadImageSource } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 
@@ -48,10 +49,16 @@ export function GalleryPage() {
   }
 
   const deleteSelected = async () => {
+    if (!confirmDestructiveAction(`确认删除选中的 ${selectedItems.length} 张图片记录？`)) return
     for (const item of selectedItems) {
       await deleteHistory(item.id)
     }
     setSelectedIds([])
+  }
+
+  const deleteSingle = async (id: string) => {
+    if (!confirmDestructiveAction('确认删除这张图片记录？')) return
+    await deleteHistory(id)
   }
 
   const favoriteSelected = async (favorite: boolean) => {
@@ -124,7 +131,7 @@ export function GalleryPage() {
                     <WandSparkles size={15} />
                     回填参数
                   </Button>
-                  <Button variant="outline" type="button" onClick={() => void deleteHistory(item.id)}>
+                  <Button variant="outline" type="button" onClick={() => void deleteSingle(item.id)}>
                     <Trash2 size={15} />
                     删除
                   </Button>

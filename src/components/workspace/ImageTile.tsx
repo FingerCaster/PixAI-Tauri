@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import type { ImageHistoryItem } from '../../shared/types'
+import { confirmDestructiveAction } from '../../lib/confirm'
 import { formatDuration } from '../../lib/time'
 import { DownloadCanceledError, downloadImageSource, imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
@@ -67,6 +68,10 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const openPreview = () => {
     if (imageSource) setPreviewOpen(true)
   }
+  const deleteItem = async () => {
+    if (!confirmDestructiveAction('确认删除这张图片记录？')) return
+    await deleteHistory(item.id)
+  }
 
   if (item.status === 'failed') {
     return (
@@ -110,7 +115,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
             type="button"
             onClick={(event) => {
               event.stopPropagation()
-              void deleteHistory(item.id)
+              void deleteItem()
             }}
             title="删除"
           >
@@ -160,7 +165,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
         <Button className={cn('ml-auto', item.favorite ? 'text-rose-600' : '')} variant="ghost" size="icon-sm" type="button" onClick={() => void toggleFavorite(item)} title="收藏">
           <Heart size={15} fill={item.favorite ? 'currentColor' : 'none'} />
         </Button>
-        <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deleteHistory(item.id)} title="删除">
+        <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deleteItem()} title="删除">
           <Trash2 size={15} />
         </Button>
       </div>

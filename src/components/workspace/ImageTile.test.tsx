@@ -1,7 +1,8 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ImageHistoryItem } from '../../shared/types'
+import { useAppStore } from '../../store/app-store'
 import { ImageTile } from './ImageTile'
 
 function succeededItem(overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem {
@@ -31,12 +32,31 @@ function succeededItem(overrides: Partial<ImageHistoryItem> = {}): ImageHistoryI
 }
 
 describe('ImageTile', () => {
+  const originalDeleteHistory = useAppStore.getState().deleteHistory
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    useAppStore.setState({
+      deleteHistory: originalDeleteHistory,
+    })
+  })
+
   async function renderTile() {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
     await act(async () => {
       root.render(<ImageTile item={succeededItem()} />)
+    })
+    return { host, root }
+  }
+
+  async function renderTileForItem(item: ImageHistoryItem) {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(<ImageTile item={item} />)
     })
     return { host, root }
   }
@@ -126,4 +146,57 @@ describe('ImageTile', () => {
     })
     host.remove()
   })
+
+  it('asks before deleting a generated image', async () => {
+    const deleteHistory = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ deleteHistory })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { host, root } = await renderTile()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="删除"]')?.click()
+    })
+
+    expect(confirm).toHaveBeenCalledWith('确认删除这张图片记录？')
+    expect(deleteHistory).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="删除"]')?.click()
+    })
+
+    expect(deleteHistory).toHaveBeenCalledWith('history-preview-test')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('asks before deleting a failed image record', async () => {
+    const deleteHistory = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ deleteHistory })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    const { host, root } = await renderTileForItem(succeededItem({
+      id: 'history-failed-delete-test',
+      status: 'failed',
+      errorMessage: '上游接口失败',
+      dataUrl: '',
+      fileSizeBytes: 0
+    }))
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="删除"]')?.click()
+    })
+
+    expect(confirm).toHaveBeenCalledWith('确认删除这张图片记录？')
+    expect(deleteHistory).toHaveBeenCalledWith('history-failed-delete-test')
+    expect(document.querySelector('[aria-label="生成失败"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
 })

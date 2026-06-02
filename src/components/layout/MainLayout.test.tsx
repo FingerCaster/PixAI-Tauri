@@ -107,4 +107,52 @@ describe('MainLayout', () => {
     })
     host.remove()
   })
+
+  it('asks before deleting a session from the sidebar', async () => {
+    const deleteConversation = vi.fn().mockResolvedValue(undefined)
+    const firstConversation = useAppStore.getState().conversations[0]
+    useAppStore.setState({
+      conversations: [
+        firstConversation,
+        {
+          ...firstConversation,
+          id: 'layout-delete-test',
+          title: '待删除会话',
+          updatedAt: '2026-05-24T00:01:00.000Z'
+        }
+      ],
+      deleteConversation
+    })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <MainLayout onOpenGlobalSettings={vi.fn()}>
+          <main />
+        </MainLayout>
+      )
+    })
+
+    await act(async () => {
+      document.querySelector<HTMLElement>('.session-delete')?.click()
+    })
+
+    expect(confirm).toHaveBeenCalledWith('确认删除这个会话？会话下的生成任务会一起删除，历史图片会保留在图库。')
+    expect(deleteConversation).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await act(async () => {
+      document.querySelector<HTMLElement>('.session-delete')?.click()
+    })
+
+    expect(deleteConversation).toHaveBeenCalledWith('layout-update-test')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })

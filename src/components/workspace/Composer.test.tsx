@@ -33,6 +33,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 const originalImportReferenceFiles = useAppStore.getState().importReferenceFiles
 const originalImportReferencePayloads = useAppStore.getState().importReferencePayloads
+const originalRemoveReferenceImage = useAppStore.getState().removeReferenceImage
 
 function conversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
@@ -81,6 +82,7 @@ describe('Composer', () => {
       activeConversationId: null,
       importReferenceFiles: originalImportReferenceFiles,
       importReferencePayloads: originalImportReferencePayloads,
+      removeReferenceImage: originalRemoveReferenceImage,
       toast: null
     })
   })
@@ -144,6 +146,7 @@ describe('Composer', () => {
   })
 
   it('keeps reference removal separate from the preview trigger', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(false)
     const { host, root } = await renderComposer(
       conversation({
         referenceImages: [
@@ -163,6 +166,46 @@ describe('Composer', () => {
       document.querySelector<HTMLButtonElement>('button[title="移除参考图"]')?.click()
     })
 
+    expect(document.querySelector('[aria-label="参考图预览"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('asks before removing a reference image', async () => {
+    const removeReferenceImage = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ removeReferenceImage })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const { host, root } = await renderComposer(
+      conversation({
+        referenceImages: [
+          {
+            id: 'reference-confirm-remove-test',
+            name: 'remove.png',
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,cmVtb3Zl',
+            fileSizeBytes: 6,
+            createdAt: '2026-05-23T12:02:00.000Z'
+          }
+        ]
+      })
+    )
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="移除参考图"]')?.click()
+    })
+
+    expect(confirm).toHaveBeenCalledWith('确认移除这张参考图？')
+    expect(removeReferenceImage).not.toHaveBeenCalled()
+
+    confirm.mockReturnValue(true)
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="移除参考图"]')?.click()
+    })
+
+    expect(removeReferenceImage).toHaveBeenCalledWith('reference-confirm-remove-test')
     expect(document.querySelector('[aria-label="参考图预览"]')).toBeNull()
 
     await act(async () => {

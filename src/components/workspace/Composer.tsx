@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
+import { confirmDestructiveAction } from '../../lib/confirm'
 import { imageSourceForDisplay, imageSourceForDisplaySync, isTauriRuntime, readLocalImageFile } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation, ReferenceImage } from '../../shared/types'
@@ -182,6 +183,11 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     await generate()
   }
 
+  async function onRemoveReferenceImage(referenceId: string): Promise<void> {
+    if (!confirmDestructiveAction('确认移除这张参考图？')) return
+    await removeReferenceImage(referenceId)
+  }
+
   const onDrop = (event: DragEvent<HTMLLabelElement>) => {
     event.preventDefault()
     event.stopPropagation()
@@ -237,7 +243,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
               <button
                 className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
                 type="button"
-                onClick={() => void removeReferenceImage(reference.id)}
+                onClick={() => void onRemoveReferenceImage(reference.id)}
                 title="移除参考图"
               >
                 <X size={14} />

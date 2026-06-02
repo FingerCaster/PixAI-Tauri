@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
 import { cn } from '@/lib/utils'
+import { confirmDestructiveAction } from '../../lib/confirm'
 import appLogo from '../../assets/app-logo.png'
 import { IMAGE_QUALITY_LABELS, buildImageEndpoint } from '../../shared/image-options'
 import { useAppStore } from '../../store/app-store'
@@ -36,6 +37,7 @@ export function MainLayout({
   const imageProfile = settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId)
   const endpoint = imageProfile ? buildImageEndpoint(imageProfile.baseUrl) : ''
   const hasAvailableUpdate = appUpdate.status === 'available' && Boolean(appUpdate.availableUpdate)
+  const confirmDeleteConversation = () => confirmDestructiveAction('确认删除这个会话？会话下的生成任务会一起删除，历史图片会保留在图库。')
 
   return (
     <div className="shell app-frame flex h-dvh min-h-[720px] min-w-[1080px] flex-col overflow-hidden bg-[radial-gradient(circle_at_0%_0%,hsl(var(--primary)/0.09),transparent_28%),linear-gradient(135deg,hsl(var(--background)),hsl(var(--secondary)/0.55))]">
@@ -119,12 +121,14 @@ export function MainLayout({
                         title="删除会话"
                         onClick={(event) => {
                           event.stopPropagation()
+                          if (!confirmDeleteConversation()) return
                           void deleteConversation(conversation.id)
                         }}
                         onKeyDown={(event) => {
                           if (event.key !== 'Enter' && event.key !== ' ') return
                           event.preventDefault()
                           event.stopPropagation()
+                          if (!confirmDeleteConversation()) return
                           void deleteConversation(conversation.id)
                         }}
                       >

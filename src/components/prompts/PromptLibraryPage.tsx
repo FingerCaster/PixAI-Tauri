@@ -5,6 +5,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/componen
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
+import { confirmDestructiveAction } from '../../lib/confirm'
 import type { PromptTemplate } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 
@@ -20,6 +21,11 @@ export function PromptLibraryPage() {
   const copyPrompt = async (prompt: string) => {
     await navigator.clipboard.writeText(prompt)
     notify('提示词已复制')
+  }
+
+  const deletePromptTemplate = async (id: string) => {
+    if (!confirmDestructiveAction('确认删除这个提示词模板？')) return
+    await deleteTemplate(id)
   }
 
   return (
@@ -100,7 +106,7 @@ export function PromptLibraryPage() {
                 <Button variant="ghost" size="icon-sm" type="button" onClick={() => setDraft(template)} title="编辑">
                   <Pencil size={15} />
                 </Button>
-                <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deleteTemplate(template.id)} title="删除">
+                <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deletePromptTemplate(template.id)} title="删除">
                   <Trash2 size={15} />
                 </Button>
               </CardFooter>

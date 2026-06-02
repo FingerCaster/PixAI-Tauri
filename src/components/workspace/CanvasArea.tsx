@@ -3,6 +3,7 @@ import { Image as ImageIcon, Trash2 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { GallerySelect, type GallerySelectOption } from '../common/GallerySelect'
+import { confirmDestructiveAction } from '../../lib/confirm'
 import { elapsedMs, formatDuration } from '../../lib/time'
 import { getGenerationAttemptStartedAt } from '../../generation-timing'
 import type { GenerationRun, ImageHistoryItem } from '../../shared/types'
@@ -91,6 +92,7 @@ export function CanvasArea({
   }, [page, pageSize, workspaceEntries])
   const clearFailedItems = async () => {
     if (clearingFailed || failedItems.length === 0) return
+    if (!confirmDestructiveAction(`确认清空当前工作区的 ${failedItems.length} 条失败记录？`)) return
     setClearingFailed(true)
     try {
       await deleteHistoryItems(failedItems.map((item) => item.id))
