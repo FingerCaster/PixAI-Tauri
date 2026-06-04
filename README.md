@@ -166,6 +166,36 @@ PixAI 使用 Tauri updater plugin。生产配置位于 `src-tauri/tauri.conf.jso
 
 正式更新使用 GitHub Release + `latest.json`。私钥必须长期稳定保存，仓库只提交 public key。
 
+后续正式发布默认走 GitHub Actions。需要先在 GitHub 仓库 Secrets 中配置：
+
+```text
+TAURI_SIGNING_PRIVATE_KEY=<生产 updater 私钥内容>
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD=<私钥密码，可为空>
+```
+
+发布新版本：
+
+```bash
+# 1. 同步更新 package.json、src-tauri/Cargo.toml、src-tauri/Cargo.lock 和 src-tauri/tauri.conf.json 的版本号
+# 2. 提交版本号变更
+git tag <version>
+git push origin main <version>
+```
+
+`Release` workflow 会在 tag push 后分别在 Windows x64、macOS arm64 和 macOS x64 runner 上构建签名安装包。全部构建成功后，它会创建 draft GitHub Release，合并 `latest.json`，上传完整资产后再公开 Release。也可以在 GitHub Actions 页面手动运行 workflow，并填写 `version` / `tag`。
+
+workflow 发布内容包括：
+
+```text
+latest.json
+PixAI_<version>_x64_en-US.msi
+PixAI_<version>_x64-setup.exe
+PixAI_<version>_macos-aarch64.app.tar.gz
+PixAI_<version>_macos-aarch64.dmg
+PixAI_<version>_macos-x64.app.tar.gz
+PixAI_<version>_macos-x64.dmg
+```
+
 首次生成正式 updater key：
 
 ```bash
@@ -229,6 +259,8 @@ PixAI_<version>_x64_en-US.msi
 PixAI_<version>_x64-setup.exe
 PixAI_<version>_macos-aarch64.app.tar.gz
 PixAI_<version>_macos-aarch64.dmg
+PixAI_<version>_macos-x64.app.tar.gz
+PixAI_<version>_macos-x64.dmg
 ```
 
 Windows 和 macOS 可以在不同机器上分开构建、分开执行 `manifest` / `publish`。正式脚本会读取同一 tag 已有的 `latest.json`，版本相同时合并 `platforms` 条目，避免后发布的平台覆盖先发布的平台。跨架构 macOS 产物可在 manifest/publish 时指定：

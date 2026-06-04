@@ -25,7 +25,8 @@
     "updater:release:pull-key": "node scripts/release-updater.mjs pull-key",
     "updater:release:build": "node scripts/release-updater.mjs build",
     "updater:release:manifest": "node scripts/release-updater.mjs manifest",
-    "updater:release:publish": "node scripts/release-updater.mjs publish"
+    "updater:release:publish": "node scripts/release-updater.mjs publish",
+    "updater:release:publish-staged": "node scripts/release-updater.mjs publish-staged"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",

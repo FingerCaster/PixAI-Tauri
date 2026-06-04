@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -52,6 +52,9 @@ async function main() {
       return
     case 'publish':
       await publishReleaseUpdater()
+      return
+    case 'publish-staged':
+      await publishStagedReleaseUpdater()
       return
     case 'help':
     case '--help':
@@ -238,6 +241,101 @@ async function publishReleaseUpdater() {
   console.log(`Version: ${version}`)
 }
 
+async function publishStagedReleaseUpdater() {
+  const { tag, version, manifestPath, assetPaths } = await stageDownloadedReleaseUpdater()
+  await requireGithubRelease(tag)
+
+  console.log(`Uploading merged production updater assets to GitHub release ${tag}`)
+  await runCommand('gh', [
+    'release',
+    'upload',
+    tag,
+    manifestPath,
+    ...assetPaths,
+    '--clobber'
+  ], { cwd: rootDir, env: process.env })
+
+  console.log(`Release ${tag} now includes merged latest.json for signed updater checks.`)
+  console.log(`Endpoint: https://github.com/${githubRepo}/releases/latest/download/latest.json`)
+  console.log(`Version: ${version}`)
+}
+
+async function stageDownloadedReleaseUpdater() {
+  const version = await resolveVersion()
+  const tag = resolveTag(version)
+  const inputDir = resolve(rootDir, readStringOption(options.inputDir || options['input-dir']) || join(releaseUpdaterDir, 'ci-staging'))
+  const latestManifestPaths = await findLatestManifestPaths(inputDir)
+
+  if (latestManifestPaths.length === 0) {
+    throw new Error(`No staged latest.json files found in ${relative(rootDir, inputDir)}.`)
+  }
+
+  const releaseMetadata = await readReleaseMetadata(tag)
+  const releaseDir = join(stagingDir, version)
+  const existingManifest = await readExistingLatestManifest(tag)
+  let latestJson = existingManifest?.version && normalizeVersion(existingManifest.version) === version
+    ? existingManifest
+    : null
+  const copiedAssetPaths = new Map()
+
+  await rm(releaseDir, { recursive: true, force: true })
+  await mkdir(releaseDir, { recursive: true })
+
+  for (const manifestPath of latestManifestPaths) {
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
+    if (normalizeVersion(manifest?.version) !== version) {
+      throw new Error(`${relative(rootDir, manifestPath)} is for version ${manifest?.version || '<missing>'}, expected ${version}.`)
+    }
+
+    latestJson = mergeLatestManifest(latestJson, manifest)
+
+    const manifestDir = dirname(manifestPath)
+    const entries = await readdir(manifestDir, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isFile() || entry.name === 'latest.json') continue
+      const sourcePath = join(manifestDir, entry.name)
+      const destinationPath = join(releaseDir, entry.name)
+      await cp(sourcePath, destinationPath)
+      copiedAssetPaths.set(entry.name, destinationPath)
+    }
+  }
+
+  const notes = readStringOption(options.notes)
+    || releaseMetadata?.body?.trim()
+    || latestJson?.notes
+    || `PixAI ${version}`
+  const pubDate = readStringOption(options.pubDate)
+    || releaseMetadata?.publishedAt
+    || latestJson?.pub_date
+    || new Date().toISOString()
+  const finalManifest = {
+    ...(latestJson || {}),
+    version,
+    notes,
+    pub_date: pubDate,
+    platforms: latestJson?.platforms || {}
+  }
+  assertRequiredPlatforms(finalManifest)
+  const finalManifestPath = join(releaseDir, 'latest.json')
+  await writeLatestManifest(finalManifestPath, finalManifest)
+
+  console.log(`Merged staged production updater assets for ${version}`)
+  console.log(`Manifest: ${relative(rootDir, finalManifestPath)}`)
+  for (const assetPath of copiedAssetPaths.values()) {
+    console.log(`Asset: ${relative(rootDir, assetPath)}`)
+  }
+  if (existingManifest?.version && normalizeVersion(existingManifest.version) === version) {
+    console.log(`Merged existing latest.json platforms: ${Object.keys(existingManifest.platforms || {}).join(', ') || 'none'}`)
+  }
+
+  return {
+    tag,
+    version,
+    manifestPath: finalManifestPath,
+    assetPaths: [...copiedAssetPaths.values()]
+  }
+}
+
 async function assertConfiguredPubkey() {
   const tauriConfig = JSON.parse(await readFile(tauriConfigPath, 'utf8'))
   const configuredPubkey = tauriConfig?.plugins?.updater?.pubkey?.trim?.() || ''
@@ -346,6 +444,46 @@ async function readExistingLatestManifest(tag) {
   }
 }
 
+async function findLatestManifestPaths(root) {
+  const results = []
+
+  async function walk(directory) {
+    const entries = await safeReaddir(directory)
+    for (const entry of entries) {
+      const entryPath = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await walk(entryPath)
+        continue
+      }
+      if (entry.isFile() && entry.name === 'latest.json') {
+        results.push(entryPath)
+      }
+    }
+  }
+
+  await walk(root)
+  return results.sort()
+}
+
+function assertRequiredPlatforms(manifest) {
+  const requiredPlatforms = readStringListOption(options.requirePlatforms || options['require-platforms'])
+  if (requiredPlatforms.length === 0) return
+
+  const platforms = manifest?.platforms || {}
+  const missingPlatforms = requiredPlatforms.filter((platform) => !platforms[platform])
+  if (missingPlatforms.length > 0) {
+    throw new Error(`Merged latest.json is missing required platforms: ${missingPlatforms.join(', ')}`)
+  }
+}
+
+async function safeReaddir(path) {
+  try {
+    return await readdir(path, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
 async function requireGithubRelease(tag) {
   try {
     await runCommandCapture('gh', [
@@ -407,6 +545,12 @@ function parseArgs(args) {
 
 function readStringOption(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function readStringListOption(value) {
+  const rawValue = readStringOption(value)
+  if (!rawValue) return []
+  return rawValue.split(',').map((item) => item.trim()).filter(Boolean)
 }
 
 function readMacosArchOption() {
@@ -478,12 +622,15 @@ Commands:
   pnpm updater:release:build -- --version 0.0.3
   pnpm updater:release:manifest -- --version 0.0.3 --tag 0.0.3
   pnpm updater:release:publish -- --version 0.0.3 --tag 0.0.3
+  pnpm updater:release:publish-staged -- --version 0.0.3 --tag 0.0.3 --input-dir artifacts/release-updater/ci-staging --require-platforms windows-x86_64-msi,windows-x86_64-nsis,darwin-aarch64,darwin-x86_64
 
 Notes:
   - Keep artifacts/release-updater/keys/updater.key private and stable across releases.
   - pull-key reads "PixAI updater.key" and "PixAI updater.key.pub" from the "PixAI Release" vault by default.
   - src-tauri/tauri.conf.json must contain the matching updater public key.
   - publish uploads latest.json plus the matching Windows and/or macOS assets to an existing GitHub release.
+  - publish-staged merges staged assets generated by CI matrix jobs, then uploads the combined latest.json/assets.
+  - publish-staged --require-platforms fails before upload when any required platform key is missing.
   - latest.json is merged with an existing same-version release manifest so split Windows/macOS publishing keeps prior platform entries.
   - Use --macos-arch aarch64 or --macos-arch x86_64 when publishing cross-compiled macOS bundles.
 `)
