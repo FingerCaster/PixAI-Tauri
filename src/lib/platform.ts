@@ -1,8 +1,9 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
-import { save } from '@tauri-apps/plugin-dialog'
+import { downloadDir } from '@tauri-apps/api/path'
+import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { AppVersionInfo, CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ReferenceImageFilePayload } from '../shared/types'
+import type { AppVersionInfo, CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ImageHistoryItem, ReferenceImageFilePayload } from '../shared/types'
 
 type SecretWriteResult = {
   insecure_storage: boolean
@@ -58,6 +59,13 @@ type DesktopPlatformInfoResult = {
   arch?: string
   installerType?: string
   installer_type?: string
+}
+
+type DownloadableHistoryImage = Pick<ImageHistoryItem, 'id' | 'dataUrl' | 'storagePath'>
+
+type DownloadHistoryImagesResult = {
+  savedCount: number
+  canceled: boolean
 }
 
 const memoryStorage = new Map<string, string>()
@@ -428,6 +436,58 @@ export async function downloadImageSource(source: string | null, filename: strin
   await downloadBlob(blob, filename)
 }
 
+export async function downloadHistoryImages(items: DownloadableHistoryImage[]): Promise<DownloadHistoryImagesResult> {
+  const downloadable = items.filter((item) => Boolean(item.dataUrl || item.storagePath))
+  if (downloadable.length === 0) return { savedCount: 0, canceled: false }
+
+  if (!isTauriRuntime() || downloadable.length === 1) {
+    let savedCount = 0
+    for (const item of downloadable) {
+      try {
+        await downloadImageSource(item.dataUrl ?? item.storagePath ?? null, historyDownloadFilename(item), item.storagePath)
+        savedCount += 1
+      } catch (error) {
+        if (error instanceof DownloadCanceledError) {
+          return { savedCount, canceled: true }
+        }
+      }
+    }
+    return { savedCount, canceled: false }
+  }
+
+  const directory = await selectDownloadDirectory()
+  if (!directory) return { savedCount: 0, canceled: true }
+
+  let savedCount = 0
+  for (const item of downloadable) {
+    try {
+      await downloadImageSourceToDirectory(item.dataUrl ?? item.storagePath ?? null, historyDownloadFilename(item), item.storagePath, directory)
+      savedCount += 1
+    } catch {
+      // Keep batch downloads moving when one history item is temporarily unavailable.
+    }
+  }
+  return { savedCount, canceled: false }
+}
+
+export async function downloadImageSourceToDirectory(source: string | null, filename: string, storagePath: string | null | undefined, directory: string): Promise<void> {
+  const blob = await resolveDownloadBlob(source, storagePath)
+  if (!blob) throw new Error('图片内容不可用，无法下载。')
+  if (storagePath && isLocalFilePath(storagePath)) {
+    await copyBinaryFile(storagePath, directory, filename)
+    return
+  }
+  if (isTauriRuntime()) {
+    await invoke('write_binary_file_in_directory', {
+      directory,
+      filename,
+      bytesBase64: await blobToBase64(blob)
+    })
+    return
+  }
+  await downloadBlob(blob, filename)
+}
+
 export async function readBinaryFileBase64(path: string): Promise<string> {
   if (!isTauriRuntime()) throw new Error('读取图片文件只能在 Tauri 应用中执行。')
   return invoke<string>('read_binary_file_base64', { path })
@@ -530,7 +590,7 @@ function dataUrlToBlob(dataUrl: string): Blob {
   return new Blob([bytes], { type: match[1] })
 }
 
-async function resolveDownloadBlob(source: string | null, storagePath?: string | null): Promise<Blob | null> {
+async function resolveDownloadBlob(source: string | null | undefined, storagePath?: string | null): Promise<Blob | null> {
   if (!source && !storagePath) return null
   if (source?.startsWith('data:')) return dataUrlToBlob(source)
 
@@ -564,11 +624,61 @@ async function downloadBlob(blob: Blob, filename: string): Promise<void> {
 }
 
 async function blobToBase64(blob: Blob): Promise<string> {
+  if (typeof FileReader !== 'undefined') {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onerror = () => reject(reader.error || new Error('图片编码失败。'))
+      reader.onload = () => {
+        if (typeof reader.result !== 'string') {
+          reject(new Error('图片编码失败。'))
+          return
+        }
+        resolve(reader.result)
+      }
+      reader.readAsDataURL(blob)
+    })
+    return dataUrl.split(',')[1] || ''
+  }
+
   const buffer = await blob.arrayBuffer()
   const bytes = new Uint8Array(buffer)
   let binary = ''
   for (let index = 0; index < bytes.length; index += 1) binary += String.fromCharCode(bytes[index])
   return btoa(binary)
+}
+
+async function selectDownloadDirectory(): Promise<string | null> {
+  const defaultPath = await safeDownloadDir()
+  const selected = await open({
+    directory: true,
+    multiple: false,
+    title: '选择批量下载文件夹',
+    defaultPath: defaultPath || undefined
+  })
+  return typeof selected === 'string' ? selected : null
+}
+
+async function safeDownloadDir(): Promise<string | null> {
+  try {
+    return await downloadDir()
+  } catch {
+    return null
+  }
+}
+
+function historyDownloadFilename(item: DownloadableHistoryImage): string {
+  return `${item.id}.${extensionFromSource(item.dataUrl || item.storagePath || '')}`
+}
+
+function extensionFromSource(source: string): string {
+  if (!source.startsWith('data:')) {
+    const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(source)?.[1]?.toLowerCase()
+    return extension === 'jpg' || extension === 'jpeg' || extension === 'webp' ? extension : 'png'
+  }
+  const mimeType = /^data:([^;]+);base64,/i.exec(source)?.[1] || ''
+  if (mimeType.includes('jpeg')) return 'jpg'
+  if (mimeType.includes('webp')) return 'webp'
+  return 'png'
 }
 
 export class DownloadCanceledError extends Error {

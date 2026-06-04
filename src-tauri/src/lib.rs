@@ -701,6 +701,21 @@ fn write_binary_file(path: String, bytes_base64: String) -> Result<String, Strin
 }
 
 #[tauri::command]
+fn write_binary_file_in_directory(
+    directory: String,
+    filename: String,
+    bytes_base64: String,
+) -> Result<String, String> {
+    let directory = PathBuf::from(directory);
+    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    let path = unique_file_path(&directory, &sanitize_export_filename(&filename));
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, bytes_base64)
+        .map_err(|error| format!("图片数据无效：{error}"))?;
+    fs::write(&path, bytes).map_err(|error| error.to_string())?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
 fn copy_binary_file(source: String, directory: String, filename: String) -> Result<String, String> {
     let source_path = PathBuf::from(source);
     if !source_path.is_file() {
@@ -1729,6 +1744,7 @@ pub fn run() {
             write_data_url_file,
             read_binary_file_base64,
             write_binary_file,
+            write_binary_file_in_directory,
             copy_binary_file,
             store_data_url_file,
             codex_skill_status,

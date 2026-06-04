@@ -2,6 +2,7 @@ import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ImageHistoryItem } from '../../shared/types'
+import * as platformModule from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { GalleryPage } from './GalleryPage'
 
@@ -109,6 +110,37 @@ describe('GalleryPage destructive actions', () => {
     expect(deleteHistory).toHaveBeenCalledTimes(2)
     expect(deleteHistory).toHaveBeenNthCalledWith(1, 'history-gallery-1')
     expect(deleteHistory).toHaveBeenNthCalledWith(2, 'history-gallery-2')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('downloads multiple selected gallery images in one batch', async () => {
+    const downloadHistoryImages = vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 2,
+      canceled: false
+    })
+    const notify = vi.fn()
+    useAppStore.setState({ notify })
+    const { host, root } = await renderGallery()
+    const selectAllButton = findButtonByText('全选')
+    const downloadButton = findButtonByText('下载')
+
+    await act(async () => {
+      selectAllButton?.click()
+    })
+    await act(async () => {
+      downloadButton?.click()
+    })
+
+    expect(downloadHistoryImages).toHaveBeenCalledTimes(1)
+    expect(downloadHistoryImages).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'history-gallery-1' }),
+      expect.objectContaining({ id: 'history-gallery-2' })
+    ])
+    expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
 
     await act(async () => {
       root.unmount()

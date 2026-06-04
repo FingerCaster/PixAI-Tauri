@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { ImageTile } from '../workspace/ImageTile'
 import { confirmDestructiveAction } from '../../lib/confirm'
-import { DownloadCanceledError, downloadImageSource } from '../../lib/platform'
+import { downloadHistoryImages } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 
 export function GalleryPage() {
@@ -30,22 +30,12 @@ export function GalleryPage() {
   }
 
   const downloadSelected = async () => {
-    const downloadable = selectedItems.filter((item) => item.dataUrl || item.storagePath)
-    let count = 0
-    for (const item of downloadable) {
-      try {
-        await downloadImageSource(
-          item.dataUrl,
-          `${item.id}.${extensionFromDataUrl(item.dataUrl || item.storagePath || '')}`,
-          item.storagePath
-        )
-        count += 1
-      } catch (error) {
-        if (error instanceof DownloadCanceledError) break
-        // Keep batch downloads moving when one history item is no longer available.
-      }
+    const result = await downloadHistoryImages(selectedItems)
+    if (result.savedCount > 0) {
+      notify(result.savedCount > 1 ? `已保存 ${result.savedCount} 张图片到所选文件夹` : '已保存 1 张图片')
+      return
     }
-    notify(count > 0 ? `已保存 ${count} 张图片` : '没有可下载的图片')
+    if (!result.canceled) notify('没有可下载的图片')
   }
 
   const deleteSelected = async () => {
@@ -143,15 +133,4 @@ export function GalleryPage() {
       )}
     </section>
   )
-}
-
-function extensionFromDataUrl(dataUrl: string): string {
-  if (!dataUrl.startsWith('data:')) {
-    const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(dataUrl)?.[1]?.toLowerCase()
-    return extension === 'jpg' || extension === 'jpeg' || extension === 'webp' ? extension : 'png'
-  }
-  const mimeType = /^data:([^;]+);base64,/i.exec(dataUrl)?.[1] || ''
-  if (mimeType.includes('jpeg')) return 'jpg'
-  if (mimeType.includes('webp')) return 'webp'
-  return 'png'
 }
