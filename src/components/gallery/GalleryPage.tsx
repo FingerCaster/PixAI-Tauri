@@ -49,7 +49,7 @@ export function GalleryPage() {
   }
 
   const deleteSelected = async () => {
-    if (!confirmDestructiveAction(`确认删除选中的 ${selectedItems.length} 张图片记录？`)) return
+    if (!(await confirmDestructiveAction(`确认删除选中的 ${selectedItems.length} 张图片记录？`))) return
     for (const item of selectedItems) {
       await deleteHistory(item.id)
     }
@@ -57,7 +57,7 @@ export function GalleryPage() {
   }
 
   const deleteSingle = async (id: string) => {
-    if (!confirmDestructiveAction('确认删除这张图片记录？')) return
+    if (!(await confirmDestructiveAction('确认删除这张图片记录？'))) return
     await deleteHistory(id)
   }
 

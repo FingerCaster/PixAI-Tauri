@@ -184,7 +184,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   }
 
   async function onRemoveReferenceImage(referenceId: string): Promise<void> {
-    if (!confirmDestructiveAction('确认移除这张参考图？')) return
+    if (!(await confirmDestructiveAction('确认移除这张参考图？'))) return
     await removeReferenceImage(referenceId)
   }
 

@@ -69,7 +69,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
     if (imageSource) setPreviewOpen(true)
   }
   const deleteItem = async () => {
-    if (!confirmDestructiveAction('确认删除这张图片记录？')) return
+    if (!(await confirmDestructiveAction('确认删除这张图片记录？'))) return
     await deleteHistory(item.id)
   }
 

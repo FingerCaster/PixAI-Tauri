@@ -92,7 +92,7 @@ export function CanvasArea({
   }, [page, pageSize, workspaceEntries])
   const clearFailedItems = async () => {
     if (clearingFailed || failedItems.length === 0) return
-    if (!confirmDestructiveAction(`确认清空当前工作区的 ${failedItems.length} 条失败记录？`)) return
+    if (!(await confirmDestructiveAction(`确认清空当前工作区的 ${failedItems.length} 条失败记录？`))) return
     setClearingFailed(true)
     try {
       await deleteHistoryItems(failedItems.map((item) => item.id))

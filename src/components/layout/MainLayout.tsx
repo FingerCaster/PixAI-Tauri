@@ -119,16 +119,16 @@ export function MainLayout({
                         role="button"
                         tabIndex={0}
                         title="删除会话"
-                        onClick={(event) => {
+                        onClick={async (event) => {
                           event.stopPropagation()
-                          if (!confirmDeleteConversation()) return
+                          if (!(await confirmDeleteConversation())) return
                           void deleteConversation(conversation.id)
                         }}
-                        onKeyDown={(event) => {
+                        onKeyDown={async (event) => {
                           if (event.key !== 'Enter' && event.key !== ' ') return
                           event.preventDefault()
                           event.stopPropagation()
-                          if (!confirmDeleteConversation()) return
+                          if (!(await confirmDeleteConversation())) return
                           void deleteConversation(conversation.id)
                         }}
                       >

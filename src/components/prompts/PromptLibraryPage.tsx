@@ -24,7 +24,7 @@ export function PromptLibraryPage() {
   }
 
   const deletePromptTemplate = async (id: string) => {
-    if (!confirmDestructiveAction('确认删除这个提示词模板？')) return
+    if (!(await confirmDestructiveAction('确认删除这个提示词模板？'))) return
     await deleteTemplate(id)
   }
 

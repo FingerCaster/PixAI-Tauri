@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DEFAULT_MODEL } from '../../../shared/image-options'
+import { confirmDestructiveAction } from '../../../lib/confirm'
 import type { ProviderProfile } from '../../../shared/types'
 import { useAppStore } from '../../../store/app-store'
 import { GallerySelect } from '../../common/GallerySelect'
@@ -75,7 +76,7 @@ export function ServicesSettingsTab() {
 
   const deleteProfileDraft = async () => {
     if (!profileDraft || profileDraftMode !== 'edit') return
-    if (!window.confirm('删除此服务配置？')) return
+    if (!(await confirmDestructiveAction('删除此服务配置？'))) return
     await deleteProfile(profileDraft.id)
     closeProfileDialog()
   }
