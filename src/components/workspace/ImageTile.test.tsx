@@ -34,12 +34,14 @@ function succeededItem(overrides: Partial<ImageHistoryItem> = {}): ImageHistoryI
 describe('ImageTile', () => {
   const originalDeleteHistory = useAppStore.getState().deleteHistory
   const originalRetryHistory = useAppStore.getState().retryHistory
+  const originalAddHistoryAsReference = useAppStore.getState().addHistoryAsReference
 
   beforeEach(() => {
     vi.restoreAllMocks()
     useAppStore.setState({
       deleteHistory: originalDeleteHistory,
-      retryHistory: originalRetryHistory
+      retryHistory: originalRetryHistory,
+      addHistoryAsReference: originalAddHistoryAsReference
     })
   })
 

@@ -1,7 +1,13 @@
 import { useEffect, useState } from 'react'
-import { Copy, Download, Edit3, Heart, ImageDown, RotateCcw, ScrollText, Trash2 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { Copy, Download, Edit3, EllipsisVertical, Heart, ImageDown, RotateCcw, ScrollText, Trash2 } from 'lucide-react'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import type { ImageHistoryItem } from '../../shared/types'
 import { confirmDestructiveAction } from '../../lib/confirm'
@@ -36,7 +42,13 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
     notify('提示词已复制')
   }
   const copyImage = async () => {
-    if (!item.dataUrl) return
+    if (!item.dataUrl) {
+      const copyText = item.storagePath || item.dataUrl
+      if (!copyText) return
+      await navigator.clipboard.writeText(copyText)
+      notify('图片路径已复制')
+      return
+    }
     if (!item.dataUrl.startsWith('data:')) {
       await navigator.clipboard.writeText(item.storagePath || item.dataUrl)
       notify('图片路径已复制')
@@ -152,38 +164,66 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
         </span>
       </div>
-      <div className="tile-actions mt-auto flex items-center gap-1 border-t border-border p-2">
-        <Button variant="ghost" size="icon-sm" type="button" onClick={copyPrompt} title="复制提示词">
-          <Copy size={15} />
-        </Button>
-        {imageSource ? (
-          <>
-            <Button variant="ghost" size="icon-sm" type="button" onClick={() => void copyImage()} title="复制图片">
-              <ImageDown size={15} />
-            </Button>
+      <div className="tile-actions mt-auto grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-t border-border p-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-1">
+          <Button variant="ghost" size="icon-sm" type="button" onClick={copyPrompt} title="复制提示词">
+            <Copy size={15} />
+          </Button>
+          {imageSource ? (
             <Button variant="ghost" size="icon-sm" type="button" onClick={() => void downloadImage()} title="下载图片">
               <Download size={15} />
             </Button>
-            <Button variant="ghost" size="icon-sm" type="button" onClick={() => void addHistoryAsReference(item.id)} title="作为参考图编辑">
-              <Edit3 size={15} />
+          ) : null}
+          {item.callLog ? (
+            <Button variant="ghost" size="icon-sm" type="button" onClick={() => setCallLogOpen(true)} title="查看调用日志">
+              <ScrollText size={15} />
             </Button>
-          </>
-        ) : null}
-        {item.callLog ? (
-          <Button variant="ghost" size="icon-sm" type="button" onClick={() => setCallLogOpen(true)} title="查看调用日志">
-            <ScrollText size={15} />
+          ) : null}
+          {imageSource ? (
+            <ImageTileMoreMenu
+              onCopyImage={() => void copyImage()}
+              onAddAsReference={() => void addHistoryAsReference(item.id)}
+            />
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center gap-1">
+          <Button className={cn(item.favorite ? 'text-rose-600' : '')} variant="ghost" size="icon-sm" type="button" onClick={() => void toggleFavorite(item)} title="收藏">
+            <Heart size={15} fill={item.favorite ? 'currentColor' : 'none'} />
           </Button>
-        ) : null}
-        <Button className={cn('ml-auto', item.favorite ? 'text-rose-600' : '')} variant="ghost" size="icon-sm" type="button" onClick={() => void toggleFavorite(item)} title="收藏">
-          <Heart size={15} fill={item.favorite ? 'currentColor' : 'none'} />
-        </Button>
-        <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deleteItem()} title="删除">
-          <Trash2 size={15} />
-        </Button>
+          <Button variant="ghost" size="icon-sm" type="button" onClick={() => void deleteItem()} title="删除">
+            <Trash2 size={15} />
+          </Button>
+        </div>
       </div>
       {previewOpen ? <ImagePreviewModal item={item} onClose={() => setPreviewOpen(false)} /> : null}
       {callLogOpen ? <ImageCallLogModal item={item} onClose={() => setCallLogOpen(false)} /> : null}
     </article>
+  )
+}
+
+function ImageTileMoreMenu({
+  onCopyImage,
+  onAddAsReference
+}: {
+  onCopyImage: () => void
+  onAddAsReference: () => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger className={buttonVariants({ variant: 'ghost', size: 'icon-sm' })} title="更多操作" aria-label="更多操作">
+        <EllipsisVertical size={15} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuItem onSelect={() => onCopyImage()}>
+          <ImageDown size={15} />
+          复制图片
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onAddAsReference()}>
+          <Edit3 size={15} />
+          作为参考图编辑
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
