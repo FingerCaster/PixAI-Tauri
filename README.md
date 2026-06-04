@@ -166,6 +166,8 @@ PixAI 使用 Tauri updater plugin。生产配置位于 `src-tauri/tauri.conf.jso
 
 正式更新使用 GitHub Release + `latest.json`。私钥必须长期稳定保存，仓库只提交 public key。
 
+完整可重复执行 checklist 见 [docs/release-github-actions.md](docs/release-github-actions.md)。
+
 后续正式发布默认走 GitHub Actions。需要先在 GitHub 仓库 Secrets 中配置：
 
 ```text
