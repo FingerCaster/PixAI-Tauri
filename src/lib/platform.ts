@@ -1,5 +1,6 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { downloadDir } from '@tauri-apps/api/path'
+import { openPath } from '@tauri-apps/plugin-opener'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -465,6 +466,13 @@ export async function downloadHistoryImages(items: DownloadableHistoryImage[]): 
       savedCount += 1
     } catch {
       // Keep batch downloads moving when one history item is temporarily unavailable.
+    }
+  }
+  if (savedCount > 0) {
+    try {
+      await openPath(directory)
+    } catch {
+      // Opening the folder is a convenience; never block the download result on it.
     }
   }
   return { savedCount, canceled: false }

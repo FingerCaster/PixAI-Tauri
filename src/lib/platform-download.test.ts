@@ -14,8 +14,13 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: vi.fn()
 }))
 
+vi.mock('@tauri-apps/plugin-opener', () => ({
+  openPath: vi.fn()
+}))
+
 let coreModule = undefined as unknown as typeof import('@tauri-apps/api/core')
 let dialogModule = undefined as unknown as typeof import('@tauri-apps/plugin-dialog')
+let openerModule = undefined as unknown as typeof import('@tauri-apps/plugin-opener')
 let pathModule = undefined as unknown as typeof import('@tauri-apps/api/path')
 let downloadHistoryImages = undefined as unknown as typeof import('./platform')['downloadHistoryImages']
 let resetPlatformState = undefined as unknown as typeof import('./platform')['__resetPlatformStateForTests']
@@ -27,6 +32,7 @@ describe('downloadHistoryImages', () => {
     vi.resetModules()
     coreModule = await import('@tauri-apps/api/core')
     dialogModule = await import('@tauri-apps/plugin-dialog')
+    openerModule = await import('@tauri-apps/plugin-opener')
     pathModule = await import('@tauri-apps/api/path')
     const platform = await import('./platform')
     downloadHistoryImages = platform.downloadHistoryImages
@@ -41,6 +47,7 @@ describe('downloadHistoryImages', () => {
     vi.mocked(pathModule.downloadDir).mockResolvedValue('C:\\Users\\admin\\Downloads')
     vi.mocked(dialogModule.open).mockResolvedValue('E:\\BatchExports')
     vi.mocked(dialogModule.save).mockResolvedValue('E:\\SingleExports\\ignored.png')
+    vi.mocked(openerModule.openPath).mockResolvedValue(undefined)
     vi.mocked(coreModule.invoke).mockImplementation(async (command: string, args?: any) => {
       if (command === 'read_local_image_file') {
         return {
@@ -91,6 +98,7 @@ describe('downloadHistoryImages', () => {
       savedCount: 2,
       canceled: false
     })
+    expect(openerModule.openPath).toHaveBeenCalledWith('E:\\BatchExports')
   })
 
   it('returns canceled when the batch folder dialog is dismissed', async () => {
@@ -113,6 +121,7 @@ describe('downloadHistoryImages', () => {
       savedCount: 0,
       canceled: true
     })
+    expect(openerModule.openPath).not.toHaveBeenCalled()
   })
 })
 
