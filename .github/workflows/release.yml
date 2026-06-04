@@ -106,7 +106,7 @@ jobs:
             release-args: "--macos-arch aarch64"
           - name: macOS x64
             id: macos-x64
-            os: macos-15-intel
+            os: macos-14
             rust-target: x86_64-apple-darwin
             release-args: "--macos-arch x86_64"
     runs-on: ${{ matrix.os }}
