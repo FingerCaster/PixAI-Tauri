@@ -1,5 +1,5 @@
 import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +26,11 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     removeReferenceImage,
     updateActiveConversation
   } = useAppStore()
-  const [referenceSources, setReferenceSources] = useState<Record<string, string>>({})
+  const synchronousReferenceSources = useMemo(
+    () => buildReferenceSourceMap(conversation.referenceImages),
+    [conversation.referenceImages]
+  )
+  const [referenceSources, setReferenceSources] = useState<Record<string, string>>(synchronousReferenceSources)
   const [draftPrompt, setDraftPrompt] = useState(conversation.draftPrompt)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [previewReference, setPreviewReference] = useState<ReferenceImage | null>(null)
@@ -63,11 +67,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     let canceled = false
     setReferenceSources((currentSources) => ({
       ...currentSources,
-      ...Object.fromEntries(
-        conversation.referenceImages
-          .map((reference) => [reference.id, imageSourceForDisplaySync(reference.dataUrl, reference.storagePath)] as const)
-          .filter((entry): entry is [string, string] => Boolean(entry[1]))
-      )
+      ...synchronousReferenceSources
     }))
     void Promise.all(
       conversation.referenceImages.map(async (reference) => [
@@ -81,7 +81,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     return () => {
       canceled = true
     }
-  }, [conversation.referenceImages])
+  }, [conversation.referenceImages, synchronousReferenceSources])
 
   useEffect(() => {
     if (!isTauriRuntime()) return
@@ -238,7 +238,11 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           {conversation.referenceImages.map((reference) => (
             <div className="reference-thumb group relative size-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted" key={reference.id}>
               <button className="reference-preview-button h-full w-full" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
-                <img className="h-full w-full object-cover" src={referenceSources[reference.id] || reference.dataUrl} alt={reference.name} />
+                <img
+                  className="h-full w-full object-cover"
+                  src={referenceSources[reference.id] || synchronousReferenceSources[reference.id] || reference.dataUrl}
+                  alt={reference.name}
+                />
               </button>
               <button
                 className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
@@ -306,7 +310,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
       {previewReference ? (
         <ReferencePreviewModal
           reference={previewReference}
-          source={referenceSources[previewReference.id] || previewReference.dataUrl}
+          source={referenceSources[previewReference.id] || synchronousReferenceSources[previewReference.id] || previewReference.dataUrl}
           onClose={() => setPreviewReference(null)}
         />
       ) : null}
@@ -376,6 +380,14 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+}
+
+function buildReferenceSourceMap(references: ReferenceImage[]): Record<string, string> {
+  return Object.fromEntries(
+    references
+      .map((reference) => [reference.id, imageSourceForDisplaySync(reference.dataUrl, reference.storagePath)] as const)
+      .filter((entry): entry is [string, string] => Boolean(entry[1]))
+  )
 }
 
 function PromptExpandModal({

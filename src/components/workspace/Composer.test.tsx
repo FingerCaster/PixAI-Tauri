@@ -1,4 +1,5 @@
 import { act } from 'react'
+import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as platform from '../../lib/platform'
@@ -338,6 +339,59 @@ describe('Composer', () => {
     expect(defaultAllowed).toBe(false)
     expect(importReferenceFiles).toHaveBeenCalledTimes(1)
     expect(importReferenceFiles.mock.calls[0]?.[0].map((file: File) => file.name)).toEqual(['one.png', 'two.webp'])
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('uses a safe preview source immediately after a stored local reference is added', async () => {
+    setTauriRuntime(true)
+    vi.spyOn(platform, 'imageSourceForDisplay').mockImplementation(async (dataUrl, storagePath) => {
+      if (!storagePath) return dataUrl
+      return `tauri-safe://${storagePath.replace(/\\/g, '/')}`
+    })
+    vi.spyOn(platform, 'imageSourceForDisplaySync').mockImplementation((dataUrl, storagePath) => {
+      if (!storagePath) return dataUrl
+      return `tauri-safe://${storagePath.replace(/\\/g, '/')}`
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    let source: string | null = null
+
+    await act(async () => {
+      flushSync(() => {
+        root.render(<Composer conversation={conversation()} generating={false} />)
+      })
+    })
+
+    await act(async () => {
+      flushSync(() => {
+        root.render(
+          <Composer
+            conversation={conversation({
+              referenceImages: [
+                {
+                  id: 'reference-stored-path-test',
+                  name: 'stored.png',
+                  mimeType: 'image/png',
+                  dataUrl: 'C:\\stored\\references\\stored.png',
+                  storagePath: 'C:\\stored\\references\\stored.png',
+                  fileSizeBytes: 12,
+                  createdAt: '2026-06-06T01:30:00.000Z'
+                }
+              ]
+            })}
+            generating={false}
+          />
+        )
+      })
+      source = host.querySelector<HTMLImageElement>('.reference-thumb img')?.getAttribute('src') || null
+    })
+
+    expect(source).toBe('tauri-safe://C:/stored/references/stored.png')
 
     await act(async () => {
       root.unmount()
