@@ -1,6 +1,7 @@
 import { createId } from '../lib/ids'
 import { readJsonState, storeDataUrlFile, writeJsonState } from '../lib/platform'
 import { nowIso } from '../lib/time'
+import { generationOriginSearchText, normalizeGenerationOrigin } from '../shared/generation-origin'
 import {
   DEFAULT_IMAGE_OUTPUT_FORMAT,
   DEFAULT_MODEL,
@@ -132,7 +133,14 @@ export class AppDatabase {
 
   async insertRun(input: Omit<GenerationRun, 'items'>): Promise<GenerationRun> {
     await this.load()
-    const run: GenerationRun = { ...input, items: [], referenceImages: stripReferenceImagePayloads(input.referenceImages || []) }
+    const origin = normalizeGenerationOrigin(input.origin)
+    const { origin: _origin, ...runInput } = input
+    const run: GenerationRun = {
+      ...runInput,
+      ...(origin ? { origin } : {}),
+      items: [],
+      referenceImages: stripReferenceImagePayloads(input.referenceImages || [])
+    }
     this.requireData().runs.unshift(run)
     await this.save()
     return run
@@ -165,7 +173,14 @@ export class AppDatabase {
 
   async insertHistory(input: Omit<ImageHistoryItem, 'favorite'> & { favorite?: boolean; globalVisible?: boolean }): Promise<ImageHistoryItem> {
     await this.load()
-    const item: ImageHistoryItem = { ...input, favorite: Boolean(input.favorite), globalVisible: input.globalVisible !== false }
+    const origin = normalizeGenerationOrigin(input.origin)
+    const { origin: _origin, ...historyInput } = input
+    const item: ImageHistoryItem = {
+      ...historyInput,
+      ...(origin ? { origin } : {}),
+      favorite: Boolean(input.favorite),
+      globalVisible: input.globalVisible !== false
+    }
     this.requireData().history.unshift(item)
     await this.save()
     return item
@@ -176,7 +191,7 @@ export class AppDatabase {
     const query = options.query?.trim().toLowerCase() || ''
     const filtered = this.requireData().history.filter((item) => {
       if (item.globalVisible === false) return false
-      if (query && !`${item.prompt} ${item.model} ${item.size || ''}`.toLowerCase().includes(query)) return false
+      if (query && !historySearchText(item).includes(query)) return false
       if (options.favoritesOnly && !item.favorite) return false
       if (options.status && options.status !== 'all' && item.status !== options.status) return false
       if (options.model && item.model !== options.model) return false
@@ -375,19 +390,43 @@ async function normalizeData(data: PersistedData): Promise<{ data: PersistedData
       })))
       : [],
     runs: Array.isArray(data.runs)
-      ? data.runs.map((run) => ({
-        ...run,
-        referenceImages: strip(run.referenceImages || [])
+      ? data.runs.map((run) => normalizeRun(run, strip, () => {
+        changed = true
       }))
       : [],
     history: Array.isArray(data.history)
-      ? await Promise.all(data.history.map(async (item) => persistHistoryItem({
-        ...item,
-        referenceImages: strip(item.referenceImages || [])
-      })))
+      ? await Promise.all(data.history.map(async (item) => persistHistoryItem(normalizeHistoryItem(item, strip, () => {
+        changed = true
+      }))))
       : []
   }
   return { data: normalized, changed }
+}
+
+function normalizeRun(run: GenerationRun, strip: (references?: ReferenceImage[]) => ReferenceImage[], onChanged: () => void): GenerationRun {
+  const origin = normalizeGenerationOrigin(run.origin)
+  if (run.origin && !origin) onChanged()
+  const { origin: _origin, ...rest } = run
+  return {
+    ...rest,
+    ...(origin ? { origin } : {}),
+    referenceImages: strip(run.referenceImages || [])
+  }
+}
+
+function normalizeHistoryItem(item: ImageHistoryItem, strip: (references?: ReferenceImage[]) => ReferenceImage[], onChanged: () => void): ImageHistoryItem {
+  const origin = normalizeGenerationOrigin(item.origin)
+  if (item.origin && !origin) onChanged()
+  const { origin: _origin, ...rest } = item
+  return {
+    ...rest,
+    ...(origin ? { origin } : {}),
+    referenceImages: strip(item.referenceImages || [])
+  }
+}
+
+function historySearchText(item: ImageHistoryItem): string {
+  return `${item.prompt} ${item.model} ${item.size || ''} ${generationOriginSearchText(item.origin)}`.toLowerCase()
 }
 
 function stripReferenceImagePayloads(references: ReferenceImage[], onStripped?: () => void): ReferenceImage[] {

@@ -1,0 +1,72 @@
+feature: 2026-06-05-canvas-mode-sidebar-split
+created: 2026-06-05
+
+steps:
+  - action: "上下文骨架：补 activeCanvasConversationId、Canvas 项目生命周期 action 和会话/项目列表 selector"
+    exit_signal: "类型检查可识别新的 AppState / CanvasStoreState 接口，Canvas 不再要求复用 activeConversationId"
+    status: pending
+
+  - action: "数据编排：实现 openCanvasWorkspace、createCanvasProject、openCanvasProject、deleteCanvasProject 及隐藏 conversation 生命周期"
+    exit_signal: "store 测试覆盖首个项目创建、项目切换不污染 workspace 会话、删除项目同时删除隐藏 conversation"
+    status: pending
+
+  - action: "模式化侧栏：让 MainLayout 按 view 切换左侧列表和新建按钮，并移除顶部全局新建会话"
+    exit_signal: "workspace/canvas 两种视图下看到不同列表源，顶部不再出现新建会话按钮"
+    status: pending
+
+  - action: "Canvas 页面与桥接修正：CanvasWorkspace、addHistoryToCanvas、相关 helper 改为使用 Canvas 活动上下文"
+    exit_signal: "进入 Canvas 不再创建绑定当前 workspace 会话的默认项目，历史图加入 Canvas 会导入当前 Canvas 项目"
+    status: pending
+
+  - action: "验证收尾：补侧栏/项目生命周期测试并跑定向 vitest"
+    exit_signal: "侧栏切换、项目创建删除、Canvas 上下文切换的关键场景都有自动化证据"
+    status: pending
+
+checks:
+  - item: "AppState 同时保留 activeConversationId 和 activeCanvasConversationId 两套活动上下文"
+    source: 名词契约
+    status: pending
+
+  - item: "CanvasProject 继续以 conversationId 指向隐藏专属会话，不新增 Conversation hidden schema 字段"
+    source: 名词契约
+    status: pending
+
+  - item: "openCanvasWorkspace 会恢复最近项目，没有项目时创建新项目 + 隐藏 conversation"
+    source: 编排骨架
+    status: pending
+
+  - item: "切换 Canvas 项目不会覆盖经典工作台 activeConversationId"
+    source: 流程级约束
+    status: pending
+
+  - item: "左侧会话列表永远过滤掉被 Canvas 项目绑定的隐藏 conversation"
+    source: 流程级约束
+    status: pending
+
+  - item: "顶部导航不再存在全局新建会话按钮"
+    source: 挂载点
+    status: pending
+
+  - item: "MainLayout 左侧栏会根据 view 在普通会话和 Canvas 项目之间切换"
+    source: 挂载点
+    status: pending
+
+  - item: "CanvasWorkspace 不再用普通会话 id 作为默认项目 seed"
+    source: 挂载点
+    status: pending
+
+  - item: "工作台模式左侧只显示普通会话，并提供新建会话入口"
+    source: 验收场景
+    status: pending
+
+  - item: "Canvas 模式左侧只显示 Canvas 项目，并提供新建 Canvas 项目入口"
+    source: 验收场景
+    status: pending
+
+  - item: "新建 Canvas 项目会创建隐藏 conversation 且不进入工作台会话列表"
+    source: 验收场景
+    status: pending
+
+  - item: "删除 Canvas 项目会连带删除隐藏 conversation"
+    source: 验收场景
+    status: pending

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ArrowRight, BookOpen, Download, GalleryHorizontalEnd, ImagePlus, Moon, PanelRightClose, PanelRightOpen, Plus, Settings, Sun, Trash2 } from 'lucide-react'
+import { ArrowRight, BookOpen, Download, GalleryHorizontalEnd, ImagePlus, Moon, PanelRightClose, PanelRightOpen, Plus, Settings, Sun, Trash2, Workflow } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
@@ -9,6 +9,7 @@ import { confirmDestructiveAction } from '../../lib/confirm'
 import appLogo from '../../assets/app-logo.png'
 import { IMAGE_QUALITY_LABELS, buildImageEndpoint } from '../../shared/image-options'
 import { useAppStore } from '../../store/app-store'
+import { useCanvasStore } from '../../store/canvas-store'
 import type { GlobalSettingsTab } from '../settings/global/GlobalSettingsModal'
 
 export function MainLayout({
@@ -22,8 +23,12 @@ export function MainLayout({
     conversations,
     activeConversationId,
     createConversation,
+    createCanvasProject,
     darkMode,
+    deleteCanvasProject,
     deleteConversation,
+    openCanvasProject,
+    openCanvasWorkspace,
     setActiveConversation,
     setView,
     settingsVisible,
@@ -34,10 +39,19 @@ export function MainLayout({
     generatingByConversation,
     appUpdate
   } = useAppStore()
+  const canvasProjects = useCanvasStore((state) => state.projects)
+  const activeCanvasProjectId = useCanvasStore((state) => state.activeProjectId)
   const imageProfile = settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId)
   const endpoint = imageProfile ? buildImageEndpoint(imageProfile.baseUrl) : ''
   const hasAvailableUpdate = appUpdate.status === 'available' && Boolean(appUpdate.availableUpdate)
   const confirmDeleteConversation = () => confirmDestructiveAction('确认删除这个会话？会话下的生成任务会一起删除，历史图片会保留在图库。')
+  const confirmDeleteCanvasProject = () => confirmDestructiveAction('确认删除这个 Canvas 项目？项目绑定的专属会话会一起删除，历史图片会保留在图库。')
+  const hiddenConversationIds = new Set(canvasProjects.map((project) => project.conversationId).filter(Boolean))
+  const workspaceConversations = conversations.filter((conversation) => !hiddenConversationIds.has(conversation.id))
+  const sidebarMode = view === 'canvas' ? 'canvas' : 'workspace'
+  const sidebarCount = sidebarMode === 'canvas' ? canvasProjects.length : workspaceConversations.length
+  const sidebarTitle = sidebarMode === 'canvas' ? 'Canvas 项目' : '会话'
+  const canDeleteWorkspaceConversation = workspaceConversations.length > 1
 
   return (
     <div className="shell app-frame flex h-dvh min-h-[720px] min-w-[1080px] flex-col overflow-hidden bg-[radial-gradient(circle_at_0%_0%,hsl(var(--primary)/0.09),transparent_28%),linear-gradient(135deg,hsl(var(--background)),hsl(var(--secondary)/0.55))]">
@@ -63,6 +77,10 @@ export function MainLayout({
             <ImagePlus />
             工作台
           </Button>
+          <Button variant={view === 'canvas' ? 'secondary' : 'ghost'} type="button" onClick={() => void openCanvasWorkspace()}>
+            <Workflow />
+            Canvas
+          </Button>
           <Button variant={view === 'gallery' ? 'secondary' : 'ghost'} type="button" onClick={() => setView('gallery')}>
             <GalleryHorizontalEnd />
             图库
@@ -70,10 +88,6 @@ export function MainLayout({
           <Button variant={view === 'prompts' ? 'secondary' : 'ghost'} type="button" onClick={() => setView('prompts')}>
             <BookOpen />
             提示词库
-          </Button>
-          <Button type="button" onClick={() => void createConversation()}>
-            <Plus />
-            新建会话
           </Button>
         </nav>
       </header>
@@ -85,12 +99,66 @@ export function MainLayout({
       >
         <aside className="sidebar flex min-h-0 flex-col border-r border-border/80 bg-card/82">
           <div className="flex h-12 shrink-0 items-center justify-between px-4">
-            <div className="section-title text-xs font-semibold uppercase tracking-wide text-muted-foreground">会话</div>
-            <Badge variant="outline">{conversations.length}</Badge>
+            <div className="section-title text-xs font-semibold uppercase tracking-wide text-muted-foreground">{sidebarTitle}</div>
+            <Badge variant="outline">{sidebarCount}</Badge>
+          </div>
+          <div className="px-3 pb-3">
+            {sidebarMode === 'canvas' ? (
+              <Button className="w-full justify-start" type="button" onClick={() => void createCanvasProject()}>
+                <Plus />
+                新建 Canvas 项目
+              </Button>
+            ) : (
+              <Button className="w-full justify-start" type="button" onClick={() => void createConversation()}>
+                <Plus />
+                新建会话
+              </Button>
+            )}
           </div>
           <ScrollArea className="session-list min-h-0 flex-1 px-3">
             <div className="grid gap-2 pb-3">
-              {conversations.map((conversation) => {
+              {sidebarMode === 'canvas' ? canvasProjects.map((project) => {
+                const active = project.id === activeCanvasProjectId
+                return (
+                  <button
+                    key={project.id}
+                    className={cn(
+                      'session group flex min-h-16 w-full items-center gap-2 rounded-xl border px-3 py-2 text-left transition-colors',
+                      active ? 'active border-primary/35 bg-primary/10 text-foreground shadow-sm' : 'border-transparent bg-transparent hover:bg-muted'
+                    )}
+                    type="button"
+                    onClick={() => void openCanvasProject(project.id)}
+                  >
+                    <span className="session-text grid min-w-0 flex-1 gap-1">
+                      <strong className="truncate text-sm font-semibold">{project.title}</strong>
+                      <span className="line-clamp-2 text-xs leading-4 text-muted-foreground">
+                        {project.nodeCount} 个节点
+                      </span>
+                    </span>
+                    <span className="session-loading-slot flex size-5 items-center justify-center" />
+                    <span
+                      className="session-delete flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                      role="button"
+                      tabIndex={0}
+                      title="删除 Canvas 项目"
+                      onClick={async (event) => {
+                        event.stopPropagation()
+                        if (!(await confirmDeleteCanvasProject())) return
+                        void deleteCanvasProject(project.id)
+                      }}
+                      onKeyDown={async (event) => {
+                        if (event.key !== 'Enter' && event.key !== ' ') return
+                        event.preventDefault()
+                        event.stopPropagation()
+                        if (!(await confirmDeleteCanvasProject())) return
+                        void deleteCanvasProject(project.id)
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </span>
+                  </button>
+                )
+              }) : workspaceConversations.map((conversation) => {
                 const generating = Boolean(generatingByConversation[conversation.id])
                 const active = conversation.id === activeConversationId
                 return (
@@ -113,7 +181,7 @@ export function MainLayout({
                     <span className="session-loading-slot flex size-5 items-center justify-center">
                       {generating ? <span className="session-loading-indicator size-2 rounded-full bg-primary" aria-label="生成中" /> : null}
                     </span>
-                    {conversations.length > 1 ? (
+                    {canDeleteWorkspaceConversation ? (
                       <span
                         className="session-delete flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                         role="button"

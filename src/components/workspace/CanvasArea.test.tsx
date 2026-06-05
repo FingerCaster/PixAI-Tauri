@@ -54,6 +54,30 @@ function failedRun(): GenerationRun {
   }
 }
 
+function runningRun(): GenerationRun {
+  return {
+    id: 'canvas-preview-run',
+    conversationId: 'canvas-confirm-conversation',
+    prompt: '生成中',
+    model: 'gpt-image-2',
+    ratio: '1:1',
+    size: '1024x1024',
+    quality: 'high',
+    n: 1,
+    maxRetries: 0,
+    generationMode: 'text-to-image',
+    status: 'running',
+    errorMessage: null,
+    errorDetails: null,
+    durationMs: null,
+    retryAttempts: {},
+    retryFailures: {},
+    referenceImages: [],
+    createdAt: '2026-06-02T10:00:00.000Z',
+    items: []
+  }
+}
+
 describe('CanvasArea destructive actions', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
@@ -61,6 +85,7 @@ describe('CanvasArea destructive actions', () => {
       activeConversationId: 'canvas-confirm-conversation',
       generatingByConversation: {},
       removedGenerationIndexesByRunId: {},
+      generationPreviews: {},
       deleteHistoryItems: vi.fn().mockResolvedValue(undefined),
       refreshConversationResults: vi.fn().mockResolvedValue(undefined)
     })
@@ -89,6 +114,38 @@ describe('CanvasArea destructive actions', () => {
     })
 
     expect(deleteHistoryItems).toHaveBeenCalledWith(['history-failed-1', 'history-failed-2'])
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('renders streaming partial previews in generating slots', async () => {
+    useAppStore.setState({
+      generationPreviews: {
+        'canvas-preview-run': {
+          0: {
+            runId: 'canvas-preview-run',
+            requestIndex: 0,
+            partialImageIndex: 0,
+            dataUrl: 'data:image/png;base64,cHJldmlldw==',
+            receivedAt: '2026-06-05T10:00:00.000Z'
+          }
+        }
+      }
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(<CanvasArea runs={[runningRun()]} generationStartedAt={Date.now()} generating generationClockMs={Date.now()} />)
+    })
+
+    const preview = document.querySelector<HTMLImageElement>('img[alt="生成中的流式预览"]')
+    expect(preview?.src).toBe('data:image/png;base64,cHJldmlldw==')
+    expect(document.querySelector('.generating-label')?.textContent).toContain('流式预览')
 
     await act(async () => {
       root.unmount()

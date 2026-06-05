@@ -18,6 +18,11 @@ export type ImageGenerationRequest = {
   referenceImages: Array<{ name: string; mimeType: string; dataUrl: string }>
   signal?: AbortSignal
   onCallLog?: (log: ImageGenerationCallLog) => void
+  onPartialImage?: (partial: {
+    image: ImageApiData
+    requestIndex?: number
+    partialImageIndex?: number
+  }) => void
 }
 
 export interface ProviderAdapter {

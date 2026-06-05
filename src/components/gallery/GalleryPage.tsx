@@ -8,6 +8,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { ImageTile } from '../workspace/ImageTile'
 import { confirmDestructiveAction } from '../../lib/confirm'
 import { downloadHistoryImages } from '../../lib/platform'
+import { generationOriginSearchText } from '../../shared/generation-origin'
 import { useAppStore } from '../../store/app-store'
 
 export function GalleryPage() {
@@ -15,7 +16,7 @@ export function GalleryPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const filtered = useMemo(() => history.filter((item) => {
     const q = query.trim().toLowerCase()
-    return !q || `${item.prompt} ${item.model} ${item.size || ''}`.toLowerCase().includes(q)
+    return !q || `${item.prompt} ${item.model} ${item.size || ''} ${generationOriginSearchText(item.origin)}`.toLowerCase().includes(q)
   }), [history, query])
   const selectedItems = filtered.filter((item) => selectedIds.includes(item.id))
   const selectableIds = filtered.map((item) => item.id)
@@ -67,7 +68,7 @@ export function GalleryPage() {
               <Input
                 className="pl-9"
                 value={query}
-              placeholder="搜索提示词 / 模型 / 尺寸"
+              placeholder="搜索提示词 / 模型 / 尺寸 / 来源"
               onChange={(event) => {
                 setQuery(event.target.value)
                 void reloadHistory({ query: event.target.value })

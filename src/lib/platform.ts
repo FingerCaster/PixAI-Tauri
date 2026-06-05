@@ -36,6 +36,7 @@ type HttpProxyRequestPayload = {
 export type PlatformFetchOptions = {
   timeoutMs?: number
   firstByteTimeoutMs?: number
+  onTextChunk?: (chunk: string) => void
 }
 
 export type PlatformStreamResponse = {
@@ -132,7 +133,7 @@ export async function fetchMultipartTextStreamThroughPlatform(url: string, init:
     return {
       status: response.status,
       statusText: response.statusText,
-      text: await response.text()
+      text: await readTextStreamResponse(response, options.onTextChunk)
     }
   }
   const requestPayload = await buildHttpProxyRequestPayload(url, init)
@@ -145,7 +146,7 @@ export async function fetchTextStreamThroughPlatform(url: string, init: RequestI
     return {
       status: response.status,
       statusText: response.statusText,
-      text: await response.text()
+      text: await readTextStreamResponse(response, options.onTextChunk)
     }
   }
 
@@ -157,6 +158,7 @@ async function fetchTextStreamThroughPlatformPayload(url: string, method: string
   const streamId = globalThis.crypto?.randomUUID?.() || `stream-${Date.now()}-${Math.random().toString(16).slice(2)}`
   const chunks: Uint8Array[] = []
   const decoder = new TextDecoder()
+  const chunkDecoder = new TextDecoder()
   let status = 0
   let statusText = ''
   let settled = false
@@ -168,7 +170,11 @@ async function fetchTextStreamThroughPlatformPayload(url: string, method: string
       const payload = event.payload
       if (payload.streamId !== streamId) return
       if (payload.kind === 'chunk') {
-        if (payload.chunkBase64) chunks.push(base64ToBytes(payload.chunkBase64))
+        if (payload.chunkBase64) {
+          const bytes = base64ToBytes(payload.chunkBase64)
+          chunks.push(bytes)
+          emitTextChunk(chunkDecoder.decode(bytes, { stream: true }), options.onTextChunk)
+        }
         return
       }
       if (typeof payload.status === 'number') status = payload.status
@@ -181,6 +187,7 @@ async function fetchTextStreamThroughPlatformPayload(url: string, method: string
       if (payload.kind === 'done') {
         settled = true
         try {
+          emitTextChunk(chunkDecoder.decode(), options.onTextChunk)
           const text = decodeUtf8Chunks(chunks, decoder)
           resolve({ status, statusText, text })
         } catch (error) {
@@ -424,6 +431,37 @@ export async function writeDataUrlFile(directory: string, filename: string, data
   return invoke<string>('write_data_url_file', { directory, filename, dataUrl })
 }
 
+export async function downloadTextFile(filename: string, text: string, mimeType = 'application/json'): Promise<void> {
+  const blob = new Blob([text], { type: `${mimeType};charset=utf-8` })
+  if (isTauriRuntime()) {
+    const selectedPath = await save({
+      defaultPath: filename,
+      filters: [
+        {
+          name: mimeType.includes('json') ? 'JSON' : '文本',
+          extensions: mimeType.includes('json') ? ['json'] : ['txt']
+        }
+      ]
+    })
+    if (!selectedPath) throw new DownloadCanceledError()
+    await invoke('write_binary_file', {
+      path: selectedPath,
+      bytesBase64: await blobToBase64(blob)
+    })
+    return
+  }
+  await downloadBlob(blob, filename)
+}
+
+export function readTextFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(reader.error || new Error('无法读取文件。'))
+    reader.readAsText(file)
+  })
+}
+
 export async function downloadImageSource(source: string | null, filename: string, storagePath?: string | null): Promise<void> {
   const blob = await resolveDownloadBlob(source, storagePath)
   if (!blob) throw new Error('图片内容不可用，无法下载。')
@@ -653,6 +691,43 @@ async function readRemoteImageUrlInBrowser(url: string): Promise<ReferenceImageF
   }
 }
 
+async function readTextStreamResponse(response: Response, onTextChunk?: (chunk: string) => void): Promise<string> {
+  if (!response.body) {
+    const text = await response.text()
+    emitTextChunk(text, onTextChunk)
+    return text
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      const chunk = decoder.decode(value, { stream: true })
+      text += chunk
+      emitTextChunk(chunk, onTextChunk)
+    }
+    const tail = decoder.decode()
+    text += tail
+    emitTextChunk(tail, onTextChunk)
+    return text
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+function emitTextChunk(chunk: string, onTextChunk?: (chunk: string) => void): void {
+  if (!chunk || !onTextChunk) return
+  try {
+    onTextChunk(chunk)
+  } catch {
+    // Streaming observers are best-effort diagnostics/UI updates.
+  }
+}
+
 function normalizeRemoteImageUrl(value: string): string {
   const trimmed = value.trim()
   let parsed: URL
@@ -741,7 +816,8 @@ function concatResponseBytes(chunks: Uint8Array[], total: number): Uint8Array {
 function filenameFromUrl(url: string, contentDisposition: string | null): string {
   const dispositionFilename = filenameFromContentDisposition(contentDisposition)
   if (dispositionFilename) return dispositionFilename
-  const rawName = new URL(url).pathname.split('/').filter(Boolean).pop() || ''
+  const pathname = new URL(url).pathname
+  const rawName = pathname.split('/').filter(Boolean).pop() || ''
   try {
     return decodeURIComponent(rawName) || 'reference.png'
   } catch {

@@ -1,0 +1,64 @@
+feature: 2026-06-05-canvas-reference-bridge
+created: 2026-06-05
+
+steps:
+  - action: "名词骨架：扩展 Canvas metadata / image input / service normalize"
+    exit_signal: "绑定字段可持久化，data URL 之外的展示源不会被过滤"
+    status: done
+
+  - action: "Canvas store：新增来源字段写入和 reference/history 去重"
+    exit_signal: "store 测试覆盖绑定字段和重复加入不创建节点"
+    status: done
+
+  - action: "Canvas reference UI：Canvas toolbar 可从当前会话参考图创建绑定图片节点"
+    exit_signal: "组件测试或 smoke 证明入口可见并能创建节点"
+    status: done
+
+  - action: "History bridge：ImageTile 增加“加入 Canvas”，app-store 完成 history → reference → Canvas node 编排"
+    exit_signal: "store 测试覆盖导入 reference、创建 Canvas node、切换 view"
+    status: done
+
+  - action: "验证收尾：补测试，跑 pnpm check 和 pnpm build"
+    exit_signal: "测试、类型检查、构建通过，验收场景有证据"
+    status: done
+
+checks:
+  - item: "CanvasNodeMetadata 保留 referenceImageId、historyItemId、storagePath"
+    source: 名词契约
+    status: passed
+
+  - item: "CanvasProjectService 不误过滤 data URL 之外的可展示图片源"
+    source: 流程级约束
+    status: passed
+
+  - item: "useCanvasStore.addImageNode 写入来源绑定并对 reference/history 去重"
+    source: 流程级约束
+    status: passed
+
+  - item: "CanvasWorkspace 可从当前会话参考图加入 Canvas"
+    source: 挂载点
+    status: passed
+
+  - item: "ImageTile 成功图提供加入 Canvas 入口"
+    source: 挂载点
+    status: passed
+
+  - item: "addHistoryToCanvas 复用 reference.addFromHistoryMany 并更新当前会话"
+    source: 流程级约束
+    status: passed
+
+  - item: "history 加入 Canvas 后视图切到 canvas 并创建绑定 image node"
+    source: 验收场景
+    status: passed
+
+  - item: "失败图或无图片源不会创建 Canvas 节点"
+    source: 验收场景
+    status: passed
+
+  - item: "不新增 Canvas generate 节点或发起生成"
+    source: 范围守护
+    status: passed
+
+  - item: "不修改 GenerateImageInput、ImageService 或 adapter"
+    source: 范围守护
+    status: passed

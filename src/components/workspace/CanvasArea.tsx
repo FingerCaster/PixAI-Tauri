@@ -6,7 +6,7 @@ import { GallerySelect, type GallerySelectOption } from '../common/GallerySelect
 import { confirmDestructiveAction } from '../../lib/confirm'
 import { elapsedMs, formatDuration } from '../../lib/time'
 import { getGenerationAttemptStartedAt } from '../../generation-timing'
-import type { GenerationRun, ImageHistoryItem } from '../../shared/types'
+import type { GenerationPreviewState, GenerationRun, ImageHistoryItem } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 import { getWorkspaceRunGridSlots, type WorkspaceRunGridSlot } from '../../workspace-placeholders'
 import { getWorkspaceResultSummarySegments } from '../../workspace-summary'
@@ -32,6 +32,7 @@ export function CanvasArea({
 }) {
   const {
     activeConversationId,
+    generationPreviews,
     generatingByConversation,
     removedGenerationIndexesByRunId,
     deleteHistoryItems,
@@ -157,7 +158,7 @@ export function CanvasArea({
             生成后的图片会显示在这里
           </div>
         ) : null}
-        {visibleEntries.map((entry) => renderWorkspaceEntry(entry, generationClockMs))}
+        {visibleEntries.map((entry) => renderWorkspaceEntry(entry, generationClockMs, generationPreviews))}
       </div>
       {workspaceEntries.length > 0 ? (
         <div className="gallery-pagination workspace-pagination flex min-w-0 shrink-0 flex-nowrap items-center justify-end gap-2 overflow-hidden border-t border-border px-4 py-3">
@@ -197,14 +198,14 @@ type WorkspaceEntry =
       slot: WorkspaceRunGridSlot
     }
 
-function renderWorkspaceEntry(entry: WorkspaceEntry, generationClockMs: number) {
+function renderWorkspaceEntry(entry: WorkspaceEntry, generationClockMs: number, generationPreviews: GenerationPreviewState) {
   if (entry.type === 'pending') {
     return <GeneratingTile key={entry.key} generationElapsedMs={entry.generationElapsedMs} />
   }
-  return renderSlot(entry.run, entry.slot, generationClockMs, entry.key)
+  return renderSlot(entry.run, entry.slot, generationClockMs, entry.key, generationPreviews)
 }
 
-function renderSlot(run: GenerationRun, slot: WorkspaceRunGridSlot, generationClockMs: number, key: string) {
+function renderSlot(run: GenerationRun, slot: WorkspaceRunGridSlot, generationClockMs: number, key: string, generationPreviews: GenerationPreviewState) {
   if (slot.type === 'item') {
     return <ImageTile key={key} item={slot.item as ImageHistoryItem} />
   }
@@ -220,6 +221,7 @@ function renderSlot(run: GenerationRun, slot: WorkspaceRunGridSlot, generationCl
       retryAttempt={slot.retryAttempt}
       maxRetries={run.maxRetries}
       retryFailure={retryFailure}
+      preview={generationPreviews[run.id]?.[slot.requestIndex]}
     />
   )
 }

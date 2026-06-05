@@ -124,6 +124,78 @@ describe('openAiCompatibleAdapter', () => {
     expect(images[0].b64_json).toBe('s'.repeat(120))
   })
 
+  it('emits images endpoint partial previews without using them as final results', async () => {
+    const partials: string[] = []
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: image_generation.partial_image',
+        `data: ${JSON.stringify({ type: 'image_generation.partial_image', partial_image_b64: 'p'.repeat(120) })}`,
+        '',
+        'event: image_generation.completed',
+        `data: ${JSON.stringify({ type: 'image_generation.completed', b64_json: 'f'.repeat(120) })}`,
+        '',
+        'event: done',
+        'data: [DONE]',
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    const images = await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true,
+        partialImages: 1
+      },
+      referenceImages: [],
+      onPartialImage: (partial) => {
+        partials.push(partial.image.b64_json || '')
+      }
+    })
+
+    expect(partials).toEqual(['p'.repeat(120)])
+    expect(images).toHaveLength(1)
+    expect(images[0].b64_json).toBe('f'.repeat(120))
+  })
+
+  it('keeps image streams alive when partial preview callbacks throw', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: image_generation.partial_image',
+        `data: ${JSON.stringify({ type: 'image_generation.partial_image', partial_image_b64: 'p'.repeat(120) })}`,
+        '',
+        'event: image_generation.completed',
+        `data: ${JSON.stringify({ type: 'image_generation.completed', b64_json: 'f'.repeat(120) })}`,
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    const images = await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true,
+        partialImages: 1
+      },
+      referenceImages: [],
+      onPartialImage: () => {
+        throw new Error('observer failed')
+      }
+    })
+
+    expect(images[0].b64_json).toBe('f'.repeat(120))
+  })
+
   it('surfaces images endpoint stream errors from HTTP 200 responses', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
       [
@@ -171,6 +243,42 @@ describe('openAiCompatibleAdapter', () => {
     })
 
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/edits', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('emits image edit partial previews without interrupting final edit results', async () => {
+    const partials: string[] = []
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: image_edit.partial_image',
+        `data: ${JSON.stringify({ type: 'image_edit.partial_image', partial_image_b64: 'e'.repeat(120) })}`,
+        '',
+        'event: image_edit.completed',
+        `data: ${JSON.stringify({ type: 'image_edit.completed', b64_json: 'r'.repeat(120) })}`,
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    const images = await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'edit test',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        stream: true,
+        partialImages: 1,
+        referenceImageIds: ['r1']
+      },
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: `data:image/png;base64,${'a'.repeat(120)}` }],
+      onPartialImage: (partial) => {
+        partials.push(partial.image.b64_json || '')
+      }
+    })
+
+    expect(partials).toEqual(['e'.repeat(120)])
+    expect(images[0].b64_json).toBe('r'.repeat(120))
   })
 
   it('routes Tauri image edits through platform HTTP proxy', async () => {
@@ -302,10 +410,14 @@ describe('openAiCompatibleAdapter', () => {
   })
 
   it('routes responses image-generation profiles through streaming responses', async () => {
+    const partials: string[] = []
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
       [
         'event: response.image_generation_call.partial_image',
         `data: ${JSON.stringify({ type: 'response.image_generation_call.partial_image', partial_image_b64: 'a'.repeat(120) })}`,
+        '',
+        'event: response.image_generation_call.completed',
+        `data: ${JSON.stringify({ type: 'response.image_generation_call.completed', result: 'b'.repeat(120) })}`,
         '',
         'event: response.completed',
         'data: {"type":"response.completed"}',
@@ -325,7 +437,10 @@ describe('openAiCompatibleAdapter', () => {
         stream: true,
         partialImages: 1
       },
-      referenceImages: []
+      referenceImages: [],
+      onPartialImage: (partial) => {
+        partials.push(partial.image.b64_json || '')
+      }
     })
 
     const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
@@ -340,7 +455,8 @@ describe('openAiCompatibleAdapter', () => {
       quality: 'high',
       partial_images: 1
     })
-    expect(images[0].b64_json).toBe('a'.repeat(120))
+    expect(partials).toEqual(['a'.repeat(120)])
+    expect(images[0].b64_json).toBe('b'.repeat(120))
   })
 
   it('routes responses image-to-image requests through streaming responses with input images', async () => {

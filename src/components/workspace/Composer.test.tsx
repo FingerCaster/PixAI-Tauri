@@ -34,6 +34,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 const originalImportReferenceFiles = useAppStore.getState().importReferenceFiles
 const originalImportReferencePayloads = useAppStore.getState().importReferencePayloads
+const originalNotify = useAppStore.getState().notify
 const originalRemoveReferenceImage = useAppStore.getState().removeReferenceImage
 
 function conversation(overrides: Partial<Conversation> = {}): Conversation {
@@ -83,6 +84,7 @@ describe('Composer', () => {
       activeConversationId: null,
       importReferenceFiles: originalImportReferenceFiles,
       importReferencePayloads: originalImportReferencePayloads,
+      notify: originalNotify,
       removeReferenceImage: originalRemoveReferenceImage,
       toast: null
     })
@@ -517,6 +519,106 @@ describe('Composer', () => {
     })
     host.remove()
   })
+
+  it('opens the reference image url dialog with empty submit disabled', async () => {
+    const importReferencePayloads = vi.fn().mockResolvedValue(undefined)
+    const readRemoteImageUrl = vi.spyOn(platform, 'readRemoteImageUrl').mockResolvedValue({
+      name: 'unused.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,dW51c2Vk',
+      fileSizeBytes: 6
+    })
+    useAppStore.setState({ importReferencePayloads })
+    const { host, root } = await renderComposer()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="通过链接添加参考图"]')?.click()
+      await flushPromises()
+    })
+
+    expect(document.querySelector('.reference-url-dialog')).not.toBeNull()
+    expect(document.querySelector<HTMLInputElement>('.reference-url-input')?.value).toBe('')
+    expect(buttonWithText('导入参考图')?.disabled).toBe(true)
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="关闭"]')?.click()
+      await flushPromises()
+    })
+
+    expect(readRemoteImageUrl).not.toHaveBeenCalled()
+    expect(importReferencePayloads).not.toHaveBeenCalled()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('imports a remote image payload from the url dialog', async () => {
+    const payload = {
+      name: 'cat.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,Y2F0',
+      fileSizeBytes: 3
+    }
+    const readRemoteImageUrl = vi.spyOn(platform, 'readRemoteImageUrl').mockResolvedValue(payload)
+    const importReferencePayloads = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ importReferencePayloads })
+    const { host, root } = await renderComposer()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="通过链接添加参考图"]')?.click()
+      await flushPromises()
+    })
+    await act(async () => {
+      setInputValue(document.querySelector<HTMLInputElement>('.reference-url-input'), 'https://example.com/cat.png')
+      await flushPromises()
+    })
+    await act(async () => {
+      buttonWithText('导入参考图')?.click()
+      await flushPromises()
+    })
+
+    expect(readRemoteImageUrl).toHaveBeenCalledWith('https://example.com/cat.png')
+    expect(importReferencePayloads).toHaveBeenCalledWith([payload])
+    expect(document.querySelector('.reference-url-dialog')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('keeps current references unchanged when url import fails', async () => {
+    const readRemoteImageUrl = vi.spyOn(platform, 'readRemoteImageUrl').mockRejectedValue(new Error('图片链接下载失败：HTTP 404。'))
+    const importReferencePayloads = vi.fn().mockResolvedValue(undefined)
+    const notify = vi.fn()
+    useAppStore.setState({ importReferencePayloads, notify })
+    const { host, root } = await renderComposer()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="通过链接添加参考图"]')?.click()
+      await flushPromises()
+    })
+    await act(async () => {
+      setInputValue(document.querySelector<HTMLInputElement>('.reference-url-input'), 'https://example.com/missing.png')
+      await flushPromises()
+    })
+    await act(async () => {
+      buttonWithText('导入参考图')?.click()
+      await flushPromises()
+    })
+
+    expect(readRemoteImageUrl).toHaveBeenCalledWith('https://example.com/missing.png')
+    expect(importReferencePayloads).not.toHaveBeenCalled()
+    expect(document.querySelector('[role="alert"]')?.textContent).toBe('图片链接下载失败：HTTP 404。')
+    expect(notify).toHaveBeenCalledWith('图片链接下载失败：HTTP 404。')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })
 
 function pasteEvent(transfer: DataTransfer): Event {
@@ -578,6 +680,16 @@ function setTextareaValue(textarea: HTMLTextAreaElement | null | undefined, valu
 function setTextareaDomValue(textarea: HTMLTextAreaElement | null | undefined, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
   setter?.call(textarea, value)
+}
+
+function setInputValue(input: HTMLInputElement | null | undefined, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setter?.call(input, value)
+  input?.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
+}
+
+function buttonWithText(text: string): HTMLButtonElement | null {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text)) ?? null
 }
 
 function compositionEvent(type: 'compositionstart' | 'compositionend'): Event {

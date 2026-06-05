@@ -7,6 +7,9 @@ export type ImageInputFidelity = 'low' | 'high'
 export type ImageStatus = 'succeeded' | 'failed'
 export type GenerationRunStatus = 'running' | ImageStatus
 export type GenerationMode = 'text-to-image' | 'image-to-image'
+export type GenerationOrigin =
+  | { kind: 'workspace' }
+  | { kind: 'canvas'; canvasProjectId: string; canvasNodeId: string }
 export type ProviderType = 'openai-compatible'
 export type ProviderUsage = 'image' | 'prompt'
 export type ImageGenerationEndpoint = 'images-api' | 'responses-api'
@@ -26,6 +29,80 @@ export type ReferenceImage = {
   fileSizeBytes: number
   storagePath?: string | null
   createdAt: string
+}
+
+export type CanvasViewport = {
+  x: number
+  y: number
+  k: number
+}
+
+export type CanvasPoint = {
+  x: number
+  y: number
+}
+
+export type CanvasNodeType = 'text' | 'image' | 'generate' | 'config' | 'batch' | 'result'
+export type CanvasConnectionKind = 'prompt' | 'reference-image' | 'result' | 'config' | 'batch'
+export type CanvasNodeStatus = 'idle' | 'running' | 'succeeded' | 'failed'
+
+export type CanvasNodeMetadata = {
+  content: string
+  status?: CanvasNodeStatus
+  ratio?: ImageRatio
+  quality?: ImageQuality
+  n?: number
+  runId?: string
+  requestIndex?: number
+  errorMessage?: string
+  referenceImageId?: string
+  historyItemId?: string
+  storagePath?: string | null
+  mimeType?: string
+  fileSizeBytes?: number
+  naturalWidth?: number
+  naturalHeight?: number
+}
+
+export type CanvasNodeData = {
+  id: string
+  type: CanvasNodeType
+  title: string
+  position: CanvasPoint
+  width: number
+  height: number
+  metadata: CanvasNodeMetadata
+}
+
+export type CanvasConnection = {
+  id: string
+  fromNodeId: string
+  toNodeId: string
+  kind: CanvasConnectionKind
+}
+
+export type CanvasProject = {
+  id: string
+  title: string
+  conversationId: string
+  schemaVersion: 1
+  nodes: CanvasNodeData[]
+  connections: CanvasConnection[]
+  viewport: CanvasViewport
+  createdAt: string
+  updatedAt: string
+}
+
+export type CanvasProjectSummary = {
+  id: string
+  title: string
+  conversationId?: string
+  updatedAt: string
+  nodeCount: number
+}
+
+export type CanvasProjectInput = Partial<Pick<CanvasProject, 'title' | 'viewport' | 'nodes' | 'connections'>> & {
+  conversationId?: string
 }
 
 export type ProviderProfile = {
@@ -168,6 +245,16 @@ export type ImageGenerationCallLog = {
   createdAt: string
 }
 
+export type PartialImagePreview = {
+  runId: string
+  requestIndex: number
+  partialImageIndex?: number
+  dataUrl: string
+  receivedAt: string
+}
+
+export type GenerationPreviewState = Record<string, Record<number, PartialImagePreview>>
+
 export type GenerateImageInput = {
   conversationId: string
   prompt: string
@@ -186,6 +273,7 @@ export type GenerateImageInput = {
   referenceImageIds?: string[]
   maxRetries?: number
   generationTimeoutSeconds?: number
+  origin?: GenerationOrigin
 }
 
 export type PromptAssistInput = {
@@ -275,6 +363,7 @@ export type ImageHistoryItem = {
   generationMode: GenerationMode
   referenceImages: ReferenceImage[]
   callLog?: ImageGenerationCallLog | null
+  origin?: GenerationOrigin
   createdAt: string
 }
 
@@ -302,6 +391,7 @@ export type GenerationRun = {
   retryFailures: Record<number, GenerationRunRetryFailure>
   generationMode: GenerationMode
   referenceImages: ReferenceImage[]
+  origin?: GenerationOrigin
   createdAt: string
   items: ImageHistoryItem[]
 }

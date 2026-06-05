@@ -1,0 +1,67 @@
+roadmap: workspace-canvas-mode
+created: 2026-06-05
+
+items:
+  - slug: canvas-project-shell
+    description: 新增 canvas 模式入口、默认项目、项目保存恢复和基础无限画布视口
+    depends_on: []
+    status: done
+    feature: 2026-06-05-canvas-project-shell
+    minimal_loop: true
+    notes: 做完后能进入 Canvas 模式，创建/恢复项目，并完成平移缩放
+
+  - slug: canvas-basic-nodes
+    description: 支持文本节点、图片节点、选择拖动、删除和基础连线
+    depends_on: [canvas-project-shell]
+    status: done
+    feature: 2026-06-05-canvas-basic-nodes
+    minimal_loop: false
+    notes: 不接生成，只完成可编辑画布对象
+
+  - slug: streaming-partial-preview-core
+    description: 打通 adapter 到 store/UI 的流式 partial preview，先在经典工作台展示
+    depends_on: []
+    status: done
+    feature: 2026-06-05-streaming-partial-preview-core
+    minimal_loop: false
+    notes: 复用 CookSleep 项目的 onPartialImage 思路，但按 PixAI 现有 adapter/service 分层实现
+
+  - slug: canvas-reference-bridge
+    description: 让 Canvas 图片节点和当前参考图体系互通，可把历史图/参考图放入画布并作为生成输入
+    depends_on: [canvas-basic-nodes]
+    status: done
+    feature: 2026-06-05-canvas-reference-bridge
+    minimal_loop: false
+    notes: 复用 reference-image-input 现状，不新增远程素材实体
+
+  - slug: canvas-generate-node
+    description: 生成节点复用现有 ImageService，读取连接的 prompt/reference，展示 partial preview 并产出图片节点
+    depends_on: [canvas-basic-nodes, streaming-partial-preview-core, canvas-reference-bridge]
+    status: done
+    feature: 2026-06-05-canvas-generate-node
+    minimal_loop: false
+    notes: 第一版只做单节点手动触发，不做完整 DAG 执行器
+
+  - slug: canvas-history-gallery-integration
+    description: 为 Canvas 生成结果补齐 history/gallery 入口、来源标识和从图库加入画布能力
+    depends_on: [canvas-generate-node]
+    status: done
+    feature: 2026-06-05-canvas-history-gallery-integration
+    minimal_loop: false
+    notes: 保持 history 仍是最终结果事实源
+
+  - slug: canvas-project-import-export
+    description: 支持 Canvas project JSON 导入导出，后续再扩展为带图片文件的项目包
+    depends_on: [canvas-history-gallery-integration]
+    status: done
+    feature: 2026-06-05-canvas-project-import-export
+    minimal_loop: false
+    notes: 后置能力，第一版不阻塞生成闭环
+
+  - slug: canvas-advanced-workflow-nodes
+    description: 增加配置节点、结果节点、批量节点和更完整的 workflow 执行能力
+    depends_on: [canvas-generate-node]
+    status: done
+    feature: 2026-06-05-canvas-advanced-workflow-nodes
+    minimal_loop: false
+    notes: 已落地为 config/batch/result 节点和 8 次请求以内的顺序 workflow run；不做端口体系、复杂 DAG、并发队列或 workflow agent

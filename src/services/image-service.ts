@@ -4,8 +4,9 @@ import { createErrorDetails, serializeError } from '../lib/errors'
 import { createId } from '../lib/ids'
 import { PlatformHttpProxyError, readLocalImageDataUrl, readRemoteImageUrl, storeDataUrlFile } from '../lib/platform'
 import { elapsedMs, nowIso } from '../lib/time'
+import { normalizeGenerationOrigin } from '../shared/generation-origin'
 import { getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds, normalizeRetryCount } from '../shared/image-options'
-import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageGenerationCallLog, ImageHistoryItem, ReferenceImage } from '../shared/types'
+import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageGenerationCallLog, ImageHistoryItem, PartialImagePreview, ReferenceImage } from '../shared/types'
 import type { AppDatabase } from './app-database'
 import type { ProviderSettingsStore } from './provider-settings'
 
@@ -17,7 +18,7 @@ export class ImageService {
     private readonly providers: ProviderSettingsStore
   ) {}
 
-  async generate(input: GenerateImageInput): Promise<GenerateImageResult> {
+  async generate(input: GenerateImageInput, options: ImageGenerationOptions = {}): Promise<GenerateImageResult> {
     const startedAt = Date.now()
     const settings = await this.providers.get()
     const runtimeProfile = await this.providers.getRuntimeProfile(settings.selectedImageProfileId)
@@ -26,6 +27,7 @@ export class ImageService {
     const globalVisible = conversation?.autoSaveHistory !== false
     const keepFailureDetails = conversation?.keepFailureDetails !== false
     const prompt = input.prompt.trim()
+    const origin = normalizeGenerationOrigin(input.origin)
     const model = input.model?.trim() || conversation?.model || runtimeProfile.defaultImageModel
     const size = input.size && isImageSizeCompatible(input.ratio, input.size) ? input.size : getDefaultImageSize(input.ratio)
     const referenceImages = (conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id))
@@ -57,6 +59,7 @@ export class ImageService {
       retryFailures: {},
       generationMode,
       referenceImages,
+      ...(origin ? { origin } : {}),
       createdAt
     })
 
@@ -78,7 +81,8 @@ export class ImageService {
             requestIndex,
             controller,
             maxRetries,
-            startedAt
+            startedAt,
+            onPartialImage: options.onPartialImage
           })
           if (!generated.image) {
             items.push(generated.item)
@@ -111,6 +115,7 @@ export class ImageService {
               generationMode,
               referenceImages: stripReferenceImagePayloads(referenceImages),
               callLog: generated.callLog,
+              ...(origin ? { origin } : {}),
               createdAt: nowIso()
             })
           )
@@ -163,7 +168,8 @@ export class ImageService {
     requestIndex,
     controller,
     maxRetries,
-    startedAt
+    startedAt,
+    onPartialImage
   }: {
     input: GenerateImageInput
     run: GenerationRun
@@ -172,6 +178,7 @@ export class ImageService {
     controller: AbortController
     maxRetries: number
     startedAt: number
+    onPartialImage?: ImageGenerationOptions['onPartialImage']
   }): Promise<{ image: ImageApiData; retryAttempt: number; callLog: ImageGenerationCallLog | null } | { image: null; item: ImageHistoryItem; retryAttempt: number }> {
     const settings = await this.providers.get()
     const runtimeProfile = await this.providers.getRuntimeProfile(settings.selectedImageProfileId)
@@ -188,6 +195,14 @@ export class ImageService {
           signal: timeout.signal,
           onCallLog: (log) => {
             callLog = log
+          },
+          onPartialImage: (partial) => {
+            emitPartialImagePreview(onPartialImage, partial.image, {
+              runId: run.id,
+              requestIndex: partial.requestIndex ?? requestIndex,
+              partialImageIndex: partial.partialImageIndex,
+              outputFormat: input.outputFormat || 'png'
+            })
           }
         })
         const image = images.at(-1)
@@ -248,6 +263,7 @@ export class ImageService {
       generationMode: run.generationMode,
       referenceImages: run.referenceImages,
       callLog,
+      ...(run.origin ? { origin: run.origin } : {}),
       createdAt: nowIso()
     })
   }
@@ -262,6 +278,10 @@ export class ImageGenerationPreflightError extends Error {
     super(message)
     this.name = 'ImageGenerationPreflightError'
   }
+}
+
+export type ImageGenerationOptions = {
+  onPartialImage?: (preview: PartialImagePreview) => void
 }
 
 function createTimeoutController(parentSignal: AbortSignal, timeoutMs: number): { signal: AbortSignal; cleanup: () => void } {
@@ -341,6 +361,32 @@ function getFailureDetails(error: unknown): Record<string, unknown> {
     note: '上游可能已收到请求并完成生成，但客户端没有收到完整响应。请在服务端日志或历史结果中复核。'
   }
   return serializeError(error)
+}
+
+function emitPartialImagePreview(
+  onPartialImage: ImageGenerationOptions['onPartialImage'],
+  image: ImageApiData,
+  context: {
+    runId: string
+    requestIndex: number
+    partialImageIndex?: number
+    outputFormat: string
+  }
+): void {
+  if (!onPartialImage) return
+  const dataUrl = imageDataToDataUrl(image, context.outputFormat)
+  if (!dataUrl) return
+  try {
+    onPartialImage({
+      runId: context.runId,
+      requestIndex: context.requestIndex,
+      ...(typeof context.partialImageIndex === 'number' ? { partialImageIndex: context.partialImageIndex } : {}),
+      dataUrl,
+      receivedAt: nowIso()
+    })
+  } catch {
+    // Partial previews are best-effort UI state and must not interrupt generation.
+  }
 }
 
 function isUnconfirmedTransportError(error: PlatformHttpProxyError): boolean {

@@ -1,0 +1,60 @@
+feature: 2026-06-05-canvas-advanced-workflow-nodes
+created: 2026-06-05
+
+steps:
+  - action: "数据模型与持久化：扩展共享类型、service normalize、store 高级节点 action 和 result 回写"
+    exit_signal: "service/store 测试证明新节点可创建、导入导出不被过滤、running 状态导入降级"
+    status: done
+
+  - action: "Canvas UI：增加 config/batch/result node body、toolbar 高级节点入口和 workflow run 按钮"
+    exit_signal: "组件测试证明节点可见可编辑，入口禁用态正确"
+    status: done
+
+  - action: "生成编排：新增纯 workflow 计划解析并抽共享 Canvas generation helper，单节点运行读取 config/reference/result 输入，workflow run 有上限顺序执行 batch 变体"
+    exit_signal: "app-store 测试证明 config 覆盖、batch 上限、result node 回写和失败继续语义"
+    status: done
+
+  - action: "验证收尾：跑定向测试、pnpm check、pnpm build 和前端 smoke"
+    exit_signal: "测试、类型检查、构建通过，Canvas toolbar 与高级节点有截图证据"
+    status: done
+
+checks:
+  - item: "CanvasProjectService 支持 config/batch/result 节点和 config/batch/result 连接 kind normalize"
+    source: 名词契约
+    status: passed
+
+  - item: "useCanvasStore 可以创建 config/batch/result 节点并更新 metadata"
+    source: 名词契约
+    status: passed
+
+  - item: "result node 可接收 generate 成功结果；没有 result node 时保留自动 image result node 行为"
+    source: 编排约束
+    status: passed
+
+  - item: "generateCanvasNode 合并连到当前 generate node 的 prompt/reference/config 输入，不携带未连接节点"
+    source: 编排约束
+    status: passed
+
+  - item: "batch node 在 workflow run 中按非空行顺序展开，空行被忽略"
+    source: 验收场景
+    status: passed
+
+  - item: "canvas-workflow service 只做纯计划解析，不调用 ImageService、不修改 store、不读写 history"
+    source: 结构约束
+    status: passed
+
+  - item: "workflow run 请求数超过 8 时整体拒绝，不发起半执行"
+    source: 流程级约束
+    status: passed
+
+  - item: "单个 workflow 请求失败会标记当前 generate node failed，并继续后续计划"
+    source: 验收场景
+    status: passed
+
+  - item: "CanvasWorkspace 高级节点入口和运行工作流入口可见，禁用态跟随 active project / loading"
+    source: 挂载点
+    status: passed
+
+  - item: "不新增端口体系、复杂 DAG、并发队列、workflow agent、隐藏 conversation 或 Canvas 专用 Provider"
+    source: 范围守护
+    status: passed

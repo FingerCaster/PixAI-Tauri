@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas Generate Node Smoke</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react'
+      import { createRoot } from 'react-dom/client'
+      import '/src/index.css'
+      import { useAppStore } from '/src/store/app-store.ts'
+      import { useCanvasStore } from '/src/store/canvas-store.ts'
+      import { CanvasWorkspace } from '/src/components/canvas/CanvasWorkspace.tsx'
+
+      const reference = {
+        id: 'smoke-reference',
+        name: 'reference-smoke.png',
+        mimeType: 'image/png',
+        dataUrl:
+          'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iNDgwIiB2aWV3Qm94PSIwIDAgNjQwIDQ4MCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJnIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agc3RvcC1jb2xvcj0iIzBlNzQ5MCIvPjxzdG9wIG9mZnNldD0iLjU1IiBzdG9wLWNvbG9yPSIjMmRjNjUzIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZmJkMjQ0Ii8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjY0MCIgaGVpZ2h0PSI0ODAiIGZpbGw9InVybCgjZykiLz48Y2lyY2xlIGN4PSIzMjAiIGN5PSIyMjAiIHI9IjEwMCIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwuNjUpIi8+PHRleHQgeD0iMzIwIiB5PSIzNjAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSI0MCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0id2hpdGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPlJlZmVyZW5jZTwvdGV4dD48L3N2Zz4=',
+        fileSizeBytes: 2048,
+        storagePath: null,
+        createdAt: '2026-06-05T10:00:00.000Z'
+      }
+      const previewDataUrl =
+        'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iNDgwIiB2aWV3Qm94PSIwIDAgNjQwIDQ4MCI+PGRlZnM+PGxpbmVhckdyYWRpZW50IGlkPSJwIiB4MT0iMCIgeTE9IjAiIHgyPSIxIiB5Mj0iMSI+PHN0b3Agc3RvcC1jb2xvcj0iIzIyYzU1ZSIvPjxzdG9wIG9mZnNldD0iLjQ4IiBzdG9wLWNvbG9yPSIjZmJkMjQ0Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjZjQzZTVjIi8+PC9saW5lYXJHcmFkaWVudD48L2RlZnM+PHJlY3Qgd2lkdGg9IjY0MCIgaGVpZ2h0PSI0ODAiIGZpbGw9InVybCgjcCkiLz48Y2lyY2xlIGN4PSIzMjAiIGN5PSIyMzAiIHI9IjExNSIgZmlsbD0icmdiYSgyNTUsMjU1LDI1NSwuNjUpIi8+PHRleHQgeD0iMzIwIiB5PSIzNzAiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSI0MCIgZm9udC13ZWlnaHQ9IjcwMCIgZmlsbD0iIzExMTgyNyIgdGV4dC1hbmNob3I9Im1pZGRsZSI+UGFydGlhbDwvdGV4dD48L3N2Zz4='
+      const resultDataUrl =
+        'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iNDgwIiB2aWV3Qm94PSIwIDAgNjQwIDQ4MCI+PHJlY3Qgd2lkdGg9IjY0MCIgaGVpZ2h0PSI0ODAiIGZpbGw9IiMxMTE4MjciLz48cmVjdCB4PSIxMDAiIHk9IjcwIiB3aWR0aD0iNDQwIiBoZWlnaHQ9IjMyMCIgcng9IjMyIiBmaWxsPSIjZTI1NjM5Ii8+PGNpcmNsZSBjeD0iMzIwIiBjeT0iMjEwIiByPSI5MCIgZmlsbD0iI2Y5ZTVhYiIvPjx0ZXh0IHg9IjMyMCIgeT0iMzUwIiBmb250LWZhbWlseT0iQXJpYWwiIGZvbnQtc2l6ZT0iNDIiIGZvbnQtd2VpZ2h0PSI3MDAiIGZpbGw9IndoaXRlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIj5SZXN1bHQ8L3RleHQ+PC9zdmc+'
+      const conversation = {
+        id: 'smoke-conversation',
+        title: 'Canvas Generate Smoke',
+        draftPrompt: '',
+        model: 'gpt-image-2',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        outputFormat: 'png',
+        outputCompression: null,
+        background: 'auto',
+        moderation: 'auto',
+        stream: true,
+        partialImages: 1,
+        inputFidelity: null,
+        maxRetries: 0,
+        generationTimeoutSeconds: 300,
+        autoSaveHistory: true,
+        keepFailureDetails: true,
+        referenceImages: [reference],
+        createdAt: '2026-06-05T10:00:00.000Z',
+        updatedAt: '2026-06-05T10:00:00.000Z'
+      }
+      const project = {
+        id: 'smoke-canvas-generate',
+        title: 'Canvas 生成节点',
+        conversationId: conversation.id,
+        schemaVersion: 1,
+        nodes: [
+          {
+            id: 'smoke-text',
+            type: 'text',
+            title: '文本节点',
+            position: { x: 80, y: 80 },
+            width: 220,
+            height: 140,
+            metadata: { content: 'soft studio portrait' }
+          },
+          {
+            id: 'smoke-image',
+            type: 'image',
+            title: 'reference-smoke',
+            position: { x: 80, y: 280 },
+            width: 240,
+            height: 180,
+            metadata: {
+              content: reference.dataUrl,
+              referenceImageId: reference.id,
+              mimeType: reference.mimeType,
+              fileSizeBytes: reference.fileSizeBytes
+            }
+          },
+          {
+            id: 'smoke-generate',
+            type: 'generate',
+            title: '生成节点',
+            position: { x: 420, y: 120 },
+            width: 300,
+            height: 260,
+            metadata: {
+              content: 'warm rim light, crisp details',
+              status: 'running',
+              runId: 'smoke-run',
+              requestIndex: 0
+            }
+          },
+          {
+            id: 'smoke-result',
+            type: 'image',
+            title: '生成结果',
+            position: { x: 820, y: 140 },
+            width: 240,
+            height: 180,
+            metadata: {
+              content: resultDataUrl,
+              historyItemId: 'history-smoke-result',
+              mimeType: 'image/png',
+              fileSizeBytes: 2048
+            }
+          }
+        ],
+        connections: [
+          { id: 'connection-prompt', fromNodeId: 'smoke-text', toNodeId: 'smoke-generate', kind: 'prompt' },
+          { id: 'connection-reference', fromNodeId: 'smoke-image', toNodeId: 'smoke-generate', kind: 'reference-image' },
+          { id: 'connection-result', fromNodeId: 'smoke-generate', toNodeId: 'smoke-result', kind: 'result' }
+        ],
+        viewport: { x: 40, y: 40, k: 0.92 },
+        createdAt: '2026-06-05T10:00:00.000Z',
+        updatedAt: '2026-06-05T10:00:00.000Z'
+      }
+
+      useAppStore.setState({
+        loading: false,
+        view: 'canvas',
+        conversations: [conversation],
+        activeConversationId: conversation.id,
+        generationPreviews: {
+          'smoke-run': {
+            0: {
+              runId: 'smoke-run',
+              requestIndex: 0,
+              partialImageIndex: 0,
+              dataUrl: previewDataUrl,
+              receivedAt: '2026-06-05T10:00:00.000Z'
+            }
+          }
+        },
+        generateCanvasNode: async () => undefined,
+        notify: () => undefined
+      })
+      useCanvasStore.setState({
+        projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }],
+        activeProjectId: project.id,
+        activeProject: project,
+        loading: false,
+        errorMessage: null
+      })
+
+      createRoot(document.getElementById('root')).render(React.createElement(CanvasWorkspace))
+    </script>
+  </body>
+</html>

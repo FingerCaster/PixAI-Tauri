@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas advanced workflow nodes smoke</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react'
+      import { createRoot } from 'react-dom/client'
+      import { CanvasWorkspace } from '/src/components/canvas/CanvasWorkspace.tsx'
+      import { useAppStore } from '/src/store/app-store.ts'
+      import { useCanvasStore } from '/src/store/canvas-store.ts'
+      import '/src/index.css'
+
+      const conversationId = 'conversation-advanced-workflow-smoke'
+      const now = '2026-06-05T10:00:00.000Z'
+
+      useAppStore.setState({
+        activeConversationId: conversationId,
+        conversations: [
+          {
+            id: conversationId,
+            title: 'Canvas 高级工作流 smoke',
+            draftPrompt: '',
+            model: 'gpt-image-2',
+            ratio: '1:1',
+            size: '1024x1024',
+            quality: 'high',
+            n: 1,
+            outputFormat: 'png',
+            outputCompression: null,
+            background: 'auto',
+            moderation: 'auto',
+            stream: true,
+            partialImages: 1,
+            inputFidelity: null,
+            maxRetries: 0,
+            generationTimeoutSeconds: 300,
+            autoSaveHistory: true,
+            keepFailureDetails: true,
+            referenceImages: [],
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        generationPreviews: {},
+        notify: () => undefined,
+        runCanvasWorkflow: () => Promise.resolve()
+      })
+
+      useCanvasStore.setState({
+        projects: [
+          {
+            id: 'canvas-advanced-workflow-smoke',
+            title: '高级工作流项目',
+            updatedAt: now,
+            nodeCount: 5
+          }
+        ],
+        activeProjectId: 'canvas-advanced-workflow-smoke',
+        activeProject: {
+          id: 'canvas-advanced-workflow-smoke',
+          title: '高级工作流项目',
+          conversationId,
+          schemaVersion: 1,
+          nodes: [
+            {
+              id: 'node-smoke-text',
+              type: 'text',
+              title: '文本节点',
+              position: { x: 70, y: 80 },
+              width: 220,
+              height: 140,
+              metadata: { content: 'cinematic product photo' }
+            },
+            {
+              id: 'node-smoke-config',
+              type: 'config',
+              title: '配置节点',
+              position: { x: 70, y: 280 },
+              width: 260,
+              height: 250,
+              metadata: { content: '', ratio: '16:9', quality: 'high', n: 2 }
+            },
+            {
+              id: 'node-smoke-batch',
+              type: 'batch',
+              title: '批量节点',
+              position: { x: 360, y: 280 },
+              width: 260,
+              height: 220,
+              metadata: { content: 'warm studio light\ncool rim light' }
+            },
+            {
+              id: 'node-smoke-generate',
+              type: 'generate',
+              title: '生成节点',
+              position: { x: 360, y: 80 },
+              width: 300,
+              height: 260,
+              metadata: { content: 'soft shadows, reflective surface', status: 'idle' }
+            },
+            {
+              id: 'node-smoke-result',
+              type: 'result',
+              title: '结果节点',
+              position: { x: 730, y: 80 },
+              width: 260,
+              height: 220,
+              metadata: {
+                content: 'data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22600%22 height=%22400%22 viewBox=%220 0 600 400%22%3E%3Crect width=%22600%22 height=%22400%22 fill=%22%23eef2ff%22/%3E%3Ccircle cx=%22300%22 cy=%22178%22 r=%2290%22 fill=%22%2394a3b8%22/%3E%3Crect x=%22190%22 y=%22270%22 width=%22220%22 height=%2240%22 rx=%2212%22 fill=%22%23334155%22/%3E%3C/svg%3E',
+                status: 'succeeded',
+                historyItemId: 'history-smoke-result',
+                mimeType: 'image/svg+xml',
+                fileSizeBytes: 512
+              }
+            }
+          ],
+          connections: [
+            { id: 'connection-smoke-prompt', fromNodeId: 'node-smoke-text', toNodeId: 'node-smoke-generate', kind: 'prompt' },
+            { id: 'connection-smoke-config', fromNodeId: 'node-smoke-config', toNodeId: 'node-smoke-generate', kind: 'config' },
+            { id: 'connection-smoke-batch', fromNodeId: 'node-smoke-batch', toNodeId: 'node-smoke-generate', kind: 'batch' },
+            { id: 'connection-smoke-result', fromNodeId: 'node-smoke-generate', toNodeId: 'node-smoke-result', kind: 'result' }
+          ],
+          viewport: { x: 0, y: 0, k: 1 },
+          createdAt: now,
+          updatedAt: now
+        },
+        loading: false,
+        errorMessage: null
+      })
+
+      createRoot(document.getElementById('root')).render(React.createElement(CanvasWorkspace))
+    </script>
+  </body>
+</html>

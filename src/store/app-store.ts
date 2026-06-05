@@ -1,22 +1,28 @@
 import { create } from 'zustand'
 import { pixaiApi } from '../services/app-api'
+import { buildCanvasGenerationPlanForNode, buildCanvasWorkflowPlan, MAX_CANVAS_WORKFLOW_REQUESTS, type CanvasGenerationPlanItem } from '../services/canvas-workflow'
 import { ImageGenerationPreflightError } from '../services/image-service'
 import { getBundledAppVersion } from '../shared/app-version'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
-import { sendSystemNotification } from '../lib/platform'
+import { imageSourceForDisplay, sendSystemNotification } from '../lib/platform'
 import { formatDuration } from '../lib/time'
+import { useCanvasStore } from './canvas-store'
 import type {
   AppPreferences,
   AppPreferencesUpdate,
   AppUpdateState,
+  CanvasNodeData,
+  CanvasProject,
   CodexSkillStatus,
   Conversation,
   ConversationCreateInput,
   ConversationUpdate,
   GenerateImageInput,
+  GenerationPreviewState,
   GenerationRun,
   HistoryListOptions,
   ImageHistoryItem,
+  PartialImagePreview,
   PromptTemplate,
   PromptTemplateInput,
   ProviderProfileInput,
@@ -32,7 +38,11 @@ import {
   pruneRemovedGenerationIndexesByRunId
 } from './generation-state'
 
-type View = 'workspace' | 'gallery' | 'prompts'
+export type View = 'workspace' | 'canvas' | 'gallery' | 'prompts'
+
+export function isWorkbenchView(view: View): view is 'workspace' | 'canvas' {
+  return view === 'workspace' || view === 'canvas'
+}
 
 type AppState = {
   view: View
@@ -43,6 +53,7 @@ type AppState = {
   windowFocused: boolean
   conversations: Conversation[]
   activeConversationId: string | null
+  activeCanvasConversationId: string | null
   runsByConversation: Record<string, GenerationRun[]>
   history: ImageHistoryItem[]
   templates: PromptTemplate[]
@@ -56,6 +67,7 @@ type AppState = {
   generatingByConversation: Record<string, number>
   generationStartedAtByConversation: Record<string, number>
   removedGenerationIndexesByRunId: Record<string, number[]>
+  generationPreviews: GenerationPreviewState
   promptAssistantRunning: { inspire: boolean; enrich: boolean }
   toast: string | null
   getConversationGenerationState: (conversationId: string) => { generating: boolean; startedAt: number | null; activeCount: number }
@@ -68,6 +80,9 @@ type AppState = {
   setActiveConversation: (id: string) => Promise<void>
   createConversation: (template?: ConversationCreateInput) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
+  openCanvasWorkspace: () => Promise<void>
+  createCanvasProject: () => Promise<void>
+  deleteCanvasProject: (projectId: string) => Promise<void>
   updateActiveConversation: (input: ConversationUpdate) => Promise<void>
   updateSettings: (input: ProviderSettingsUpdate) => Promise<void>
   updatePreferences: (input: AppPreferencesUpdate) => Promise<void>
@@ -85,6 +100,11 @@ type AppState = {
   importReferenceFiles: (files: File[]) => Promise<void>
   importReferencePayloads: (payloads: ReferenceImageFilePayload[]) => Promise<void>
   addHistoryAsReference: (historyId: string) => Promise<void>
+  addHistoryToCanvas: (historyId: string) => Promise<void>
+  openCanvasProject: (projectId: string) => Promise<void>
+  generateCanvasNode: (nodeId: string) => Promise<void>
+  runCanvasWorkflow: () => Promise<void>
+  enrichCanvasTextNode: (nodeId: string) => Promise<void>
   removeReferenceImage: (referenceImageId: string) => Promise<void>
   reorderReferenceImages: (referenceImageIds: string[]) => Promise<void>
   inspirePrompt: () => Promise<void>
@@ -147,6 +167,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   windowFocused: true,
   conversations: [],
   activeConversationId: null,
+  activeCanvasConversationId: null,
   runsByConversation: {},
   history: [],
   templates: [],
@@ -160,6 +181,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   generatingByConversation: {},
   generationStartedAtByConversation: {},
   removedGenerationIndexesByRunId: {},
+  generationPreviews: {},
   promptAssistantRunning: { inspire: false, enrich: false },
   toast: null,
   getConversationGenerationState: (conversationId) =>
@@ -171,8 +193,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       pixaiApi.preferences.refreshNotificationPermission()
     ])
     let conversations = await pixaiApi.conversation.list()
-    if (conversations.length === 0) conversations = [await pixaiApi.conversation.create()]
-    const activeConversationId = get().activeConversationId || conversations[0]?.id || null
+    const canvasProjects = await pixaiApi.canvas.list()
+    useCanvasStore.setState({ projects: canvasProjects })
+    const hiddenConversationIds = collectCanvasConversationIds(canvasProjects)
+    if (conversations.length === 0 || !conversations.some((conversation) => !hiddenConversationIds.has(conversation.id))) {
+      conversations = [await pixaiApi.conversation.create(), ...conversations]
+    }
+    const workspaceConversations = listWorkspaceConversations(conversations, hiddenConversationIds)
+    const currentActiveConversationId = get().activeConversationId
+    const activeConversationId = currentActiveConversationId && !hiddenConversationIds.has(currentActiveConversationId)
+      ? currentActiveConversationId
+      : workspaceConversations[0]?.id || null
     const runs = activeConversationId ? await pixaiApi.conversation.runs(activeConversationId) : []
     const history = await pixaiApi.history.list({ sort: 'newest' })
     const templates = await pixaiApi.templates.list()
@@ -181,6 +212,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       preferences,
       conversations,
       activeConversationId,
+      activeCanvasConversationId: null,
       runsByConversation: activeConversationId ? { [activeConversationId]: runs } : {},
       history,
       templates,
@@ -245,6 +277,94 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ conversations, activeConversationId, runsByConversation })
     await get().reloadHistory()
     get().notify('已删除会话，历史记录已保留')
+  },
+  openCanvasWorkspace: async () => {
+    const canvasStore = useCanvasStore.getState()
+    const targetProjectId = canvasStore.activeProjectId || canvasStore.activeProject?.id || canvasStore.projects[0]?.id
+    if (targetProjectId) {
+      await get().openCanvasProject(targetProjectId)
+      return
+    }
+    await get().createCanvasProject()
+  },
+  createCanvasProject: async () => {
+    let hiddenConversation: Conversation | null = null
+    try {
+      hiddenConversation = await pixaiApi.conversation.create()
+      const project = await useCanvasStore.getState().createProject({
+        conversationId: hiddenConversation.id,
+        title: 'Canvas 项目'
+      })
+      if (!project) throw new Error(useCanvasStore.getState().errorMessage || 'Canvas 项目创建失败')
+      const runs = await pixaiApi.conversation.runs(hiddenConversation.id)
+      set({
+        conversations: upsertConversation(get().conversations, hiddenConversation),
+        activeCanvasConversationId: hiddenConversation.id,
+        runsByConversation: { ...get().runsByConversation, [hiddenConversation.id]: runs },
+        view: 'canvas'
+      })
+      get().notify('已新建 Canvas 项目')
+    } catch (error) {
+      if (hiddenConversation) {
+        await pixaiApi.conversation.delete(hiddenConversation.id).catch(() => undefined)
+      }
+      get().notify(error instanceof Error ? error.message : 'Canvas 项目创建失败')
+    }
+  },
+  deleteCanvasProject: async (projectId) => {
+    const canvasStore = useCanvasStore.getState()
+    const currentProject = canvasStore.activeProject?.id === projectId ? canvasStore.activeProject : await pixaiApi.canvas.get(projectId)
+    const summary = canvasStore.projects.find((project) => project.id === projectId)
+    const conversationId = currentProject?.conversationId || summary?.conversationId || null
+    const deletingActiveProject = canvasStore.activeProjectId === projectId
+    try {
+      await canvasStore.deleteProject(projectId)
+      if (conversationId) {
+        await pixaiApi.conversation.delete(conversationId)
+      }
+      const nextRunsByConversation = { ...get().runsByConversation }
+      if (conversationId) delete nextRunsByConversation[conversationId]
+      const nextConversations = conversationId
+        ? get().conversations.filter((conversation) => conversation.id !== conversationId)
+        : get().conversations
+      const nextHistory = conversationId
+        ? get().history.map((item) => (item.conversationId === conversationId ? { ...item, conversationId: null } : item))
+        : get().history
+
+      if (!deletingActiveProject) {
+        set({
+          conversations: nextConversations,
+          history: nextHistory,
+          runsByConversation: nextRunsByConversation
+        })
+        get().notify('Canvas 项目已删除')
+        return
+      }
+
+      const nextProject = useCanvasStore.getState().activeProject
+      let activeCanvasConversationId: string | null = null
+      let conversations = nextConversations
+      if (nextProject) {
+        const nextConversation = await getCanvasProjectConversation({ ...get(), conversations }, nextProject)
+        if (nextConversation) {
+          activeCanvasConversationId = nextConversation.id
+          conversations = upsertConversation(conversations, nextConversation)
+          if (!nextRunsByConversation[nextConversation.id]) {
+            nextRunsByConversation[nextConversation.id] = await pixaiApi.conversation.runs(nextConversation.id)
+          }
+        }
+      }
+
+      set({
+        conversations,
+        history: nextHistory,
+        runsByConversation: nextRunsByConversation,
+        activeCanvasConversationId
+      })
+      get().notify('Canvas 项目已删除')
+    } catch (error) {
+      get().notify(error instanceof Error ? error.message : 'Canvas 项目删除失败')
+    }
   },
   updateActiveConversation: async (input) => {
     const id = get().activeConversationId
@@ -478,6 +598,156 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     get().notify('已进入编辑')
   },
+  addHistoryToCanvas: async (historyId) => {
+    const item = findHistoryItem(get(), historyId) || await pixaiApi.history.get(historyId)
+    if (!item || item.status !== 'succeeded' || (!item.dataUrl && !item.storagePath)) {
+      get().notify('这张历史图不可用，无法加入 Canvas')
+      return
+    }
+    try {
+      if (!useCanvasStore.getState().activeProject) {
+        await get().openCanvasWorkspace()
+      }
+      const project = useCanvasStore.getState().activeProject
+      if (!project) throw new Error('Canvas 项目尚未准备好。')
+      const conversation = await getCanvasProjectConversation(get(), project)
+      if (!conversation) throw new Error('Canvas 项目绑定的会话不存在。')
+      const referenceImages = await pixaiApi.reference.addFromHistoryMany(conversation.id, [historyId])
+      const reference = referenceImages.at(-1)
+      if (!reference) throw new Error('历史图未能导入为参考图。')
+      const displaySource = await imageSourceForDisplay(item.dataUrl, item.storagePath)
+      if (!displaySource) throw new Error('图片内容不可用，无法加入 Canvas。')
+      set({
+        conversations: get().conversations.map((conversation) =>
+          conversation.id === project.conversationId ? { ...conversation, referenceImages } : conversation
+        )
+      })
+      await useCanvasStore.getState().addImageNode({
+        name: reference.name || `${item.id}.${extensionFromImageSource(item.dataUrl || item.storagePath || '')}`,
+        dataUrl: displaySource,
+        mimeType: reference.mimeType || mimeTypeFromImageSource(item.dataUrl || item.storagePath || ''),
+        fileSizeBytes: reference.fileSizeBytes || item.fileSizeBytes || estimateDataUrlBytes(item.dataUrl) || 0,
+        referenceImageId: reference.id,
+        historyItemId: item.id,
+        storagePath: reference.storagePath || item.storagePath || null
+      })
+      set({ view: 'canvas' })
+      get().notify('已加入 Canvas')
+    } catch (error) {
+      get().notify(error instanceof Error ? error.message : '加入 Canvas 失败')
+    }
+  },
+  openCanvasProject: async (projectId) => {
+    const canvasStore = useCanvasStore.getState()
+    const project = await canvasStore.openProject(projectId)
+    if (!project) {
+      get().notify(useCanvasStore.getState().errorMessage || 'Canvas 项目打开失败')
+      return
+    }
+    const conversation = await getCanvasProjectConversation(get(), project)
+    if (!conversation) {
+      get().notify('这个 Canvas 项目绑定的会话不存在')
+      return
+    }
+      const runs = get().runsByConversation[conversation.id] || await pixaiApi.conversation.runs(conversation.id)
+      set({
+        activeCanvasConversationId: conversation.id,
+        runsByConversation: { ...get().runsByConversation, [conversation.id]: runs },
+        view: 'canvas'
+      })
+  },
+  generateCanvasNode: async (nodeId) => {
+    const canvasStore = useCanvasStore.getState()
+    const project = canvasStore.activeProject
+    const node = project?.nodes.find((item) => item.id === nodeId)
+    if (!project || !node || node.type !== 'generate') {
+      get().notify('未找到可运行的生成节点')
+      return
+    }
+    if (node.metadata.status === 'running') {
+      get().notify('这个生成节点正在运行')
+      return
+    }
+    const conversation = await getCanvasProjectConversation(get(), project)
+    if (!conversation) {
+      await canvasStore.updateGenerateNodeState(nodeId, { status: 'failed', errorMessage: '未找到 Canvas project 绑定的会话。' })
+      get().notify('未找到 Canvas project 绑定的会话')
+      return
+    }
+    const planItem = buildCanvasGenerationPlanForNode(project, nodeId, 'first').find((item) => item.prompt.trim())
+    if (!planItem) {
+      await canvasStore.updateGenerateNodeState(nodeId, { status: 'failed', errorMessage: '请先连接文本节点或填写生成节点 prompt。' })
+      get().notify('请先填写 Canvas 生成 prompt')
+      return
+    }
+    await runCanvasGenerationPlanItem(planItem, conversation, set, get)
+  },
+  runCanvasWorkflow: async () => {
+    const canvasStore = useCanvasStore.getState()
+    const project = canvasStore.activeProject
+    if (!project) {
+      get().notify('Canvas project 尚未准备好')
+      return
+    }
+    const conversation = await getCanvasProjectConversation(get(), project)
+    if (!conversation) {
+      get().notify('未找到 Canvas project 绑定的会话')
+      return
+    }
+    const plan = buildCanvasWorkflowPlan(project)
+    if (plan.exceedsBudget) {
+      get().notify(`Canvas workflow 请求数 ${plan.requestCount} 超过上限 ${MAX_CANVAS_WORKFLOW_REQUESTS}`)
+      return
+    }
+    for (const nodeId of plan.missingPromptNodeIds) {
+      await useCanvasStore.getState().updateGenerateNodeState(nodeId, {
+        status: 'failed',
+        errorMessage: '请先连接文本节点或填写生成节点 prompt。'
+      })
+    }
+    if (plan.items.length === 0) {
+      get().notify(plan.skippedRunningNodeIds.length > 0 ? 'Canvas workflow 没有空闲的可运行节点' : 'Canvas workflow 没有可运行节点')
+      return
+    }
+    let succeeded = 0
+    let failed = 0
+    for (const item of plan.items) {
+      const ok = await runCanvasGenerationPlanItem(item, conversation, set, get, {
+        notifySuccess: false,
+        notifyFailure: false
+      })
+      if (ok) succeeded += 1
+      else failed += 1
+    }
+    get().notify(`Canvas workflow 完成：${succeeded} 成功，${failed} 失败`)
+  },
+  enrichCanvasTextNode: async (nodeId) => {
+    const canvasStore = useCanvasStore.getState()
+    const project = canvasStore.activeProject
+    const node = project?.nodes.find((item) => item.id === nodeId && item.type === 'text')
+    const prompt = node?.metadata.content.trim() || ''
+    if (!project || !node) {
+      get().notify('未找到 Canvas 文本节点')
+      return
+    }
+    if (!prompt || get().promptAssistantRunning.enrich) return
+    set({ promptAssistantRunning: { ...get().promptAssistantRunning, enrich: true } })
+    try {
+      const conversation = await getCanvasProjectConversation(get(), project)
+      const hasReferenceImages = Boolean(conversation?.referenceImages.length)
+        || project.nodes.some((item) => item.type === 'image' || (item.type === 'result' && item.metadata.content))
+      const nextPrompt = await pixaiApi.prompt.enrich({
+        prompt,
+        hasReferenceImages
+      })
+      await useCanvasStore.getState().updateNodeContent(nodeId, nextPrompt)
+      get().notify('已丰富 Canvas 文本节点')
+    } catch (error) {
+      get().notify(error instanceof Error ? `提示词生成失败：${error.message}` : '提示词生成失败')
+    } finally {
+      set({ promptAssistantRunning: { ...get().promptAssistantRunning, enrich: false } })
+    }
+  },
   removeReferenceImage: async (referenceImageId) => {
     const id = get().activeConversationId
     if (!id) return
@@ -560,9 +830,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
     })
     const titlePatch = conversation.title === '新会话' && prompt ? { title: prompt.length > 18 ? `${prompt.slice(0, 18)}...` : prompt } : null
+    const previewRunIds = new Set<string>()
+    const onPartialImage = (preview: PartialImagePreview) => {
+      previewRunIds.add(preview.runId)
+      set({ generationPreviews: upsertGenerationPreview(get().generationPreviews, preview) })
+    }
     try {
       if (titlePatch) await get().updateActiveConversation(titlePatch)
-      const resultPromise = pixaiApi.image.generate(input)
+      const resultPromise = pixaiApi.image.generate(input, { onPartialImage })
       void get().refreshConversationResults(conversation.id)
       const result = await resultPromise
       const runs = await pixaiApi.conversation.runs(conversation.id)
@@ -581,7 +856,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         runsByConversation,
         history,
-        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
+        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId,
+        generationPreviews: clearGenerationPreviewsForRun(get().generationPreviews, result.run.id)
       })
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
       const completionMessage = result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`
@@ -591,6 +867,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `生成失败：${error.message}` : '生成失败'
       get().notify(message)
       await notifyGenerationFinished([], message, get, '')
+      if (previewRunIds.size > 0) {
+        set({ generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds) })
+      }
     } finally {
       const endedGenerationState = endConversationGeneration(conversation.id, {
         generatingByConversation: get().generatingByConversation,
@@ -600,7 +879,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         generatingByConversation: endedGenerationState.generatingByConversation,
         generationStartedAtByConversation: endedGenerationState.startedAtByConversation,
-        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId
+        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId,
+        generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds)
       })
       if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
     }
@@ -662,8 +942,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
       removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
     })
+    const previewRunIds = new Set<string>()
+    const onPartialImage = (preview: PartialImagePreview) => {
+      previewRunIds.add(preview.runId)
+      set({ generationPreviews: upsertGenerationPreview(get().generationPreviews, preview) })
+    }
     try {
-      const resultPromise = pixaiApi.image.generate(input)
+      const resultPromise = pixaiApi.image.generate(input, { onPartialImage })
       void get().refreshConversationResults(conversation.id)
       const result = await resultPromise
       const runs = await pixaiApi.conversation.runs(conversation.id)
@@ -682,7 +967,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         runsByConversation,
         history,
-        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
+        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId,
+        generationPreviews: clearGenerationPreviewsForRun(get().generationPreviews, result.run.id)
       })
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
       const completionMessage = result.errorMessage ? `重试失败：${result.errorMessage}${durationText}` : `重试完成${durationText}`
@@ -692,6 +978,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? `重试失败：${error.message}` : '重试失败'
       get().notify(message)
       await notifyGenerationFinished([], message, get, '')
+      if (previewRunIds.size > 0) {
+        set({ generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds) })
+      }
     } finally {
       const endedGenerationState = endConversationGeneration(conversation.id, {
         generatingByConversation: get().generatingByConversation,
@@ -701,7 +990,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         generatingByConversation: endedGenerationState.generatingByConversation,
         generationStartedAtByConversation: endedGenerationState.startedAtByConversation,
-        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId
+        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId,
+        generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds)
       })
       if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
     }
@@ -717,8 +1007,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({
         generatingByConversation: nextGenerationState.generatingByConversation,
         generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
-        removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+        removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId,
+        generationPreviews: clearGenerationPreviewForRequest(get().generationPreviews, runId, requestIndex)
       })
+    } else {
+      set({ generationPreviews: clearGenerationPreviewsForRun(get().generationPreviews, runId) })
     }
     await pixaiApi.image.cancel(runId, requestIndex)
   },
@@ -886,6 +1179,308 @@ function findHistoryItem(state: AppState, id: string): ImageHistoryItem | null {
     || null
 }
 
+function collectCanvasConversationIds(projects: Array<{ conversationId?: string }>, activeProject?: CanvasProject | null): Set<string> {
+  const ids = new Set<string>()
+  for (const project of projects) {
+    if (project.conversationId) ids.add(project.conversationId)
+  }
+  if (activeProject?.conversationId) ids.add(activeProject.conversationId)
+  return ids
+}
+
+function listWorkspaceConversations(conversations: Conversation[], hiddenConversationIds: Set<string>): Conversation[] {
+  return conversations.filter((conversation) => !hiddenConversationIds.has(conversation.id))
+}
+
+function upsertConversation(conversations: Conversation[], next: Conversation): Conversation[] {
+  const remaining = conversations.filter((conversation) => conversation.id !== next.id)
+  return [next, ...remaining]
+}
+
+async function getCanvasProjectConversation(state: AppState, project: CanvasProject): Promise<Conversation | null> {
+  const existing = state.conversations.find((conversation) => conversation.id === project.conversationId)
+  if (existing) return existing
+  const conversation = await pixaiApi.conversation.get(project.conversationId)
+  if (!conversation) return null
+  useAppStore.setState({ conversations: upsertConversation(useAppStore.getState().conversations, conversation) })
+  return conversation
+}
+
+async function runCanvasGenerationPlanItem(
+  planItem: CanvasGenerationPlanItem,
+  conversation: Conversation,
+  set: (partial: Partial<AppState>) => void,
+  get: () => AppState,
+  options: { notifySuccess?: boolean; notifyFailure?: boolean } = {}
+): Promise<boolean> {
+  const { notifySuccess = true, notifyFailure = true } = options
+  const canvasStore = useCanvasStore.getState()
+  const project = canvasStore.activeProject
+  const node = project?.nodes.find((item) => item.id === planItem.nodeId)
+  if (!project || !node || node.type !== 'generate') {
+    if (notifyFailure) get().notify('未找到可运行的生成节点')
+    return false
+  }
+  if (node.metadata.status === 'running') {
+    if (notifyFailure) get().notify('这个生成节点正在运行')
+    return false
+  }
+  if (!planItem.prompt.trim()) {
+    await canvasStore.updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: '请先连接文本节点或填写生成节点 prompt。' })
+    if (notifyFailure) get().notify('请先填写 Canvas 生成 prompt')
+    return false
+  }
+
+  let referenceImageIds: string[]
+  try {
+    referenceImageIds = await resolveCanvasGenerationReferenceIds(project, planItem.nodeId, conversation, set, get)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Canvas 参考图解析失败'
+    await canvasStore.updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: message })
+    if (notifyFailure) get().notify(message)
+    return false
+  }
+
+  const ratio = planItem.config.ratio || conversation.ratio
+  const generationStartedAt = Date.now()
+  set({ generationClockMs: generationStartedAt })
+  startGenerationClock()
+  const input: GenerateImageInput = {
+    conversationId: conversation.id,
+    prompt: planItem.prompt,
+    model: conversation.model || getSelectedImageProfile(get().settings)?.defaultImageModel || DEFAULT_MODEL,
+    ratio,
+    size: isImageSizeCompatible(ratio, conversation.size) ? conversation.size : getDefaultImageSize(ratio),
+    quality: planItem.config.quality || conversation.quality,
+    n: planItem.config.n || 1,
+    outputFormat: conversation.outputFormat || DEFAULT_IMAGE_OUTPUT_FORMAT,
+    outputCompression: conversation.outputCompression ?? undefined,
+    background: conversation.background,
+    moderation: conversation.moderation,
+    stream: conversation.stream,
+    partialImages: conversation.partialImages ?? undefined,
+    inputFidelity: conversation.inputFidelity ?? undefined,
+    maxRetries: conversation.maxRetries,
+    generationTimeoutSeconds: normalizeImageGenerationTimeoutSeconds(conversation.generationTimeoutSeconds),
+    referenceImageIds,
+    origin: {
+      kind: 'canvas',
+      canvasProjectId: project.id,
+      canvasNodeId: planItem.nodeId
+    }
+  }
+  const nextGenerationState = beginConversationGeneration(conversation.id, {
+    generatingByConversation: get().generatingByConversation,
+    startedAtByConversation: get().generationStartedAtByConversation,
+    removedIndexesByRunId: get().removedGenerationIndexesByRunId
+  }, generationStartedAt)
+  set({
+    generatingByConversation: nextGenerationState.generatingByConversation,
+    generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
+    removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+  })
+  await canvasStore.updateGenerateNodeState(planItem.nodeId, {
+    status: 'running',
+    errorMessage: '',
+    runId: '',
+    requestIndex: 0,
+    historyItemId: ''
+  })
+
+  const previewRunIds = new Set<string>()
+  let previewBound = false
+  const onPartialImage = (preview: PartialImagePreview) => {
+    previewRunIds.add(preview.runId)
+    set({ generationPreviews: upsertGenerationPreview(get().generationPreviews, preview) })
+    if (!previewBound) {
+      previewBound = true
+      void useCanvasStore.getState().updateGenerateNodeState(planItem.nodeId, {
+        runId: preview.runId,
+        requestIndex: preview.requestIndex
+      })
+    }
+  }
+
+  try {
+    const resultPromise = pixaiApi.image.generate(input, { onPartialImage })
+    void get().refreshConversationResults(conversation.id)
+    const result = await resultPromise
+    const runs = await pixaiApi.conversation.runs(conversation.id)
+    const history = await pixaiApi.history.list({
+      query: get().query,
+      favoritesOnly: get().favoritesOnly,
+      sort: 'newest'
+    })
+    const runsByConversation = { ...get().runsByConversation, [conversation.id]: runs }
+    const runningRunIds = collectRunningRunIds(runsByConversation)
+    const prunedGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
+      generatingByConversation: get().generatingByConversation,
+      startedAtByConversation: get().generationStartedAtByConversation,
+      removedIndexesByRunId: get().removedGenerationIndexesByRunId
+    })
+    set({
+      runsByConversation,
+      history,
+      removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId,
+      generationPreviews: clearGenerationPreviewsForRun(get().generationPreviews, result.run.id)
+    })
+    const successItems = result.items.filter((item) => item.status === 'succeeded' && (item.dataUrl || item.storagePath))
+    if (successItems.length === 0) {
+      const message = result.errorMessage || result.items.find((item) => item.status === 'failed')?.errorMessage || 'Canvas 生成没有返回成功图片。'
+      await canvasStore.updateGenerateNodeState(planItem.nodeId, {
+        status: 'failed',
+        runId: result.run.id,
+        requestIndex: 0,
+        errorMessage: message
+      })
+      if (notifyFailure) get().notify(`Canvas 生成失败：${message}`)
+      await notifyGenerationFinished(result.items, message, get, '')
+      return false
+    }
+    for (const successItem of successItems) {
+      const displaySource = await imageSourceForDisplay(successItem.dataUrl, successItem.storagePath)
+      const source = displaySource || successItem.dataUrl || successItem.storagePath || ''
+      await useCanvasStore.getState().recordGeneratedResult(planItem.nodeId, {
+        name: `${successItem.id}.${extensionFromImageSource(successItem.dataUrl || successItem.storagePath || source)}`,
+        dataUrl: source,
+        mimeType: mimeTypeFromImageSource(successItem.dataUrl || successItem.storagePath || source),
+        fileSizeBytes: successItem.fileSizeBytes || estimateDataUrlBytes(successItem.dataUrl) || 0,
+        historyItemId: successItem.id,
+        storagePath: successItem.storagePath || null
+      })
+    }
+    const finalItem = successItems.at(-1)!
+    await useCanvasStore.getState().updateGenerateNodeState(planItem.nodeId, {
+      status: 'succeeded',
+      runId: result.run.id,
+      requestIndex: finalItem.requestIndex ?? 0,
+      historyItemId: finalItem.id,
+      errorMessage: ''
+    })
+    const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
+    if (notifySuccess) get().notify(`Canvas 生成完成${durationText}`)
+    await notifyGenerationFinished(result.items, result.errorMessage || null, get, durationText)
+    return true
+  } catch (error) {
+    const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? error.message : 'Canvas 生成失败'
+    await useCanvasStore.getState().updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: message })
+    if (notifyFailure) get().notify(`Canvas 生成失败：${message}`)
+    await notifyGenerationFinished([], message, get, '')
+    if (previewRunIds.size > 0) {
+      set({ generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds) })
+    }
+    return false
+  } finally {
+    const endedGenerationState = endConversationGeneration(conversation.id, {
+      generatingByConversation: get().generatingByConversation,
+      startedAtByConversation: get().generationStartedAtByConversation,
+      removedIndexesByRunId: get().removedGenerationIndexesByRunId
+    })
+    set({
+      generatingByConversation: endedGenerationState.generatingByConversation,
+      generationStartedAtByConversation: endedGenerationState.startedAtByConversation,
+      removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId,
+      generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds)
+    })
+    if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
+  }
+}
+
+async function resolveCanvasGenerationReferenceIds(
+  project: CanvasProject,
+  generateNodeId: string,
+  conversation: Conversation,
+  set: (partial: Partial<AppState>) => void,
+  get: () => AppState
+): Promise<string[]> {
+  const nodeById = new Map(project.nodes.map((node) => [node.id, node]))
+  const imageNodes = project.connections
+    .filter((connection) => connection.toNodeId === generateNodeId && connection.kind === 'reference-image')
+    .map((connection) => nodeById.get(connection.fromNodeId))
+    .filter((node): node is CanvasNodeData => Boolean(node && (node.type === 'image' || node.type === 'result')))
+  const referenceImageIds: string[] = []
+  const payloads: Array<ReferenceImageFilePayload & { storagePath?: string | null; nodeId: string }> = []
+  for (const imageNode of imageNodes) {
+    const referenceImageId = imageNode.metadata.referenceImageId
+    if (referenceImageId && conversation.referenceImages.some((reference) => reference.id === referenceImageId)) {
+      referenceImageIds.push(referenceImageId)
+      continue
+    }
+    payloads.push(await canvasImageNodeToReferencePayload(imageNode))
+  }
+  if (payloads.length === 0) return uniqueStrings(referenceImageIds)
+
+  const referenceImages = await pixaiApi.reference.importPayloads(conversation.id, payloads.map(({ nodeId: _nodeId, ...payload }) => payload))
+  const imported = referenceImages.slice(-payloads.length)
+  if (imported.length !== payloads.length) throw new Error('Canvas 图片节点未能导入为参考图。')
+  set({
+    conversations: get().conversations.map((item) =>
+      item.id === conversation.id ? { ...item, referenceImages } : item
+    )
+  })
+  for (let index = 0; index < payloads.length; index += 1) {
+    const reference = imported[index]
+    referenceImageIds.push(reference.id)
+    await useCanvasStore.getState().bindImageNodeReference(payloads[index].nodeId, reference.id)
+  }
+  return uniqueStrings(referenceImageIds)
+}
+
+async function canvasImageNodeToReferencePayload(node: CanvasNodeData): Promise<ReferenceImageFilePayload & { storagePath?: string | null; nodeId: string }> {
+  const source = await imageSourceForDisplay(node.metadata.content, node.metadata.storagePath)
+  if (!source?.startsWith('data:image/')) {
+    throw new Error('Canvas 图片节点需要先转换为可导入参考图。')
+  }
+  return {
+    nodeId: node.id,
+    name: `${node.title || node.id}.${extensionFromImageSource(source)}`,
+    mimeType: node.metadata.mimeType || mimeTypeFromImageSource(source),
+    dataUrl: source,
+    fileSizeBytes: node.metadata.fileSizeBytes || estimateDataUrlBytes(source) || 0,
+    storagePath: node.metadata.storagePath || null
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)))
+}
+
+function upsertGenerationPreview(state: GenerationPreviewState, preview: PartialImagePreview): GenerationPreviewState {
+  return {
+    ...state,
+    [preview.runId]: {
+      ...(state[preview.runId] || {}),
+      [preview.requestIndex]: preview
+    }
+  }
+}
+
+function clearGenerationPreviewForRequest(state: GenerationPreviewState, runId: string, requestIndex: number): GenerationPreviewState {
+  if (!state[runId]?.[requestIndex]) return state
+  const runPreviews = { ...state[runId] }
+  delete runPreviews[requestIndex]
+  if (Object.keys(runPreviews).length === 0) return clearGenerationPreviewsForRun(state, runId)
+  return {
+    ...state,
+    [runId]: runPreviews
+  }
+}
+
+function clearGenerationPreviewsForRun(state: GenerationPreviewState, runId: string): GenerationPreviewState {
+  if (!state[runId]) return state
+  const next = { ...state }
+  delete next[runId]
+  return next
+}
+
+function clearGenerationPreviewsForRuns(state: GenerationPreviewState, runIds: Set<string>): GenerationPreviewState {
+  let next = state
+  for (const runId of runIds) {
+    next = clearGenerationPreviewsForRun(next, runId)
+  }
+  return next
+}
+
 function getSelectedImageProfile(settings: ProviderSettings | null) {
   return settings?.profiles.find((profile) => profile.id === settings.selectedImageProfileId) || settings?.profiles[0] || null
 }
@@ -913,4 +1508,28 @@ function buildSuccessNotificationBody(successes: ImageHistoryItem[], failures: I
       ? `${successes.length} 张图片`
       : `${first.ratio} · ${first.quality}`
   return `${resultText}${durationText}`
+}
+
+function mimeTypeFromImageSource(source: string): string {
+  if (source.startsWith('data:')) return /^data:([^;]+);base64,/i.exec(source)?.[1] || 'image/png'
+  const extension = extensionFromImageSource(source)
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg'
+  if (extension === 'webp') return 'image/webp'
+  return 'image/png'
+}
+
+function extensionFromImageSource(source: string): string {
+  if (source.startsWith('data:')) {
+    const mimeType = /^data:([^;]+);base64,/i.exec(source)?.[1] || ''
+    if (mimeType.includes('jpeg')) return 'jpg'
+    if (mimeType.includes('webp')) return 'webp'
+    return 'png'
+  }
+  const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(source)?.[1]?.toLowerCase()
+  return extension === 'jpg' || extension === 'jpeg' || extension === 'webp' ? extension : 'png'
+}
+
+function estimateDataUrlBytes(source: string | null): number | null {
+  const base64 = /^data:[^;]+;base64,(.+)$/i.exec(source || '')?.[1]
+  return base64 ? Math.floor((base64.length * 3) / 4) : null
 }

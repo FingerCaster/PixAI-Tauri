@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas project import export smoke</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react'
+      import { createRoot } from 'react-dom/client'
+      import { CanvasWorkspace } from '/src/components/canvas/CanvasWorkspace.tsx'
+      import { useAppStore } from '/src/store/app-store.ts'
+      import { useCanvasStore } from '/src/store/canvas-store.ts'
+      import '/src/index.css'
+
+      const conversationId = 'conversation-import-export-smoke'
+      const now = '2026-06-05T10:00:00.000Z'
+
+      useAppStore.setState({
+        activeConversationId: conversationId,
+        conversations: [
+          {
+            id: conversationId,
+            title: 'Canvas 导入导出 smoke',
+            draftPrompt: '',
+            model: 'gpt-image-2',
+            ratio: '1:1',
+            size: '1024x1024',
+            quality: 'high',
+            n: 1,
+            outputFormat: 'png',
+            outputCompression: null,
+            background: 'auto',
+            moderation: 'auto',
+            stream: true,
+            partialImages: 1,
+            inputFidelity: null,
+            maxRetries: 0,
+            generationTimeoutSeconds: 300,
+            autoSaveHistory: true,
+            keepFailureDetails: true,
+            referenceImages: [],
+            createdAt: now,
+            updatedAt: now
+          }
+        ],
+        generationPreviews: {},
+        notify: () => undefined
+      })
+
+      useCanvasStore.setState({
+        projects: [
+          {
+            id: 'canvas-import-export-smoke',
+            title: '导入导出项目',
+            updatedAt: now,
+            nodeCount: 2
+          }
+        ],
+        activeProjectId: 'canvas-import-export-smoke',
+        activeProject: {
+          id: 'canvas-import-export-smoke',
+          title: '导入导出项目',
+          conversationId,
+          schemaVersion: 1,
+          nodes: [
+            {
+              id: 'node-smoke-text',
+              type: 'text',
+              title: '文本节点',
+              position: { x: 96, y: 96 },
+              width: 220,
+              height: 140,
+              metadata: { content: 'smoke prompt' }
+            },
+            {
+              id: 'node-smoke-generate',
+              type: 'generate',
+              title: '生成节点',
+              position: { x: 380, y: 96 },
+              width: 300,
+              height: 260,
+              metadata: { content: '生成导入导出示例', status: 'idle' }
+            }
+          ],
+          connections: [
+            {
+              id: 'connection-smoke-prompt',
+              fromNodeId: 'node-smoke-text',
+              toNodeId: 'node-smoke-generate',
+              kind: 'prompt'
+            }
+          ],
+          viewport: { x: 0, y: 0, k: 1 },
+          createdAt: now,
+          updatedAt: now
+        },
+        loading: false,
+        errorMessage: null
+      })
+
+      createRoot(document.getElementById('root')).render(React.createElement(CanvasWorkspace))
+    </script>
+  </body>
+</html>

@@ -1,0 +1,104 @@
+feature: 2026-06-05-canvas-basic-nodes
+created: 2026-06-05
+
+steps:
+  - action: "节点名词骨架：升级共享类型、CanvasProjectInput 和 service normalize/clone"
+    exit_signal: "旧 project 仍能加载，新 nodes/connections 可被 service 创建、更新、列摘要"
+    status: done
+
+  - action: "Store 计算节点：新增 add/update/move/delete node 与 add/delete connection actions"
+    exit_signal: "store 测试覆盖新增文本、图片、移动、删除节点和去重连线"
+    status: done
+
+  - action: "Canvas UI 静态结构：新增工具条入口、节点卡片、图片预览、SVG 连线层"
+    exit_signal: "Canvas 页面能渲染 text/image 节点和基础连线，不白屏"
+    status: done
+
+  - action: "交互逻辑：接入节点选择、拖动提交、文本编辑、连接 handle、删除节点/连线"
+    exit_signal: "用户操作能改变 nodes/connections，并显示选中态"
+    status: done
+
+  - action: "持久化联调：节点/连线更新写回 Canvas project，刷新或重进后恢复"
+    exit_signal: "浏览器 smoke 证明添加、移动、连接、删除和刷新恢复成立"
+    status: done
+
+  - action: "验证收尾：补 service/store/component 测试，跑 pnpm check 和 pnpm build"
+    exit_signal: "测试、类型检查、构建通过，关键验收场景有证据"
+    status: done
+
+checks:
+  - item: "CanvasNodeData、CanvasConnection、CanvasNodeMetadata 类型符合 design 第 2.1 节"
+    source: 名词契约
+    status: passed
+
+  - item: "CanvasProject.nodes/connections 从空数组契约升级为真实数组并可持久化"
+    source: 名词契约
+    status: passed
+
+  - item: "useCanvasStore 暴露节点和连线 actions，且不把选择态写入 project"
+    source: 名词契约
+    status: passed
+
+  - item: "CanvasProjectService 会过滤无效节点、无效连线、自连接和重复连线"
+    source: 流程级约束
+    status: passed
+
+  - item: "删除节点会同步删除相关 connections"
+    source: 流程级约束
+    status: passed
+
+  - item: "重复连线不会重复写入"
+    source: 流程级约束
+    status: passed
+
+  - item: "持久化失败时 store 回滚旧 project 并显示错误"
+    source: 流程级约束
+    status: passed
+
+  - item: "非图片文件或无 active project 时不会写入 nodes"
+    source: 流程级约束
+    status: passed
+
+  - item: "CanvasWorkspace 提供添加文本和添加图片入口"
+    source: 挂载点
+    status: passed
+
+  - item: "CanvasViewport / canvas 子组件渲染节点、连线、选中态和拖动交互"
+    source: 挂载点
+    status: passed
+
+  - item: "不新增 Canvas 生成调用、generate 节点 UI、partial preview 状态或 DAG 执行器"
+    source: 范围守护
+    status: passed
+
+  - item: "不新增 reference/history/gallery 互通入口"
+    source: 范围守护
+    status: passed
+
+  - item: "不修改 CanvasArea 的经典工作台结果网格行为"
+    source: 范围守护
+    status: passed
+
+  - item: "点击添加文本后画布出现文本节点，刷新后仍存在"
+    source: 验收场景
+    status: passed
+
+  - item: "编辑文本节点内容后会持久化"
+    source: 验收场景
+    status: passed
+
+  - item: "选择本地图片后画布出现图片节点，刷新后仍恢复"
+    source: 验收场景
+    status: passed
+
+  - item: "拖动节点后位置持久化，刷新后位置一致"
+    source: 验收场景
+    status: passed
+
+  - item: "从一个节点连接到另一个节点后连线持久化"
+    source: 验收场景
+    status: passed
+
+  - item: "删除节点或连线后画布状态正确更新"
+    source: 验收场景
+    status: passed

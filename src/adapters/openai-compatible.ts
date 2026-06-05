@@ -229,6 +229,24 @@ async function requestImageGeneration(endpoint: string, profile: ProviderRuntime
     ...(input.stream && input.partialImages ? { partial_images: input.partialImages } : {})
   }
   recordImageGenerationCallLog(profile, request, endpoint, input.stream ? 'streaming-json' : 'json', buildHeaders(profile.apiKey || ''), body)
+  if (input.stream) {
+    const partialObserver = createPartialImageStreamObserver(request)
+    const response = await fetchTextStreamThroughPlatform(endpoint, {
+      method: 'POST',
+      headers: buildHeaders(profile.apiKey || ''),
+      signal: request.signal,
+      body: JSON.stringify(body)
+    }, {
+      timeoutMs: Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000),
+      firstByteTimeoutMs: Math.min(Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000), RESPONSES_IMAGE_TEST_TIMEOUT_MS),
+      onTextChunk: partialObserver.onTextChunk
+    })
+    partialObserver.flush()
+    return new Response(response.text, {
+      status: response.status,
+      statusText: response.statusText
+    })
+  }
   return fetchJsonThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
@@ -275,10 +293,13 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
     logBody
   )
   if (input.stream) {
+    const partialObserver = createPartialImageStreamObserver(request)
     const response = await fetchMultipartTextStreamThroughPlatform(endpoint, requestInit, {
       timeoutMs: Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000),
-      firstByteTimeoutMs: Math.min(Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000), RESPONSES_IMAGE_TEST_TIMEOUT_MS)
+      firstByteTimeoutMs: Math.min(Math.max(1000, (input.generationTimeoutSeconds || 300) * 1000), RESPONSES_IMAGE_TEST_TIMEOUT_MS),
+      onTextChunk: partialObserver.onTextChunk
     })
+    partialObserver.flush()
     return new Response(response.text, {
       status: response.status,
       statusText: response.statusText
@@ -318,12 +339,18 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
     ]
   }
   recordImageGenerationCallLog(profile, request, endpoint, 'streaming-json', buildHeaders(profile.apiKey || ''), body)
+  const partialObserver = createPartialImageStreamObserver(request)
   const response = await fetchTextStreamThroughPlatform(endpoint, {
     method: 'POST',
     headers: buildHeaders(profile.apiKey || ''),
     signal: request.signal,
     body: JSON.stringify(body)
-  }, { timeoutMs, firstByteTimeoutMs: Math.min(timeoutMs, RESPONSES_IMAGE_TEST_TIMEOUT_MS) })
+  }, {
+    timeoutMs,
+    firstByteTimeoutMs: Math.min(timeoutMs, RESPONSES_IMAGE_TEST_TIMEOUT_MS),
+    onTextChunk: partialObserver.onTextChunk
+  })
+  partialObserver.flush()
   const text = response.text
   const payload = parseResponsesPayload(text)
   const streamError = extractResponsesProviderError(text, payload)
@@ -430,7 +457,7 @@ function parseImagePayload(text: string): ImageApiResponse {
   if (ssePayloads.length) {
     const streamError = extractProviderError(ssePayloads)
     return {
-      data: dedupeImages(ssePayloads.flatMap((payload) => extractImageApiData(payload))),
+      data: dedupeImages(ssePayloads.filter((payload) => !isPartialImagePayload(payload)).flatMap((payload) => extractImageApiData(payload))),
       ...(streamError ? { error: streamError } : {})
     }
   }
@@ -460,6 +487,7 @@ function extractResponsesImageStreamResult(text: string): ResponsesImageStreamRe
   const payloads = parseSsePayloads(text)
   const images: ImageApiData[] = []
   for (const payload of payloads) {
+    if (isPartialImagePayload(payload)) continue
     images.push(...extractImageApiData(payload))
   }
   return {
@@ -470,31 +498,143 @@ function extractResponsesImageStreamResult(text: string): ResponsesImageStreamRe
 
 function extractResponsesProviderError(text: string, payload: ResponsesApiPayload): ProviderPayloadError | undefined {
   const payloads = parseSsePayloads(text)
-  for (let index = payloads.length - 1; index >= 0; index -= 1) {
-    const error = extractProviderError(payloads[index])
+  for (const candidate of [...payloads, payload].reverse()) {
+    const error = extractProviderError(candidate)
     if (error) return error
   }
-  return extractProviderError(payload)
+  return undefined
 }
 
 function parseSsePayloads(text: string): Record<string, unknown>[] {
   const payloads: Record<string, unknown>[] = []
   for (const block of text.split(/\r?\n\r?\n/)) {
-    const data = block
-      .split(/\r?\n/)
-      .filter((line) => line.startsWith('data:'))
-      .map((line) => line.slice(5).trimStart())
-      .join('\n')
-      .trim()
-    if (!data || data === '[DONE]') continue
-    try {
-      const payload = JSON.parse(data) as unknown
-      if (isRecord(payload)) payloads.push(payload)
-    } catch {
-      // Ignore non-JSON stream keepalives.
-    }
+    const parsed = parseSseBlock(block)
+    if (parsed?.payload) payloads.push(parsed.payload)
   }
   return payloads
+}
+
+function parseSseBlock(block: string): { eventType?: string; payload: Record<string, unknown> | null } | null {
+  let eventType: string | undefined
+  const data = block
+    .split(/\r?\n/)
+    .flatMap((line) => {
+      if (line.startsWith('event:')) {
+        eventType = line.slice(6).trim()
+        return []
+      }
+      return line.startsWith('data:') ? [line.slice(5).trimStart()] : []
+    })
+    .join('\n')
+    .trim()
+  if (!data || data === '[DONE]') return null
+  try {
+    const payload = JSON.parse(data) as unknown
+    return {
+      ...(eventType ? { eventType } : {}),
+      payload: isRecord(payload) ? payload : null
+    }
+  } catch {
+    return null
+  }
+}
+
+function createPartialImageStreamObserver(request: ImageGenerationRequest): { onTextChunk: (chunk: string) => void; flush: () => void } {
+  if (!request.onPartialImage) {
+    return {
+      onTextChunk: () => undefined,
+      flush: () => undefined
+    }
+  }
+  let buffer = ''
+  let nextPartialImageIndex = 0
+
+  const emitPayload = (payload: Record<string, unknown>, eventType?: string) => {
+    if (!isPartialImagePayload(payload, eventType)) return
+    const images = extractImageApiData(payload)
+    if (images.length === 0) return
+    const payloadPartialImageIndex = extractNumericField(payload, ['partial_image_index', 'partialImageIndex', 'index'])
+    const payloadRequestIndex = extractNumericField(payload, ['request_index', 'requestIndex'])
+    for (const image of images) {
+      const partialImageIndex = typeof payloadPartialImageIndex === 'number' && images.length === 1
+        ? payloadPartialImageIndex
+        : nextPartialImageIndex
+      nextPartialImageIndex += 1
+      safeEmitPartialImage(request, {
+        image,
+        ...(typeof payloadRequestIndex === 'number' ? { requestIndex: payloadRequestIndex } : {}),
+        partialImageIndex
+      })
+    }
+  }
+
+  const drain = (force = false) => {
+    while (buffer) {
+      const boundary = findSseBlockBoundary(buffer)
+      if (!boundary) break
+      const block = buffer.slice(0, boundary.index)
+      buffer = buffer.slice(boundary.index + boundary.length)
+      const parsed = parseSseBlock(block)
+      if (parsed?.payload) emitPayload(parsed.payload, parsed.eventType)
+    }
+    if (force && buffer.trim()) {
+      const parsed = parseSseBlock(buffer)
+      buffer = ''
+      if (parsed?.payload) emitPayload(parsed.payload, parsed.eventType)
+    }
+  }
+
+  return {
+    onTextChunk: (chunk: string) => {
+      buffer += chunk
+      drain()
+    },
+    flush: () => drain(true)
+  }
+}
+
+function findSseBlockBoundary(text: string): { index: number; length: number } | null {
+  const lf = text.indexOf('\n\n')
+  const crlf = text.indexOf('\r\n\r\n')
+  if (lf < 0 && crlf < 0) return null
+  if (lf >= 0 && (crlf < 0 || lf < crlf)) return { index: lf, length: 2 }
+  return { index: crlf, length: 4 }
+}
+
+function safeEmitPartialImage(
+  request: ImageGenerationRequest,
+  partial: { image: ImageApiData; requestIndex?: number; partialImageIndex?: number }
+): void {
+  try {
+    request.onPartialImage?.(partial)
+  } catch {
+    // Partial preview callbacks must not affect the provider request.
+  }
+}
+
+function isPartialImagePayload(payload: Record<string, unknown>, eventType?: string): boolean {
+  const type = typeof payload.type === 'string' ? payload.type : undefined
+  const item = isRecord(payload.item) ? payload.item : null
+  const itemType = typeof item?.type === 'string' ? item.type : undefined
+  return isPartialImageEvent(eventType) || isPartialImageEvent(type) || isPartialImageEvent(itemType)
+}
+
+function isPartialImageEvent(value: string | undefined): boolean {
+  return value === 'image_generation.partial_image'
+    || value === 'image_edit.partial_image'
+    || value === 'response.image_generation_call.partial_image'
+}
+
+function extractNumericField(payload: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = payload[key]
+    if (typeof value === 'number' && Number.isInteger(value) && value >= 0) return value
+    if (typeof value === 'string' && value.trim()) {
+      const parsed = Number(value)
+      if (Number.isInteger(parsed) && parsed >= 0) return parsed
+    }
+  }
+  return undefined
 }
 
 function extractResponsesImages(payload: ResponsesApiPayload): ImageApiData[] {
@@ -506,14 +646,14 @@ function extractResponsesImages(payload: ResponsesApiPayload): ImageApiData[] {
   return dedupeImages(images)
 }
 
-function summarizeResponsesImageResponse(text: string, payload: ResponsesApiPayload, eventCount: number, providerError?: ProviderPayloadError): Record<string, unknown> {
+function summarizeResponsesImageResponse(text: string, payload: ResponsesApiPayload, eventCount: number, providerError = extractResponsesProviderError(text, payload)): Record<string, unknown> {
   const payloads = parseSsePayloads(text)
   return {
     eventCount,
     payloadCount: payloads.length,
     payloadSamples: payloads.slice(-6).map(summarizeUnknown),
     finalPayload: summarizeUnknown(payload),
-    ...(providerError ? { providerError } : {})
+    ...(providerError ? { providerError: summarizeUnknown(providerError) } : {})
   }
 }
 
@@ -624,10 +764,11 @@ function extractProviderError(value: unknown): ProviderPayloadError | undefined 
     : typeof value.error_code === 'string'
       ? value.error_code
       : undefined
+  const ownParam = typeof value.param === 'string' ? value.param : undefined
   const type = ownType === 'error' && nested?.type ? nested.type : ownType || nested?.type || responseNested?.type
   const message = ownMessage || nested?.message || responseNested?.message
   const code = ownCode || nested?.code || responseNested?.code
-  const param = typeof value.param === 'string' ? value.param : nested?.param || responseNested?.param
+  const param = ownParam || nested?.param || responseNested?.param
   const explicitError =
     type === 'error' ||
     type === 'response.failed' ||
@@ -635,7 +776,7 @@ function extractProviderError(value: unknown): ProviderPayloadError | undefined 
     Boolean(value.error) ||
     Boolean(nested) ||
     Boolean(responseNested) ||
-    Boolean(ownMessage && ownCode)
+    Boolean(ownCode && (ownMessage || ownParam))
   if (!explicitError) return undefined
   return {
     ...(message ? { message } : {}),

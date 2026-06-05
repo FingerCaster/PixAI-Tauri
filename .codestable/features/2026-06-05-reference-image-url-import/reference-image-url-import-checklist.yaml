@@ -1,0 +1,87 @@
+feature: 2026-06-05-reference-image-url-import
+created: 2026-06-05
+
+steps:
+  - action: "交互骨架：新增链接导入按钮和弹窗输入，不接真实下载"
+    exit_signal: "用户能打开和关闭链接导入弹窗，空输入不会触发导入"
+    status: done
+  - action: "下载转换节点：实现 URL 校验、HTTP 下载、20MB 大小拦截、MIME / 文件名推断和 data URL 转换"
+    exit_signal: "有效图片 URL 能转换为 ReferenceImageFilePayload，无效协议、非图片响应和超过 20MB 的响应有明确错误"
+    status: done
+  - action: "状态接入：把转换结果接入 importReferencePayloads，保留加载态和失败提示"
+    exit_signal: "成功导入后当前会话缩略条追加参考图，失败不改变会话"
+    status: done
+  - action: "测试覆盖：补齐平台转换和 Composer URL 导入交互测试"
+    exit_signal: "正常 URL、无效 URL、非图片响应、超限响应和导入失败路径都有验证证据"
+    status: done
+  - action: "文档对齐：更新 reference-image-input requirement 和 UI 架构文档"
+    exit_signal: "需求边界不再与 URL 导入冲突，架构文档记录 Composer 可显式导入远程图片"
+    status: done
+
+checks:
+  - item: "图片 URL 导入沿用 ReferenceImageFilePayload，不新增远程参考图或 URL 参考图实体"
+    source: 名词契约
+    status: passed
+  - item: "readRemoteImageUrl 输入 HTTP/HTTPS 图片 URL，输出 name、mimeType、dataUrl、fileSizeBytes"
+    source: 名词契约
+    status: passed
+  - item: "URL 下载在 Content-Length 超过 20MB 时直接拒绝"
+    source: 流程级约束
+    status: passed
+  - item: "URL 下载在缺失或不可信 Content-Length 时，累计下载超过 20MB 必须中止"
+    source: 流程级约束
+    status: passed
+  - item: "URL 导入成功后调用 importReferencePayloads 并由 AppDatabase.importReferenceImages 校验格式、大小和数量"
+    source: 编排骨架
+    status: passed
+  - item: "Composer 参考图工具区新增链接导入公共 UI 入口"
+    source: 挂载点
+    status: passed
+  - item: "平台图片读取接口新增 URL 到 ReferenceImageFilePayload 的来源转换"
+    source: 挂载点
+    status: passed
+  - item: "reference-image-input requirement 的远程 URL 边界与本 feature 对齐"
+    source: 挂载点
+    status: passed
+  - item: "不扫描 prompt 文本里的 URL，也不在 prompt 中插入图片占位符"
+    source: 范围守护
+    status: passed
+  - item: "不把网页、HTML img 片段或非图片 URL 转成参考图"
+    source: 范围守护
+    status: passed
+  - item: "不修改 Provider 服务配置、连接测试或 OpenAI-compatible adapter"
+    source: 范围守护
+    status: passed
+  - item: "不新增参考图数量上限、大小上限或格式白名单，继续沿用最多 8 张、单张 20MB、PNG/JPG/WEBP"
+    source: 范围守护
+    status: passed
+  - item: "不把远程 URL 直接存为参考图 dataUrl"
+    source: 范围守护
+    status: passed
+  - item: "用户输入 HTTPS 图片 URL 并确认后，成功导入会在当前会话缩略条显示新增参考图"
+    source: 验收场景
+    status: passed
+  - item: "用户输入 HTTP 图片 URL 时，下载后进入同一参考图导入链路"
+    source: 验收场景
+    status: passed
+  - item: "空 URL 不发起下载，并显示错误或保持确认按钮不可用"
+    source: 验收场景
+    status: passed
+  - item: "ftp URL 或普通文本不发起下载，并提示仅支持 HTTP/HTTPS 图片链接"
+    source: 验收场景
+    status: passed
+  - item: "远程响应 404 / 500 时导入失败，当前会话参考图不变"
+    source: 验收场景
+    status: passed
+  - item: "远程响应 HTML / JSON / 非 PNG/JPG/WEBP 图片时导入失败，当前会话参考图不变"
+    source: 验收场景
+    status: passed
+  - item: "远程响应超过 20MB 时不会完整读取后才失败"
+    source: 验收场景
+    status: passed
+  - item: "当前会话已达到 8 张参考图时沿用现有数量限制提示"
+    source: 验收场景
+    status: passed
+  - item: "不支持多 URL 批量输入、网页解析或 HTML img 抽取"
+    source: 范围守护
+    status: passed

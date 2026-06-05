@@ -1,0 +1,88 @@
+feature: 2026-06-05-streaming-partial-preview-core
+created: 2026-06-05
+
+steps:
+  - action: "名词和门面契约：新增 shared/adapters/service options 类型，扩展 app API generate 签名"
+    exit_signal: "类型编译能表达 partial preview，但现有调用仍兼容"
+    status: done
+
+  - action: "Platform chunk 管道：浏览器/Tauri stream helper 在读取 chunk 时触发 onTextChunk 并保留完整 text"
+    exit_signal: "平台测试证明 chunk 回调顺序正确且最终 text 不变"
+    status: done
+
+  - action: "Adapter partial 解析：增量解析 SSE partial image 事件，触发 request.onPartialImage"
+    exit_signal: "images/edit/responses partial 事件能触发 callback，最终 images 仍正确返回"
+    status: done
+
+  - action: "Service/store 状态链：ImageService 补齐 preview 语义，app store 保存和清理 generationPreviews"
+    exit_signal: "测试证明 partial 写入 store，完成/失败后清理"
+    status: done
+
+  - action: "经典工作台 UI：GeneratingTile 接收 preview，CanvasArea 按 run/request 传入"
+    exit_signal: "组件测试和浏览器 smoke 证明生成占位能显示 preview"
+    status: done
+
+  - action: "验证收尾：跑 pnpm check、pnpm build，修正类型和回归"
+    exit_signal: "测试、类型检查、构建通过，关键验收场景有证据"
+    status: done
+
+checks:
+  - item: "PartialImagePreview、GenerationPreviewState 类型符合 design 第 2.1 节"
+    source: 名词契约
+    status: passed
+
+  - item: "ImageGenerationRequest 暴露 onPartialImage，且 GenerateImageInput 不新增函数字段"
+    source: 名词契约
+    status: passed
+
+  - item: "pixaiApi.image.generate 支持 service-only options，现有调用兼容"
+    source: 名词契约
+    status: passed
+
+  - item: "浏览器 stream chunk 会逐段触发 onTextChunk 并返回完整 text"
+    source: 流程级约束
+    status: passed
+
+  - item: "Tauri stream chunk 会逐段触发 onTextChunk 并返回完整 text"
+    source: 流程级约束
+    status: passed
+
+  - item: "callback 异常不会中断 platform/adapters 的最终请求"
+    source: 流程级约束
+    status: passed
+
+  - item: "adapter 识别 image_generation.partial_image"
+    source: 验收场景
+    status: passed
+
+  - item: "adapter 识别 image_edit.partial_image"
+    source: 验收场景
+    status: passed
+
+  - item: "adapter 识别 response.image_generation_call.partial_image"
+    source: 验收场景
+    status: passed
+
+  - item: "partial preview 写入 generationPreviews[runId][requestIndex]"
+    source: 验收场景
+    status: passed
+
+  - item: "run 完成、失败或取消后清理该 run preview"
+    source: 验收场景
+    status: passed
+
+  - item: "GeneratingTile 有 preview 时显示图片预览，仍保留 spinner/耗时/取消"
+    source: 验收场景
+    status: passed
+
+  - item: "不新增 Canvas 生成节点、Canvas result 节点或 DAG 执行入口"
+    source: 范围守护
+    status: passed
+
+  - item: "不把 partial preview 写入 history/reference/gallery/Canvas project JSON"
+    source: 范围守护
+    status: passed
+
+  - item: "不改变最终图片落库、retry failure、cancel 和通知语义"
+    source: 范围守护
+    status: passed

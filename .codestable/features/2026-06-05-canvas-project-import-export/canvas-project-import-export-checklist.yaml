@@ -1,0 +1,60 @@
+feature: 2026-06-05-canvas-project-import-export
+created: 2026-06-05
+
+steps:
+  - action: "服务契约：在 CanvasProjectService / app API 落 export/import 方法，并保证导入克隆新项目"
+    exit_signal: "service 测试证明导出返回 clone，导入刷新 project id / conversationId，并过滤非法节点连线"
+    status: done
+
+  - action: "Store 编排：增加导出 active project、导入 JSON 并切换 active project 的 action"
+    exit_signal: "store 测试证明导入成功后 activeProject 指向新项目，导入失败保持原状态"
+    status: done
+
+  - action: "Platform helper：增加文本下载 / 读取 helper，覆盖浏览器下载和 FileReader 读取"
+    exit_signal: "platform 测试证明 JSON 文本按文件名下载，FileReader 失败会 reject"
+    status: done
+
+  - action: "Canvas UI 入口：CanvasWorkspace 增加导入 / 导出按钮、隐藏 JSON file input、成功/失败通知"
+    exit_signal: "组件测试证明按钮可见，导出调用下载 helper，导入选择 JSON 后切换项目"
+    status: done
+
+  - action: "验证收尾：跑定向测试、pnpm check、pnpm build 和前端 smoke"
+    exit_signal: "测试、类型检查、构建通过，Canvas toolbar 中导入/导出入口有截图证据"
+    status: done
+
+checks:
+  - item: "CanvasProjectService 支持 exportProject / importProject，并且导入永远创建新 project"
+    source: 名词契约
+    status: passed
+
+  - item: "导入 project id 重新生成，conversationId 绑定当前 active conversation"
+    source: 流程级约束
+    status: passed
+
+  - item: "导入 JSON 复用 nodes/connections/viewport normalize，非法节点和失效连线被过滤"
+    source: 流程级约束
+    status: passed
+
+  - item: "导入 running generate node 后降级为 idle，不恢复旧运行态"
+    source: 验收场景
+    status: passed
+
+  - item: "useCanvasStore 导入成功后切换 activeProject，导入失败保持原状态"
+    source: 验收场景
+    status: passed
+
+  - item: "CanvasWorkspace 导入 / 导出按钮可见，禁用态跟随 active project / conversation / loading"
+    source: 挂载点
+    status: passed
+
+  - item: "导出当前 active Canvas project 会触发 JSON 文本保存或下载"
+    source: 验收场景
+    status: passed
+
+  - item: "非法 JSON 或不支持 schema 导入失败时不改变当前项目"
+    source: 验收场景
+    status: passed
+
+  - item: "不新增 zip 资源包、云同步、批量导入导出、隐藏 conversation 或 history/run 迁移"
+    source: 范围守护
+    status: passed

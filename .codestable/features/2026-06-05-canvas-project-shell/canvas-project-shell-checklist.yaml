@@ -1,0 +1,96 @@
+feature: 2026-06-05-canvas-project-shell
+created: 2026-06-05
+
+steps:
+  - action: "名词骨架：补 Canvas project 类型、Canvas service API 和独立 store 的空实现"
+    exit_signal: "类型检查能识别 CanvasProject、pixaiApi.canvas 和 useCanvasStore"
+    status: done
+
+  - action: "持久化节点：实现 Canvas project list/get/create/update/delete 和默认项目创建"
+    exit_signal: "service/store 测试覆盖首次创建、恢复项目、更新 viewport"
+    status: done
+
+  - action: "页面静态结构：新增 CanvasWorkspace、CanvasViewport、项目标题区和空画布背景"
+    exit_signal: "切到 canvas 后能看到完整 Canvas 页面，不白屏"
+    status: done
+
+  - action: "交互逻辑：接入拖拽平移、滚轮缩放、重置视图"
+    exit_signal: "手工操作能改变视口，UI 显示的缩放值同步变化"
+    status: done
+
+  - action: "状态接入：CanvasWorkspace mount 时加载/创建默认项目，视口变化持久化"
+    exit_signal: "切走、刷新、重进后保留项目和 viewport"
+    status: done
+
+  - action: "验证收尾：补路由 smoke、store/service 测试，跑 pnpm check"
+    exit_signal: "测试与类型检查通过，关键验收场景有证据"
+    status: done
+
+checks:
+  - item: "View 类型包含 canvas，并且 Canvas 作为工作台模式入口存在"
+    source: 名词契约
+    status: passed
+
+  - item: "CanvasProject、CanvasViewport、CanvasProjectSummary、CanvasProjectInput 类型符合 design 第 2.1 节"
+    source: 名词契约
+    status: passed
+
+  - item: "pixaiApi.canvas 暴露 list/get/create/update/delete"
+    source: 名词契约
+    status: passed
+
+  - item: "Canvas 页面首次进入时能幂等创建或恢复默认项目"
+    source: 编排骨架
+    status: passed
+
+  - item: "Canvas viewport 平移、缩放和重置后会持久化"
+    source: 流程级约束
+    status: passed
+
+  - item: "缩放比例被限制在合理范围内，避免不可见或布局失控"
+    source: 流程级约束
+    status: passed
+
+  - item: "本地 Canvas JSON 损坏时不影响 conversations/runs/history，Canvas 可恢复为空项目列表"
+    source: 流程级约束
+    status: passed
+
+  - item: "src/store/app-store.ts 只承载 View 层最小改动，不加入 Canvas project actions"
+    source: 范围守护
+    status: passed
+
+  - item: "不新增图片生成、partial preview、历史、图库或参考图桥入口"
+    source: 范围守护
+    status: passed
+
+  - item: "不渲染文本节点、图片节点、生成节点或连线"
+    source: 范围守护
+    status: passed
+
+  - item: "不修改 CanvasArea 的经典工作台结果网格行为"
+    source: 范围守护
+    status: passed
+
+  - item: "顶部导航新增 Canvas 按钮"
+    source: 挂载点
+    status: passed
+
+  - item: "App 新增 view === 'canvas' 页面渲染分支"
+    source: 挂载点
+    status: passed
+
+  - item: "本地 state key pixai-canvas-projects 存在并只用于 Canvas project 持久化"
+    source: 挂载点
+    status: passed
+
+  - item: "首次启动后点击顶部 Canvas 会显示项目标题和空无限画布"
+    source: 验收场景
+    status: passed
+
+  - item: "重新进入 Canvas 会恢复最近项目标题和 viewport"
+    source: 验收场景
+    status: passed
+
+  - item: "没有 activeConversationId 时进入 Canvas 显示可恢复空状态，不创建无绑定项目"
+    source: 验收场景
+    status: passed

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Canvas history gallery integration smoke</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module">
+      import React from 'react'
+      import { createRoot } from 'react-dom/client'
+      import { GalleryPage } from '/src/components/gallery/GalleryPage.tsx'
+      import { useAppStore } from '/src/store/app-store.ts'
+      import '/src/index.css'
+
+      const canvasOrigin = {
+        kind: 'canvas',
+        canvasProjectId: 'canvas-smoke-project',
+        canvasNodeId: 'node-smoke-generate'
+      }
+      const baseItem = {
+        conversationId: 'conversation-smoke',
+        runId: 'run-smoke',
+        model: 'gpt-image-2',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        requestIndex: 0,
+        durationMs: 1280,
+        dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAANklEQVR4nO3PQQ0AIBDAMMC/5+ONAvZoFSzZnJk9FQAAgH8wWA4AAAAAAAAAAAAAAAAAAAAAAADgJ44AAe2JpvvSAAAAAElFTkSuQmCC',
+        fileSizeBytes: 94,
+        status: 'succeeded',
+        errorMessage: null,
+        errorDetails: null,
+        retryAttempt: 0,
+        favorite: false,
+        generationMode: 'text-to-image',
+        referenceImages: [],
+        createdAt: '2026-06-05T10:00:00.000Z'
+      }
+
+      useAppStore.setState({
+        favoritesOnly: false,
+        query: '画布',
+        history: [
+          {
+            ...baseItem,
+            id: 'history-smoke-classic',
+            prompt: '普通工作台图片'
+          },
+          {
+            ...baseItem,
+            id: 'history-smoke-canvas',
+            prompt: '来源标识图片',
+            origin: canvasOrigin,
+            createdAt: '2026-06-05T10:01:00.000Z'
+          }
+        ],
+        reloadHistory: async () => undefined,
+        setFavoritesOnly: async (favoritesOnly) => useAppStore.setState({ favoritesOnly }),
+        setQuery: (query) => useAppStore.setState({ query }),
+        deleteHistory: async () => undefined,
+        toggleFavorite: async () => undefined,
+        notify: () => undefined
+      })
+
+      createRoot(document.getElementById('root')).render(React.createElement(GalleryPage))
+    </script>
+  </body>
+</html>

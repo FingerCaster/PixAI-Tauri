@@ -3,9 +3,11 @@ import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { MainLayout } from './MainLayout'
 import { useAppStore } from '../../store/app-store'
+import { resetCanvasStoreForTests, useCanvasStore } from '../../store/canvas-store'
 
 describe('MainLayout', () => {
   beforeEach(() => {
+    resetCanvasStoreForTests()
     useAppStore.setState({
       conversations: [
         {
@@ -155,4 +157,113 @@ describe('MainLayout', () => {
     })
     host.remove()
   })
+
+  it('switches to the Canvas workbench mode from the top navigation', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <MainLayout onOpenGlobalSettings={vi.fn()}>
+          <main />
+        </MainLayout>
+      )
+    })
+
+    await act(async () => {
+      findButtonByText('Canvas')?.click()
+    })
+
+    expect(useAppStore.getState().view).toBe('canvas')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('filters hidden canvas conversations out of the workspace sidebar', async () => {
+    useAppStore.setState({
+      conversations: [
+        ...useAppStore.getState().conversations,
+        {
+          ...useAppStore.getState().conversations[0],
+          id: 'canvas-hidden-conversation',
+          title: '隐藏 Canvas 会话'
+        }
+      ]
+    })
+    useCanvasStore.setState({
+      projects: [
+        {
+          id: 'canvas-hidden-project',
+          title: 'Canvas 项目',
+          conversationId: 'canvas-hidden-conversation',
+          updatedAt: '2026-06-05T00:10:00.000Z',
+          nodeCount: 3
+        }
+      ]
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <MainLayout onOpenGlobalSettings={vi.fn()}>
+          <main />
+        </MainLayout>
+      )
+    })
+
+    expect(document.body.textContent).toContain('测试会话')
+    expect(document.body.textContent).not.toContain('隐藏 Canvas 会话')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('shows canvas projects and a canvas-specific create action in canvas mode', async () => {
+    useAppStore.setState({ view: 'canvas' })
+    useCanvasStore.setState({
+      activeProjectId: 'canvas-sidebar-project',
+      projects: [
+        {
+          id: 'canvas-sidebar-project',
+          title: '分镜画布',
+          conversationId: 'canvas-hidden-conversation',
+          updatedAt: '2026-06-05T00:11:00.000Z',
+          nodeCount: 5
+        }
+      ]
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <MainLayout onOpenGlobalSettings={vi.fn()}>
+          <main />
+        </MainLayout>
+      )
+    })
+
+    expect(document.body.textContent).toContain('Canvas 项目')
+    expect(document.body.textContent).toContain('分镜画布')
+    expect(document.body.textContent).toContain('新建 Canvas 项目')
+    expect(document.body.textContent).not.toContain('新建会话')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })
+
+function findButtonByText(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text))
+}

@@ -1,0 +1,60 @@
+feature: 2026-06-05-canvas-generate-node
+created: 2026-06-05
+
+steps:
+  - action: "名词与持久化：扩展 shared types、CanvasProjectService normalize 和 Canvas store actions"
+    exit_signal: "generate node/result connection 可保存恢复，store 可更新 running/succeeded/failed 状态并创建结果 image node"
+    status: done
+
+  - action: "生成输入解析与 app-store 编排：实现 generateCanvasNode，复用现有生成状态、reference import、partial preview 和 history/runs refresh"
+    exit_signal: "单测覆盖 prompt/reference 解析、缺 prompt、缺 binding 导入、成功/失败状态"
+    status: done
+
+  - action: "Canvas UI：toolbar 添加生成节点，generate node 渲染 prompt、运行按钮、状态、partial preview 和错误"
+    exit_signal: "组件测试覆盖添加生成节点、点击运行、partial preview 展示"
+    status: done
+
+  - action: "验证收尾：补 service/store/component 测试，跑定向测试、pnpm check、pnpm build 和浏览器 smoke"
+    exit_signal: "测试、类型检查、构建通过，Canvas 生成节点 smoke 有截图证据"
+    status: done
+
+checks:
+  - item: "CanvasNodeType 支持 generate，CanvasConnectionKind 支持 result"
+    source: 名词契约
+    status: passed
+
+  - item: "CanvasProjectService 可 normalize / persist generate node 与 result connection"
+    source: 名词契约
+    status: passed
+
+  - item: "useCanvasStore 可添加 generate node、更新运行态、回写图片 reference binding、创建结果 image node"
+    source: 流程级约束
+    status: passed
+
+  - item: "generateCanvasNode 只解析指向当前 generate node 的 prompt/reference 连接"
+    source: 流程级约束
+    status: passed
+
+  - item: "Canvas 图片节点缺 referenceImageId 时先导入当前 project conversation 参考图并回写 binding"
+    source: 流程级约束
+    status: passed
+
+  - item: "生成请求复用 conversation 参数但 n 固定为 1，referenceImageIds 只来自 Canvas 解析"
+    source: 验收场景
+    status: passed
+
+  - item: "partial preview 可在 generate node 内展示，且不写入 Canvas project"
+    source: 验收场景
+    status: passed
+
+  - item: "生成成功后创建结果 image node 和 result connection"
+    source: 验收场景
+    status: passed
+
+  - item: "缺 prompt、preflight/生成失败不创建结果 image node，并写 failed 状态"
+    source: 验收场景
+    status: passed
+
+  - item: "不新增 DAG 自动调度、Canvas origin schema、节点级取消/重试 UI"
+    source: 范围守护
+    status: passed

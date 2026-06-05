@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { formatDuration } from '../../lib/time'
 import { shouldShowRetryAttemptChip } from '../../generation-retry-display'
-import type { GenerationRunRetryFailure, ImageHistoryItem } from '../../shared/types'
+import type { GenerationRunRetryFailure, ImageHistoryItem, PartialImagePreview } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
 
@@ -14,7 +14,8 @@ export function GeneratingTile({
   generationElapsedMs,
   retryAttempt = 0,
   maxRetries = 0,
-  retryFailure = null
+  retryFailure = null,
+  preview
 }: {
   runId?: string
   requestIndex?: number
@@ -22,6 +23,7 @@ export function GeneratingTile({
   retryAttempt?: number
   maxRetries?: number
   retryFailure?: GenerationRunRetryFailure | null
+  preview?: PartialImagePreview
 }) {
   const { cancelGeneration } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
@@ -74,10 +76,18 @@ export function GeneratingTile({
         }
       }}
     >
-      <div className="image-frame generating-frame grid aspect-square w-full place-items-center bg-muted/50">
-        <div className="generating-center grid justify-items-center gap-3 text-center">
-          <Loader2 className="spin animate-spin text-primary" size={28} />
-          <span className="generating-label text-sm font-medium">生成中</span>
+      <div className="image-frame generating-frame relative grid aspect-square w-full place-items-center overflow-hidden bg-muted/50">
+        {preview ? (
+          <img
+            className="h-full w-full object-cover"
+            src={preview.dataUrl}
+            alt="生成中的流式预览"
+            draggable={false}
+          />
+        ) : null}
+        <div className={`generating-center grid justify-items-center gap-3 text-center${preview ? ' absolute inset-x-3 bottom-3 rounded-lg border border-border/70 bg-background/85 p-3 shadow-sm backdrop-blur' : ''}`}>
+          <Loader2 className="spin animate-spin text-primary" size={preview ? 20 : 28} />
+          <span className="generating-label text-sm font-medium">{preview ? '生成中 · 流式预览' : '生成中'}</span>
           {showRetryAttemptChip ? (
             <Badge variant="outline" className="retry-chip">{`重试第 ${retryAttempt} 次`}</Badge>
           ) : retryFailure ? (

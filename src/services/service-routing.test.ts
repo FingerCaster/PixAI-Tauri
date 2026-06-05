@@ -69,6 +69,62 @@ describe('service routing', () => {
     })
   })
 
+  it('emits partial previews with service-level run and request metadata', async () => {
+    const providers = new ProviderSettingsStore()
+    const settings = await providers.upsertProfile({
+      name: 'Image provider',
+      baseUrl: 'http://127.0.0.1:37123',
+      enabledUsages: ['image'],
+      apiKey: 'sk-123456789'
+    })
+    const imageProfile = settings.profiles.at(-1)
+    await providers.update({ selectedImageProfileId: imageProfile?.id })
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: image_generation.partial_image',
+        `data: ${JSON.stringify({ type: 'image_generation.partial_image', partial_image_b64: 'p'.repeat(120) })}`,
+        '',
+        'event: image_generation.completed',
+        `data: ${JSON.stringify({ type: 'image_generation.completed', b64_json: 'f'.repeat(120) })}`,
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    const database = new AppDatabase()
+    const conversation = await database.createConversation()
+    const imageService = new ImageService(database, providers)
+    const previews: Array<{ runId: string; requestIndex: number; partialImageIndex?: number; dataUrl: string }> = []
+
+    const result = await imageService.generate({
+      conversationId: conversation.id,
+      prompt: 'a luminous city',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'high',
+      n: 1,
+      stream: true,
+      partialImages: 1
+    }, {
+      onPartialImage: (preview) => {
+        previews.push(preview)
+      }
+    })
+
+    expect(previews).toEqual([
+      expect.objectContaining({
+        runId: result.run.id,
+        requestIndex: 0,
+        partialImageIndex: 0,
+        dataUrl: `data:image/png;base64,${'p'.repeat(120)}`
+      })
+    ])
+    expect(result.items[0]).toMatchObject({
+      status: 'succeeded',
+      dataUrl: `data:image/png;base64,${'f'.repeat(120)}`
+    })
+  })
+
   it('honors auto-save history and failure-detail conversation toggles', async () => {
     const providers = new ProviderSettingsStore()
     const settings = await providers.upsertProfile({

@@ -3,8 +3,9 @@ import { storeDataUrlFile } from '../lib/platform'
 import { AppDatabase } from './app-database'
 import { AppUpdateService } from './app-update'
 import { AppPreferencesStore } from './app-preferences'
+import { CanvasProjectService } from './canvas-projects'
 import { getPixaiCodexSkillStatus, installPixaiCodexSkill } from './codex-skill-installer'
-import { ImageService } from './image-service'
+import { ImageService, type ImageGenerationOptions } from './image-service'
 import { PromptService } from './prompt-service'
 import { PromptTemplateStore } from './prompt-templates'
 import { ProviderSettingsStore } from './provider-settings'
@@ -19,6 +20,9 @@ import type {
   ProviderProfileInput,
   ProviderSettingsUpdate,
   AppPreferencesUpdate,
+  CanvasProject,
+  CanvasProjectInput,
+  CanvasProjectSummary,
   ReferenceImageFilePayload
 } from '../shared/types'
 
@@ -26,14 +30,34 @@ type ReferenceImageImportPayload = ReferenceImageFilePayload & { storagePath?: s
 
 export type PixaiApi = ReturnType<typeof createPixaiApi>
 
+export type CanvasProjectApi = {
+  list(): Promise<CanvasProjectSummary[]>
+  get(id: string): Promise<CanvasProject | null>
+  exportProject(id: string): Promise<CanvasProject>
+  create(input: { conversationId: string; title?: string }): Promise<CanvasProject>
+  importProject(input: unknown, conversationId: string): Promise<CanvasProject>
+  update(id: string, input: CanvasProjectInput): Promise<CanvasProject>
+  delete(id: string): Promise<void>
+}
+
 export function createPixaiApi() {
   const database = new AppDatabase()
   const providers = new ProviderSettingsStore()
   const preferences = new AppPreferencesStore()
   const images = new ImageService(database, providers)
+  const canvasProjects = new CanvasProjectService()
   const prompts = new PromptService(providers)
   const templates = new PromptTemplateStore()
   const appUpdate = new AppUpdateService()
+  const canvasApi: CanvasProjectApi = {
+    list: () => canvasProjects.list(),
+    get: (id: string) => canvasProjects.get(id),
+    exportProject: (id: string) => canvasProjects.exportProject(id),
+    create: (input: { conversationId: string; title?: string }) => canvasProjects.create(input),
+    importProject: (input: unknown, conversationId: string) => canvasProjects.importProject(input, conversationId),
+    update: (id: string, input: CanvasProjectInput) => canvasProjects.update(id, input),
+    delete: (id: string) => canvasProjects.delete(id)
+  }
 
   return {
     settings: {
@@ -57,8 +81,9 @@ export function createPixaiApi() {
       delete: (id: string) => database.deleteConversation(id),
       runs: (id: string) => database.listRuns(id)
     },
+    canvas: canvasApi,
     image: {
-      generate: (input: GenerateImageInput) => images.generate(input),
+      generate: (input: GenerateImageInput, options?: ImageGenerationOptions) => images.generate(input, options),
       cancel: (runId: string, requestIndex?: number) => images.cancel(runId, requestIndex)
     },
     prompt: {

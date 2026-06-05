@@ -1,13 +1,15 @@
-import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent } from 'react'
+import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent, FormEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
+import { Image, Link2, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { confirmDestructiveAction } from '../../lib/confirm'
-import { imageSourceForDisplay, imageSourceForDisplaySync, isTauriRuntime, readLocalImageFile } from '../../lib/platform'
+import { imageSourceForDisplay, imageSourceForDisplaySync, isTauriRuntime, readLocalImageFile, readRemoteImageUrl } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation, ReferenceImage } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
@@ -34,6 +36,10 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   const [draftPrompt, setDraftPrompt] = useState(conversation.draftPrompt)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [previewReference, setPreviewReference] = useState<ReferenceImage | null>(null)
+  const [remoteImageDialogOpen, setRemoteImageDialogOpen] = useState(false)
+  const [remoteImageUrl, setRemoteImageUrl] = useState('')
+  const [remoteImageError, setRemoteImageError] = useState<string | null>(null)
+  const [remoteImageImporting, setRemoteImageImporting] = useState(false)
   const composingPromptRef = useRef(false)
   const draftPromptRef = useRef(conversation.draftPrompt)
   const persistedDraftPromptRef = useRef(conversation.draftPrompt)
@@ -125,6 +131,15 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     void importReferenceFiles(Array.from(files))
   }
 
+  function onRemoteImageDialogOpenChange(open: boolean): void {
+    if (remoteImageImporting) return
+    setRemoteImageDialogOpen(open)
+    if (!open) {
+      setRemoteImageError(null)
+      setRemoteImageUrl('')
+    }
+  }
+
   function clearPromptSaveTimer(): void {
     if (promptSaveTimerRef.current == null) return
     window.clearTimeout(promptSaveTimerRef.current)
@@ -186,6 +201,29 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   async function onRemoveReferenceImage(referenceId: string): Promise<void> {
     if (!(await confirmDestructiveAction('确认移除这张参考图？'))) return
     await removeReferenceImage(referenceId)
+  }
+
+  async function onRemoteImageSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
+    event.preventDefault()
+    const url = remoteImageUrl.trim()
+    if (!url) {
+      setRemoteImageError('请输入图片链接。')
+      return
+    }
+    setRemoteImageImporting(true)
+    setRemoteImageError(null)
+    try {
+      const payload = await readRemoteImageUrl(url)
+      await importReferencePayloads([payload])
+      setRemoteImageUrl('')
+      setRemoteImageDialogOpen(false)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '图片链接导入失败。'
+      setRemoteImageError(message)
+      notify(message)
+    } finally {
+      setRemoteImageImporting(false)
+    }
   }
 
   const onDrop = (event: DragEvent<HTMLLabelElement>) => {
@@ -282,6 +320,9 @@ export function Composer({ conversation, generating }: { conversation: Conversat
               onChange={(event: ChangeEvent<HTMLInputElement>) => onFiles(event.target.files)}
             />
           </label>
+          <Button className="reference-url-button" variant="ghost" size="icon-sm" type="button" onClick={() => setRemoteImageDialogOpen(true)} title="通过链接添加参考图" aria-label="通过链接添加参考图">
+            <Link2 size={16} />
+          </Button>
           <div className="hint min-w-0 flex-1 truncate text-xs text-muted-foreground">
             {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
           </div>
@@ -313,6 +354,45 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           onClose={() => setPreviewReference(null)}
         />
       ) : null}
+      <Dialog open={remoteImageDialogOpen} onOpenChange={onRemoteImageDialogOpenChange}>
+        <DialogContent className="reference-url-dialog">
+          <form className="grid gap-4" onSubmit={(event) => void onRemoteImageSubmit(event)}>
+            <DialogHeader>
+              <DialogTitle>通过链接添加参考图</DialogTitle>
+              <DialogDescription className="sr-only">
+                支持 HTTP/HTTPS 图片链接，导入后按现有参考图限制处理。
+              </DialogDescription>
+            </DialogHeader>
+            <div className="grid gap-2">
+              <Label htmlFor="reference-url-input">图片链接</Label>
+              <Input
+                id="reference-url-input"
+                className="reference-url-input"
+                type="text"
+                inputMode="url"
+                value={remoteImageUrl}
+                placeholder="https://example.com/image.png"
+                disabled={remoteImageImporting}
+                aria-invalid={Boolean(remoteImageError)}
+                onChange={(event) => {
+                  setRemoteImageUrl(event.target.value)
+                  if (remoteImageError) setRemoteImageError(null)
+                }}
+              />
+              {remoteImageError ? <p className="text-xs text-destructive" role="alert">{remoteImageError}</p> : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" type="button" disabled={remoteImageImporting} onClick={() => onRemoteImageDialogOpenChange(false)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={remoteImageImporting || !remoteImageUrl.trim()}>
+                {remoteImageImporting ? <Loader2 className="spin animate-spin" /> : <Link2 />}
+                {remoteImageImporting ? '导入中' : '导入参考图'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

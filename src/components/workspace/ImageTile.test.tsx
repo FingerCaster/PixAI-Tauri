@@ -35,13 +35,15 @@ describe('ImageTile', () => {
   const originalDeleteHistory = useAppStore.getState().deleteHistory
   const originalRetryHistory = useAppStore.getState().retryHistory
   const originalAddHistoryAsReference = useAppStore.getState().addHistoryAsReference
+  const originalAddHistoryToCanvas = useAppStore.getState().addHistoryToCanvas
 
   beforeEach(() => {
     vi.restoreAllMocks()
     useAppStore.setState({
       deleteHistory: originalDeleteHistory,
       retryHistory: originalRetryHistory,
-      addHistoryAsReference: originalAddHistoryAsReference
+      addHistoryAsReference: originalAddHistoryAsReference,
+      addHistoryToCanvas: originalAddHistoryToCanvas
     })
   })
 
@@ -90,6 +92,55 @@ describe('ImageTile', () => {
             body: {
               model: 'gpt-5.4-mini',
               tools: [{ type: 'image_generation', action: 'edit', model: 'gpt-image-2' }]
+            }
+          },
+          createdAt: '2026-05-29T12:00:00.000Z'
+        }
+      })} />)
+    })
+    return { host, root }
+  }
+
+  async function renderFailedTileWithCallLog() {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    await act(async () => {
+      root.render(<ImageTile item={succeededItem({
+        id: 'history-failed-call-log-test',
+        status: 'failed',
+        errorMessage: 'Upstream request failed（upstream_error）',
+        errorDetails: JSON.stringify({
+          stage: 'http',
+          details: {
+            endpoint: 'https://api.openai.com/v1/responses',
+            responseError: {
+              code: 'upstream_error',
+              message: 'Upstream request failed'
+            }
+          }
+        }),
+        dataUrl: '',
+        fileSizeBytes: 0,
+        callLog: {
+          provider: {
+            id: 'profile-1',
+            name: 'OpenAI',
+            type: 'openai-compatible',
+            baseUrl: 'https://api.openai.com',
+            imageGenerationEndpoint: 'responses-api'
+          },
+          endpoint: 'https://api.openai.com/v1/responses',
+          method: 'POST',
+          transport: 'streaming-json',
+          request: {
+            headers: {
+              Authorization: 'Bearer ***',
+              'Content-Type': 'application/json'
+            },
+            body: {
+              model: 'gpt-5.4-mini',
+              tools: [{ type: 'image_generation', action: 'generate', model: 'gpt-image-2' }]
             }
           },
           createdAt: '2026-05-29T12:00:00.000Z'
@@ -149,6 +200,58 @@ describe('ImageTile', () => {
       root.unmount()
     })
     host.remove()
+  })
+
+  it('opens failed image error details and call log together', async () => {
+    const { host, root } = await renderFailedTileWithCallLog()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="查看错误与调用日志"]')?.click()
+    })
+
+    expect(document.querySelector('[aria-label="错误与调用日志"]')).not.toBeNull()
+    expect(document.body.textContent).toContain('错误日志')
+    expect(document.body.textContent).toContain('调用日志')
+    expect(document.body.textContent).toContain('Upstream request failed')
+    expect(document.body.textContent).toContain('https://api.openai.com/v1/responses')
+    expect(document.body.textContent).toContain('Bearer ***')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('shows a Canvas origin badge on successful and failed image records', async () => {
+    const canvasOrigin = {
+      kind: 'canvas' as const,
+      canvasProjectId: 'canvas-badge-test',
+      canvasNodeId: 'node-badge-test'
+    }
+    const { host, root } = await renderTileForItem(succeededItem({ origin: canvasOrigin }))
+
+    expect(document.body.textContent).toContain('Canvas')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+
+    const failed = await renderTileForItem(succeededItem({
+      id: 'history-failed-canvas-badge-test',
+      status: 'failed',
+      errorMessage: '上游接口失败',
+      dataUrl: '',
+      fileSizeBytes: 0,
+      origin: canvasOrigin
+    }))
+
+    expect(document.body.textContent).toContain('Canvas')
+
+    await act(async () => {
+      failed.root.unmount()
+    })
+    failed.host.remove()
   })
 
   it('asks before deleting a generated image', async () => {
@@ -227,4 +330,31 @@ describe('ImageTile', () => {
     })
     host.remove()
   })
+
+  it('adds a successful image to Canvas from the more menu', async () => {
+    const addHistoryToCanvas = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ addHistoryToCanvas })
+    const { host, root } = await renderTile()
+
+    await act(async () => {
+      openDropdownTrigger(document.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]'))
+    })
+    await act(async () => {
+      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent?.includes('加入 Canvas'))?.click()
+    })
+
+    expect(addHistoryToCanvas).toHaveBeenCalledWith('history-preview-test')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })
+
+function openDropdownTrigger(trigger: HTMLElement | null): void {
+  if (!trigger) return
+  trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
+  trigger.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, button: 0 }))
+  trigger.click()
+}

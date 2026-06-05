@@ -1,12 +1,12 @@
 ---
 doc_type: requirement
 slug: reference-image-input
-pitch: 把图片直接贴进或拖进输入区，就能作为参考图继续创作。
+pitch: 把图片直接贴进、拖进或通过链接导入，就能作为参考图继续创作。
 status: current
-last_reviewed: 2026-05-29
+last_reviewed: 2026-06-05
 implemented_by:
   - ui-shadcn-workbench
-tags: [workspace, reference-image, input]
+tags: [workspace, reference-image, input, url-import]
 ---
 
 # 在输入区直接加入参考图
@@ -16,6 +16,7 @@ tags: [workspace, reference-image, input]
 - 作为正在写提示词的创作者，我希望把截图或素材直接粘贴到输入区，而不是先找上传按钮再选择文件。
 - 作为从文件夹整理素材的人，我希望把图片拖到提示词输入区就能加入参考，而不是必须瞄准很小的参考图按钮。
 - 作为已经有参考图的用户，我希望继续粘贴或拖入更多图片时它们追加到当前会话，而不是打断我正在写的提示词。
+- 作为收集在线素材的创作者，我希望能显式输入 HTTP/HTTPS 图片链接，把远程图片下载后追加为当前会话参考图。
 
 ## 为什么需要
 
@@ -23,11 +24,11 @@ tags: [workspace, reference-image, input]
 
 ## 怎么解决
 
-输入区既接收文字，也能识别用户贴入或拖入的图片。文字照常留在提示词里，图片会进入当前会话的参考图列表，并立刻出现在参考图缩略条中。
+输入区既接收文字，也能识别用户贴入或拖入的图片。文字照常留在提示词里，图片会进入当前会话的参考图列表，并立刻出现在参考图缩略条中。参考图工具区还提供显式链接导入入口，用户输入 HTTP/HTTPS 图片地址后，应用先把远程响应下载为本地参考图载荷，再进入同一导入链路。
 
 ## 边界
 
-- 不负责从网页地址下载远程图片。
+- 只通过显式链接导入入口下载 HTTP/HTTPS 图片；不从 prompt 文本、网页内容或 HTML 片段自动提取远程图片。
 - 不把普通文字、HTML 片段或非图片文件转成参考图。
 - 不改变已有参考图数量、格式和大小限制。
 
@@ -35,3 +36,4 @@ tags: [workspace, reference-image, input]
 
 - 2026-05-29：实现提示词输入区粘贴 / 拖入本地图片并追加到当前会话参考图。
 - 2026-05-29：补齐真实 Tauri 客户端的原生文件拖放路径，避免 Windows WebView 拿不到 HTML5 `DataTransfer.files` 时无法识别拖入图片。
+- 2026-06-05：新增参考图工具区 HTTP/HTTPS 图片链接导入；下载结果继续走既有参考图数量、格式和 20MB 单图限制。

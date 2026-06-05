@@ -3,6 +3,7 @@ import { listen } from '@tauri-apps/api/event'
 import { Toaster } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { GalleryPage } from './components/gallery/GalleryPage'
+import { CanvasWorkspace } from './components/canvas/CanvasWorkspace'
 import { MainLayout } from './components/layout/MainLayout'
 import { PromptLibraryPage } from './components/prompts/PromptLibraryPage'
 import { GlobalSettingsModal, type GlobalSettingsTab } from './components/settings/global/GlobalSettingsModal'
@@ -109,6 +110,7 @@ function App() {
               <div className="grid h-full place-items-center text-sm text-muted-foreground">正在加载 PixAI 工作台...</div>
             ) : null}
             {!loading && view === 'workspace' ? <Workspace /> : null}
+            {!loading && view === 'canvas' ? <CanvasWorkspace /> : null}
             {!loading && view === 'gallery' ? <GalleryPage /> : null}
             {!loading && view === 'prompts' ? <PromptLibraryPage /> : null}
           </main>

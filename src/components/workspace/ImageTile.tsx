@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Copy, Download, Edit3, EllipsisVertical, Heart, ImageDown, RotateCcw, ScrollText, Trash2 } from 'lucide-react'
+import { Copy, Download, Edit3, EllipsisVertical, Heart, ImageDown, ImagePlus, RotateCcw, ScrollText, Trash2 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { cn } from '@/lib/utils'
 import type { ImageHistoryItem } from '../../shared/types'
+import { isCanvasGenerationOrigin } from '../../shared/generation-origin'
 import { confirmDestructiveAction } from '../../lib/confirm'
 import { formatDuration } from '../../lib/time'
 import { DownloadCanceledError, downloadImageSource, imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
@@ -20,12 +21,15 @@ import { ImageCallLogModal } from './ImageCallLogModal'
 import { ImagePreviewModal } from './ImagePreviewModal'
 
 export function ImageTile({ item }: { item: ImageHistoryItem }) {
-  const { addHistoryAsReference, deleteHistory, notify, retryHistory, toggleFavorite } = useAppStore()
+  const { addHistoryAsReference, addHistoryToCanvas, deleteHistory, notify, retryHistory, toggleFavorite } = useAppStore()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
   const [callLogOpen, setCallLogOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [imageSource, setImageSource] = useState<string | null>(() => imageSourceForDisplaySync(item.dataUrl, item.storagePath))
   const showFailedRetryChip = shouldShowFailedImageRetryChip(item.retryAttempt)
+  const canvasOriginBadge = isCanvasGenerationOrigin(item.origin)
+    ? <Badge variant="secondary" className="canvas-origin-badge justify-self-start">Canvas</Badge>
+    : null
   useEffect(() => {
     let canceled = false
     const syncSource = imageSourceForDisplaySync(item.dataUrl, item.storagePath)
@@ -86,12 +90,13 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
   }
 
   if (item.status === 'failed') {
+    const failedDetailsTitle = item.callLog ? '点击查看错误与调用日志' : '点击查看错误详情'
     return (
       <article
         className="image-tile failed error-tile group flex min-h-[300px] flex-col overflow-hidden rounded-2xl border border-destructive/25 bg-destructive/5"
         role="button"
         tabIndex={0}
-        title="点击查看错误详情"
+        title={failedDetailsTitle}
         onClick={() => setErrorDetailsOpen(true)}
         onKeyDown={(event) => {
           if (event.key !== 'Enter' && event.key !== ' ') return
@@ -101,9 +106,10 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
       >
         <div className="image-frame fail-content grid flex-1 place-items-center p-4 text-center">
           <div className="grid gap-2">
+            {canvasOriginBadge}
             <strong className="text-sm text-destructive">{item.errorMessage || '生成失败'}</strong>
             {showFailedRetryChip ? <Badge variant="destructive" className="retry-chip justify-self-center">{`重试第 ${item.retryAttempt} 次`}</Badge> : null}
-            <span className="text-xs text-muted-foreground">点击查看错误详情</span>
+            <span className="text-xs text-muted-foreground">{failedDetailsTitle}</span>
           </div>
         </div>
         <div className="tile-actions flex justify-end gap-1 border-t border-destructive/15 p-2">
@@ -126,9 +132,9 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
               type="button"
               onClick={(event) => {
                 event.stopPropagation()
-                setCallLogOpen(true)
+                setErrorDetailsOpen(true)
               }}
-              title="查看调用日志"
+              title="查看错误与调用日志"
             >
               <ScrollText size={15} />
             </Button>
@@ -147,7 +153,6 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
           </Button>
         </div>
         {errorDetailsOpen ? <ErrorDetailsModal item={item} onClose={() => setErrorDetailsOpen(false)} /> : null}
-        {callLogOpen ? <ImageCallLogModal item={item} onClose={() => setCallLogOpen(false)} /> : null}
       </article>
     )
   }
@@ -159,10 +164,13 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
       </button>
       <div className="tile-body grid gap-1 p-3">
         <strong className="line-clamp-2 text-sm leading-5">{item.prompt}</strong>
-        <span className="truncate text-xs text-muted-foreground">
-          {item.model} · {item.size || item.ratio}
-          {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
-        </span>
+        <div className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
+          <span className="min-w-0 truncate">
+            {item.model} · {item.size || item.ratio}
+            {item.durationMs != null ? ` · ${formatDuration(item.durationMs)}` : ''}
+          </span>
+          {canvasOriginBadge}
+        </div>
       </div>
       <div className="tile-actions mt-auto grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-t border-border p-2">
         <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -183,6 +191,7 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
             <ImageTileMoreMenu
               onCopyImage={() => void copyImage()}
               onAddAsReference={() => void addHistoryAsReference(item.id)}
+              onAddToCanvas={() => void addHistoryToCanvas(item.id)}
             />
           ) : null}
         </div>
@@ -203,10 +212,12 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
 
 function ImageTileMoreMenu({
   onCopyImage,
-  onAddAsReference
+  onAddAsReference,
+  onAddToCanvas
 }: {
   onCopyImage: () => void
   onAddAsReference: () => void
+  onAddToCanvas: () => void
 }) {
   return (
     <DropdownMenu>
@@ -221,6 +232,10 @@ function ImageTileMoreMenu({
         <DropdownMenuItem onSelect={() => onAddAsReference()}>
           <Edit3 size={15} />
           作为参考图编辑
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => onAddToCanvas()}>
+          <ImagePlus size={15} />
+          加入 Canvas
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

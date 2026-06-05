@@ -6,7 +6,7 @@ import * as platformModule from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { GalleryPage } from './GalleryPage'
 
-function historyItem(id: string): ImageHistoryItem {
+function historyItem(id: string, overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem {
   return {
     id,
     conversationId: 'gallery-confirm-conversation',
@@ -27,7 +27,8 @@ function historyItem(id: string): ImageHistoryItem {
     favorite: false,
     generationMode: 'text-to-image',
     referenceImages: [],
-    createdAt: '2026-06-02T10:00:00.000Z'
+    createdAt: '2026-06-02T10:00:00.000Z',
+    ...overrides
   }
 }
 
@@ -114,6 +115,33 @@ describe('GalleryPage destructive actions', () => {
       expect.objectContaining({ id: 'history-gallery-2' })
     ])
     expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('filters Canvas-origin history by source keywords', async () => {
+    useAppStore.setState({
+      query: '画布',
+      history: [
+        historyItem('history-gallery-classic', { prompt: '普通工作台图片' }),
+        historyItem('history-gallery-canvas', {
+          prompt: '来源标识图片',
+          origin: {
+            kind: 'canvas',
+            canvasProjectId: 'canvas-gallery-filter',
+            canvasNodeId: 'node-gallery-filter'
+          }
+        })
+      ]
+    })
+    const { host, root } = await renderGallery()
+
+    expect(document.body.textContent).toContain('来源标识图片')
+    expect(document.body.textContent).not.toContain('普通工作台图片')
+    expect(document.body.textContent).toContain('Canvas')
 
     await act(async () => {
       root.unmount()

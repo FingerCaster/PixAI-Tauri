@@ -1,0 +1,56 @@
+feature: 2026-06-05-canvas-history-gallery-integration
+created: 2026-06-05
+
+steps:
+  - action: "来源契约与持久化：落 GenerationOrigin 类型，ImageService / AppDatabase 保存并规范化 run/history origin"
+    exit_signal: "服务测试证明 Canvas origin 可落到 run、成功 history、失败 history，旧/非法 origin 兼容"
+    status: done
+
+  - action: "Canvas 生成写来源：generateCanvasNode 在生成请求中传 Canvas origin"
+    exit_signal: "app-store 测试断言 pixaiApi.image.generate 收到 Canvas origin"
+    status: done
+
+  - action: "Gallery/ImageTile 可见与可搜索：ImageTile 加 Canvas badge，Gallery 与数据库 query 支持来源关键词"
+    exit_signal: "组件测试覆盖 Canvas badge、Gallery 搜索 Canvas 来源、加入 Canvas 菜单仍可用"
+    status: done
+
+  - action: "验证收尾：跑定向测试、pnpm check、pnpm build 和前端 smoke"
+    exit_signal: "测试、类型检查、构建通过，Gallery 中 Canvas 来源 badge 有截图证据"
+    status: done
+
+checks:
+  - item: "GenerateImageInput、GenerationRun、ImageHistoryItem 支持可选 GenerationOrigin"
+    source: 名词契约
+    status: passed
+
+  - item: "ImageService 在 run、成功 history、失败 history 中透传合法 origin"
+    source: 流程级约束
+    status: passed
+
+  - item: "AppDatabase 对旧数据缺 origin 和非法 canvas origin 做兼容规范化"
+    source: 流程级约束
+    status: passed
+
+  - item: "generateCanvasNode 传入 { kind: 'canvas', canvasProjectId, canvasNodeId }"
+    source: 验收场景
+    status: passed
+
+  - item: "Gallery / ImageTile 可显示 Canvas 来源 badge，成功/失败卡片均可见"
+    source: 验收场景
+    status: passed
+
+  - item: "Gallery 搜索 canvas / 画布 可命中 Canvas-origin history item"
+    source: 验收场景
+    status: passed
+
+  - item: "成功图更多菜单的加入 Canvas 入口仍调用 addHistoryToCanvas"
+    source: 挂载点
+    status: passed
+
+  - item: "经典工作台生成和 retryHistory 不主动继承 Canvas origin"
+    source: 范围守护
+    status: passed
+
+  - item: "不新增 Gallery 跳回 Canvas 节点、Canvas 专用 history 表或项目导入导出"
+    source: 范围守护
+    status: passed
