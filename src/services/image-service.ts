@@ -2,7 +2,7 @@ import { getAdapter } from '../adapters/registry'
 import { ProviderHttpError } from '../adapters/openai-compatible'
 import { createErrorDetails, serializeError } from '../lib/errors'
 import { createId } from '../lib/ids'
-import { PlatformHttpProxyError, readLocalImageDataUrl, storeDataUrlFile } from '../lib/platform'
+import { PlatformHttpProxyError, readLocalImageDataUrl, readRemoteImageUrl, storeDataUrlFile } from '../lib/platform'
 import { elapsedMs, nowIso } from '../lib/time'
 import { getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds, normalizeRetryCount } from '../shared/image-options'
 import type { GenerateImageInput, GenerateImageResult, GenerationMode, GenerationRun, ImageApiData, ImageGenerationCallLog, ImageHistoryItem, ReferenceImage } from '../shared/types'
@@ -84,8 +84,7 @@ export class ImageService {
             items.push(generated.item)
             return
           }
-          succeededCount += 1
-          const dataUrl = imageDataToDataUrl(generated.image, input.outputFormat || 'png')
+          const dataUrl = await resolveGeneratedImageDataUrl(generated.image, input.outputFormat || 'png')
           const stored = dataUrl
             ? await persistGeneratedImage(createId('image'), dataUrl, input.outputFormat || 'png')
             : null
@@ -115,6 +114,7 @@ export class ImageService {
               createdAt: nowIso()
             })
           )
+          succeededCount += 1
         } catch (error) {
           if (controller.signal.aborted) {
             canceledCount += 1
@@ -286,8 +286,16 @@ async function persistGeneratedImage(id: string, dataUrl: string, outputFormat: 
 
 function imageDataToDataUrl(image: ImageApiData, outputFormat: string): string | null {
   if (image.b64_json) return `data:image/${outputFormat === 'jpeg' ? 'jpeg' : outputFormat};base64,${image.b64_json}`
-  if (image.url) return image.url
+  if (image.url?.startsWith('data:')) return image.url
   return null
+}
+
+async function resolveGeneratedImageDataUrl(image: ImageApiData, outputFormat: string): Promise<string | null> {
+  const directDataUrl = imageDataToDataUrl(image, outputFormat)
+  if (directDataUrl) return directDataUrl
+  if (!image.url) return null
+  const payload = await readRemoteImageUrl(image.url)
+  return payload.dataUrl
 }
 
 function estimateImageBytes(image: ImageApiData): number | null {

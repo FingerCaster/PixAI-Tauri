@@ -45,6 +45,7 @@ export type PlatformStreamResponse = {
 }
 
 type LocalImageReadResult = ReferenceImageFilePayload
+type RemoteImageReadResult = ReferenceImageFilePayload
 
 type StoredDataUrlFileResult = {
   path: string
@@ -74,6 +75,7 @@ const memorySecrets = new Map<string, string>()
 const imageSourceCache = new Map<string, string>()
 let mockNotificationPermission: NotificationPermission | 'unsupported' | null = null
 const notificationLog: Array<{ title: string; body?: string }> = []
+const MAX_REMOTE_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024
 
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -404,6 +406,14 @@ export async function readLocalImageFile(path: string): Promise<ReferenceImageFi
   return result
 }
 
+export async function readRemoteImageUrl(url: string): Promise<ReferenceImageFilePayload> {
+  const normalizedUrl = normalizeRemoteImageUrl(url)
+  if (isTauriRuntime()) {
+    return invoke<RemoteImageReadResult>('read_remote_image_url', { url: normalizedUrl })
+  }
+  return readRemoteImageUrlInBrowser(normalizedUrl)
+}
+
 export async function readLocalImageDataUrl(path: string): Promise<string> {
   const payload = await readLocalImageFile(path)
   return payload.dataUrl
@@ -615,6 +625,153 @@ async function resolveDownloadBlob(source: string | null | undefined, storagePat
 
   if (source) return dataUrlToBlob(source)
   return null
+}
+
+async function readRemoteImageUrlInBrowser(url: string): Promise<ReferenceImageFilePayload> {
+  let response: Response
+  try {
+    response = await fetch(url, { headers: { Accept: 'image/png,image/jpeg,image/webp' } })
+  } catch (error) {
+    throw new Error(error instanceof Error ? `图片链接下载失败：${error.message}` : '图片链接下载失败。')
+  }
+  if (!response.ok) throw new Error(`图片链接下载失败：HTTP ${response.status}。`)
+
+  const contentLength = parseContentLength(response.headers.get('content-length'))
+  if (contentLength != null && contentLength > MAX_REMOTE_REFERENCE_IMAGE_BYTES) {
+    throw new Error('单张参考图不能超过 20MB。')
+  }
+
+  const filename = filenameFromUrl(url, response.headers.get('content-disposition'))
+  const mimeType = normalizeRemoteImageMimeType(response.headers.get('content-type'), filename)
+  const bytes = await readResponseBytesWithLimit(response)
+
+  return {
+    name: ensureImageFilename(filename, mimeType),
+    mimeType,
+    dataUrl: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
+    fileSizeBytes: bytes.byteLength
+  }
+}
+
+function normalizeRemoteImageUrl(value: string): string {
+  const trimmed = value.trim()
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error('请输入有效的 HTTP/HTTPS 图片链接。')
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('仅支持 HTTP/HTTPS 图片链接。')
+  }
+  return parsed.toString()
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (!value) return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
+function normalizeRemoteImageMimeType(contentType: string | null, filename: string): string {
+  const headerMimeType = contentType?.split(';')[0]?.trim().toLowerCase() || ''
+  const supportedHeaderMimeType = supportedReferenceMimeType(headerMimeType)
+  if (supportedHeaderMimeType) return supportedHeaderMimeType
+  if (headerMimeType && headerMimeType !== 'application/octet-stream' && headerMimeType !== 'binary/octet-stream') {
+    throw new Error('仅支持 PNG、JPG、WEBP 参考图。')
+  }
+  const filenameMimeType = mimeTypeFromFilename(filename)
+  if (filenameMimeType) return filenameMimeType
+  throw new Error('仅支持 PNG、JPG、WEBP 参考图。')
+}
+
+function supportedReferenceMimeType(value: string): string | null {
+  if (value === 'image/png') return 'image/png'
+  if (value === 'image/jpeg' || value === 'image/jpg') return 'image/jpeg'
+  if (value === 'image/webp') return 'image/webp'
+  return null
+}
+
+function mimeTypeFromFilename(filename: string): string | null {
+  const extension = /\.([a-z0-9]+)(?:[?#].*)?$/i.exec(filename)?.[1]?.toLowerCase()
+  if (extension === 'png') return 'image/png'
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg'
+  if (extension === 'webp') return 'image/webp'
+  return null
+}
+
+async function readResponseBytesWithLimit(response: Response): Promise<Uint8Array> {
+  if (!response.body) {
+    const buffer = await response.arrayBuffer()
+    if (buffer.byteLength > MAX_REMOTE_REFERENCE_IMAGE_BYTES) throw new Error('单张参考图不能超过 20MB。')
+    return new Uint8Array(buffer)
+  }
+
+  const reader = response.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      if (total + value.byteLength > MAX_REMOTE_REFERENCE_IMAGE_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        throw new Error('单张参考图不能超过 20MB。')
+      }
+      chunks.push(value)
+      total += value.byteLength
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return concatResponseBytes(chunks, total)
+}
+
+function concatResponseBytes(chunks: Uint8Array[], total: number): Uint8Array {
+  const output = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    output.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return output
+}
+
+function filenameFromUrl(url: string, contentDisposition: string | null): string {
+  const dispositionFilename = filenameFromContentDisposition(contentDisposition)
+  if (dispositionFilename) return dispositionFilename
+  const rawName = new URL(url).pathname.split('/').filter(Boolean).pop() || ''
+  try {
+    return decodeURIComponent(rawName) || 'reference.png'
+  } catch {
+    return rawName || 'reference.png'
+  }
+}
+
+function filenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(value)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.trim().replace(/^"|"$/g, ''))
+    } catch {
+      return encoded.trim().replace(/^"|"$/g, '')
+    }
+  }
+  return /filename="?([^";]+)"?/i.exec(value)?.[1]?.trim() || null
+}
+
+function ensureImageFilename(filename: string, mimeType: string): string {
+  if (mimeTypeFromFilename(filename)) return filename
+  const stem = filename.replace(/\.[a-z0-9]+$/i, '') || 'reference'
+  return `${stem}.${extensionFromMimeType(mimeType)}`
+}
+
+function extensionFromMimeType(mimeType: string): string {
+  if (mimeType === 'image/jpeg') return 'jpg'
+  if (mimeType === 'image/webp') return 'webp'
+  return 'png'
 }
 
 async function downloadBlob(blob: Blob, filename: string): Promise<void> {
