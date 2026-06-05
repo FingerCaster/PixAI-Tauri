@@ -6,7 +6,7 @@ import * as platformModule from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { GalleryPage } from './GalleryPage'
 
-function historyItem(id: string): ImageHistoryItem {
+function historyItem(id: string, overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem {
   return {
     id,
     conversationId: 'gallery-confirm-conversation',
@@ -27,7 +27,8 @@ function historyItem(id: string): ImageHistoryItem {
     favorite: false,
     generationMode: 'text-to-image',
     referenceImages: [],
-    createdAt: '2026-06-02T10:00:00.000Z'
+    createdAt: '2026-06-02T10:00:00.000Z',
+    ...overrides
   }
 }
 
@@ -141,6 +142,27 @@ describe('GalleryPage destructive actions', () => {
       expect.objectContaining({ id: 'history-gallery-2' })
     ])
     expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('uses the history redo action for the primary gallery button', async () => {
+    const reuseHistory = useAppStore.getState().reuseHistory
+    const { host, root } = await renderGallery()
+    const redoButton = findButtonByText('用此重做')
+
+    await act(async () => {
+      redoButton?.click()
+    })
+
+    expect(reuseHistory).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'history-gallery-1',
+      prompt: '测试图片 history-gallery-1'
+    }))
+    expect(findButtonByText('回填参数')).toBeUndefined()
 
     await act(async () => {
       root.unmount()

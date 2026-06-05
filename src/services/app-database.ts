@@ -66,10 +66,11 @@ export class AppDatabase {
     const data = this.requireData()
     const now = nowIso()
     const ratio = input.ratio || '1:1'
+    const referenceImages = (input.referenceImages || []).map((reference) => ({ ...reference }))
     const conversation: Conversation = {
       id: createId('conversation'),
-      title: '新会话',
-      draftPrompt: '',
+      title: input.title?.trim() || '新会话',
+      draftPrompt: input.draftPrompt || '',
       model: input.model || DEFAULT_MODEL,
       ratio,
       size: input.size && isImageSizeCompatible(ratio, input.size) ? input.size : getDefaultImageSize(ratio),
@@ -86,7 +87,7 @@ export class AppDatabase {
       generationTimeoutSeconds: normalizeImageGenerationTimeoutSeconds(input.generationTimeoutSeconds),
       autoSaveHistory: input.autoSaveHistory ?? true,
       keepFailureDetails: input.keepFailureDetails ?? true,
-      referenceImages: [],
+      referenceImages,
       createdAt: now,
       updatedAt: now
     }

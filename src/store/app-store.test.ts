@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openAiCompatibleAdapter } from '../adapters/openai-compatible'
 import { __getSentNotificationsForTests, __setNotificationPermissionForTests, getProfileSecret } from '../lib/platform'
 import { pixaiApi } from '../services/app-api'
-import type { GenerateImageResult, GenerationRun, ImageHistoryItem } from '../shared/types'
+import type { Conversation, GenerateImageResult, GenerationRun, ImageHistoryItem, ReferenceImage } from '../shared/types'
 import { useAppStore } from './app-store'
 
 describe('useAppStore', () => {
@@ -270,6 +270,195 @@ describe('useAppStore', () => {
     expect(deleteSpy).not.toHaveBeenCalled()
   })
 
+  it('recreates a text history item as a brand new conversation', async () => {
+    const activeConversation = conversationState('conversation-active', {
+      title: '当前会话',
+      draftPrompt: '正在编辑的内容',
+      model: 'current-model',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'medium',
+      referenceImages: [referenceImageState('reference-current', {
+        name: 'current.png',
+        storagePath: 'browser-memory/references/current.png'
+      })]
+    })
+    const sourceHistory = historyItemState('history-redo-text', {
+      conversationId: 'conversation-source',
+      prompt: '雨夜玻璃城市',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high'
+    })
+    const createdConversation = conversationState('conversation-redo', {
+      title: '雨夜玻璃城市',
+      draftPrompt: '雨夜玻璃城市',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      referenceImages: []
+    })
+    const createSpy = vi.spyOn(pixaiApi.conversation, 'create').mockResolvedValue(createdConversation)
+
+    useAppStore.setState({
+      conversations: [activeConversation],
+      activeConversationId: activeConversation.id,
+      history: [sourceHistory],
+      runsByConversation: { [activeConversation.id]: [] },
+      toast: null
+    })
+
+    await useAppStore.getState().reuseHistory(sourceHistory)
+
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      title: '雨夜玻璃城市',
+      draftPrompt: '雨夜玻璃城市',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      referenceImages: []
+    }))
+    expect(useAppStore.getState().activeConversationId).toBe(createdConversation.id)
+    expect(useAppStore.getState().conversations).toEqual([createdConversation, activeConversation])
+    expect(useAppStore.getState().toast).toBe('已用历史重做')
+  })
+
+  it('recreates an image history item with only the recoverable reference images', async () => {
+    const activeConversation = conversationState('conversation-active', {
+      title: '当前会话',
+      draftPrompt: '正在编辑的内容',
+      model: 'current-model',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'medium'
+    })
+    const validReference = referenceImageState('reference-valid', {
+      name: 'valid.png',
+      storagePath: 'browser-memory/references/valid.png'
+    })
+    const missingReference = referenceImageState('reference-missing', {
+      name: 'missing.png',
+      storagePath: null,
+      dataUrl: ''
+    })
+    const sourceHistory = historyItemState('history-redo-image', {
+      conversationId: 'conversation-source',
+      prompt: '雪夜的发光温室',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      generationMode: 'image-to-image',
+      referenceImages: [validReference, missingReference]
+    })
+    const createdConversation = conversationState('conversation-redo-image', {
+      title: '雪夜的发光温室',
+      draftPrompt: '雪夜的发光温室',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      referenceImages: [validReference]
+    })
+    const createSpy = vi.spyOn(pixaiApi.conversation, 'create').mockResolvedValue(createdConversation)
+
+    useAppStore.setState({
+      conversations: [activeConversation],
+      activeConversationId: activeConversation.id,
+      history: [sourceHistory],
+      runsByConversation: { [activeConversation.id]: [] },
+      toast: null
+    })
+
+    await useAppStore.getState().reuseHistory(sourceHistory)
+
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      title: '雪夜的发光温室',
+      draftPrompt: '雪夜的发光温室',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      referenceImages: [validReference]
+    }))
+    expect(useAppStore.getState().activeConversationId).toBe(createdConversation.id)
+    expect(useAppStore.getState().conversations[0].referenceImages).toEqual([validReference])
+    expect(useAppStore.getState().toast).toBe('已用历史重做，部分原始参考图不可用')
+  })
+
+  it('falls back to the source conversation when the history snapshot lost all reference image payloads', async () => {
+    const activeConversation = conversationState('conversation-active', {
+      title: '当前会话',
+      draftPrompt: '正在编辑的内容',
+      model: 'current-model',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'medium'
+    })
+    const sourceReferenceOne = referenceImageState('reference-source-one', {
+      name: 'source-one.png',
+      storagePath: 'browser-memory/references/source-one.png'
+    })
+    const sourceReferenceTwo = referenceImageState('reference-source-two', {
+      name: 'source-two.png',
+      storagePath: 'browser-memory/references/source-two.png'
+    })
+    const sourceConversation = conversationState('conversation-source', {
+      title: '源会话',
+      draftPrompt: '源会话提示词',
+      referenceImages: [sourceReferenceOne, sourceReferenceTwo]
+    })
+    const sourceHistory = historyItemState('history-redo-image-source-fallback', {
+      conversationId: sourceConversation.id,
+      prompt: '雪夜的发光温室',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      generationMode: 'image-to-image',
+      referenceImages: [
+        referenceImageState(sourceReferenceOne.id, { dataUrl: '', storagePath: null }),
+        referenceImageState(sourceReferenceTwo.id, { dataUrl: '', storagePath: null })
+      ]
+    })
+    const createdConversation = conversationState('conversation-redo-image-source-fallback', {
+      title: '雪夜的发光温室',
+      draftPrompt: '雪夜的发光温室',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      referenceImages: [sourceReferenceOne, sourceReferenceTwo]
+    })
+    const createSpy = vi.spyOn(pixaiApi.conversation, 'create').mockResolvedValue(createdConversation)
+
+    useAppStore.setState({
+      conversations: [activeConversation, sourceConversation],
+      activeConversationId: activeConversation.id,
+      history: [sourceHistory],
+      runsByConversation: { [activeConversation.id]: [], [sourceConversation.id]: [] },
+      toast: null
+    })
+
+    await useAppStore.getState().reuseHistory(sourceHistory)
+
+    expect(createSpy).toHaveBeenCalledWith(expect.objectContaining({
+      title: '雪夜的发光温室',
+      draftPrompt: '雪夜的发光温室',
+      model: 'gpt-image-2',
+      ratio: '16:9',
+      size: '1792x1008',
+      quality: 'high',
+      referenceImages: [sourceReferenceOne, sourceReferenceTwo]
+    }))
+    expect(useAppStore.getState().activeConversationId).toBe(createdConversation.id)
+    expect(useAppStore.getState().conversations[0].referenceImages).toEqual([sourceReferenceOne, sourceReferenceTwo])
+    expect(useAppStore.getState().toast).toBe('已用历史重做，已带入原始参考图')
+  })
+
   it('retries a failed history item with its original generation parameters', async () => {
     await useAppStore.getState().load()
     const conversation = {
@@ -368,4 +557,71 @@ async function prepareSuccessfulGeneration(): Promise<void> {
   vi.spyOn(openAiCompatibleAdapter, 'generateImage').mockResolvedValue([
     { b64_json: 'aGVsbG8=' }
   ])
+}
+
+function conversationState(id: string, overrides: Partial<Conversation> = {}): Conversation {
+  return {
+    id,
+    title: '新会话',
+    draftPrompt: '',
+    model: 'gpt-image-2',
+    ratio: '1:1',
+    size: '1024x1024',
+    quality: 'high',
+    n: 1,
+    outputFormat: 'png',
+    outputCompression: null,
+    background: 'auto',
+    moderation: 'auto',
+    stream: false,
+    partialImages: 0,
+    inputFidelity: null,
+    maxRetries: 0,
+    generationTimeoutSeconds: 60,
+    autoSaveHistory: true,
+    keepFailureDetails: true,
+    referenceImages: [],
+    createdAt: '2026-06-05T10:00:00.000Z',
+    updatedAt: '2026-06-05T10:00:00.000Z',
+    ...overrides
+  }
+}
+
+function referenceImageState(id: string, overrides: Partial<ReferenceImage> = {}): ReferenceImage {
+  return {
+    id,
+    name: `${id}.png`,
+    mimeType: 'image/png',
+    dataUrl: '',
+    fileSizeBytes: 0,
+    storagePath: null,
+    createdAt: '2026-06-05T10:00:00.000Z',
+    ...overrides
+  }
+}
+
+function historyItemState(id: string, overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem {
+  return {
+    id,
+    conversationId: 'conversation-source',
+    runId: 'run-source',
+    prompt: `测试图片 ${id}`,
+    model: 'gpt-image-2',
+    ratio: '1:1',
+    size: '1024x1024',
+    quality: 'high',
+    requestIndex: 0,
+    durationMs: 1200,
+    dataUrl: 'data:image/png;base64,aGVsbG8=',
+    fileSizeBytes: 5,
+    status: 'succeeded',
+    errorMessage: null,
+    errorDetails: null,
+    retryAttempt: 0,
+    favorite: false,
+    generationMode: 'text-to-image',
+    referenceImages: [],
+    createdAt: '2026-06-05T10:00:00.000Z',
+    ...overrides
+  }
 }

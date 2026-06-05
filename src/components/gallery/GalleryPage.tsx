@@ -119,7 +119,7 @@ export function GalleryPage() {
                 <div className="gallery-actions mt-2 flex gap-2">
                   <Button className="flex-1" variant="outline" type="button" onClick={() => void reuseHistory(item)}>
                     <WandSparkles size={15} />
-                    回填参数
+                    用此重做
                   </Button>
                   <Button variant="outline" type="button" onClick={() => void deleteSingle(item.id)}>
                     <Trash2 size={15} />
