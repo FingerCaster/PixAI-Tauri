@@ -124,6 +124,8 @@ macOS x64         macos-14 + x86_64-apple-darwin target
 
 发布阶段会先创建 draft GitHub Release，合并三个平台的 staging artifact，上传完整 release assets，然后把 release 发布为 latest。
 
+Release 正文使用 GitHub 自动生成的 release notes。`latest.json` 的 `notes` 会复用 Release 正文，所以正式发布后更新提示里也应该能看到本次版本的更新内容，而不是只有版本号。
+
 ## 手动重跑
 
 如果同版本发布因为 GitHub runner、网络、workflow bug 等原因失败，且需要使用 `main` 上的最新 workflow 重跑，可以手动 dispatch：

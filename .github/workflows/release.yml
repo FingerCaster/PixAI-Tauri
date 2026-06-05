@@ -241,7 +241,7 @@ jobs:
           gh release create "$TAG" \
             --target "$GITHUB_SHA" \
             --title "PixAI $VERSION" \
-            --notes "PixAI $VERSION" \
+            --generate-notes \
             --draft
 
       - name: Publish merged updater assets
