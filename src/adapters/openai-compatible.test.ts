@@ -529,6 +529,84 @@ describe('openAiCompatibleAdapter', () => {
     expect(images[0].b64_json).toBe('e'.repeat(120))
   })
 
+  it('surfaces responses stream failures instead of reporting missing images', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      [
+        'event: response.output_item.added',
+        `data: ${JSON.stringify({
+          type: 'response.output_item.added',
+          item: {
+            id: 'ig_123',
+            type: 'image_generation_call',
+            status: 'in_progress'
+          },
+          output_index: 1
+        })}`,
+        '',
+        'event: response.image_generation_call.generating',
+        `data: ${JSON.stringify({
+          type: 'response.image_generation_call.generating',
+          item_id: 'ig_123',
+          output_index: 1
+        })}`,
+        '',
+        'event: error',
+        `data: ${JSON.stringify({
+          type: 'error',
+          error: {
+            code: 'upstream_error',
+            message: 'Upstream request failed',
+            param: null
+          }
+        })}`,
+        '',
+        'event: response.failed',
+        `data: ${JSON.stringify({
+          type: 'response.failed',
+          response: {
+            id: 'resp_failed',
+            status: 'failed',
+            error: {
+              code: 'upstream_error',
+              message: 'Upstream request failed'
+            }
+          }
+        })}`,
+        ''
+      ].join('\n'),
+      { status: 200, headers: { 'content-type': 'text/event-stream' } }
+    ))
+
+    let thrown: unknown
+    try {
+      await openAiCompatibleAdapter.generateImage({ ...profile, defaultImageModel: 'gpt-image-2', imageGenerationEndpoint: 'responses-api' }, {
+        input: {
+          conversationId: 'c1',
+          prompt: 'test',
+          ratio: '1:1',
+          size: '1024x1024',
+          quality: 'auto',
+          n: 1,
+          stream: false
+        },
+        referenceImages: []
+      })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toBe('Upstream request failed（upstream_error）')
+    expect((thrown as { details?: Record<string, unknown> }).details).toMatchObject({
+      status: 200,
+      responseError: {
+        code: 'upstream_error',
+        message: 'Upstream request failed'
+      }
+    })
+    expect(JSON.stringify((thrown as { details?: Record<string, unknown> }).details)).toContain('providerError')
+  })
+
   it('detects responses image-generation support through stream output', async () => {
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
       [

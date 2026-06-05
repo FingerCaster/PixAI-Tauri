@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetPlatformStateForTests,
   downloadImageSource,
+  getSystemNotificationPermission,
   imageSourceForDisplay,
   imageSourceForDisplaySync,
-  getSystemNotificationPermission,
+  readRemoteImageUrl,
   requestSystemNotificationPermission
 } from './platform'
 
@@ -66,6 +67,33 @@ describe('platform image display sources', () => {
       Object.defineProperty(URL, 'createObjectURL', { value: originalCreateObjectUrl, configurable: true })
       Object.defineProperty(URL, 'revokeObjectURL', { value: originalRevokeObjectUrl, configurable: true })
     }
+  })
+
+  it('downloads remote image urls as base64 data urls in browser runtime', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: {
+            'content-type': 'image/png',
+            'content-length': '3'
+          }
+        })
+      )
+    )
+
+    const payload = await readRemoteImageUrl('https://example.test/generated.png')
+
+    expect(fetch).toHaveBeenCalledWith('https://example.test/generated.png', {
+      headers: { Accept: 'image/png,image/jpeg,image/webp' }
+    })
+    expect(payload).toEqual({
+      name: 'generated.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,AQID',
+      fileSizeBytes: 3
+    })
   })
 })
 

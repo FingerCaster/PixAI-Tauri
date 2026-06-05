@@ -326,24 +326,34 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
   }, { timeoutMs, firstByteTimeoutMs: Math.min(timeoutMs, RESPONSES_IMAGE_TEST_TIMEOUT_MS) })
   const text = response.text
   const payload = parseResponsesPayload(text)
+  const streamError = extractResponsesProviderError(text, payload)
   if (response.status < 200 || response.status >= 300) {
     throw new ProviderHttpError(getProviderErrorMessage(payload, `Responses 图像工具请求失败，HTTP 状态码 ${response.status}。`), {
       endpoint,
       status: response.status,
       statusText: response.statusText,
       responseBody: text,
-      responseError: payload.error
+      responseError: payload.error || streamError
     })
   }
   const result = extractResponsesImageStreamResult(text)
   if (result.images.length > 0) return result
+  if (streamError && failOnEmptyImages) {
+    throw new ProviderHttpError(getProviderErrorMessage({ error: streamError }, 'Responses 图像工具流式请求失败。'), {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+      responseError: streamError,
+      responseSummary: summarizeResponsesImageResponse(text, payload, result.eventCount, streamError)
+    })
+  }
   const fallbackImages = extractResponsesImages(payload)
   if (fallbackImages.length === 0 && failOnEmptyImages) {
     throw new ProviderHttpError('Responses 图像工具没有返回可识别的图片。', {
       endpoint,
       status: response.status,
       statusText: response.statusText,
-      responseSummary: summarizeResponsesImageResponse(text, payload, result.eventCount)
+      responseSummary: summarizeResponsesImageResponse(text, payload, result.eventCount, streamError)
     })
   }
   return {
@@ -458,6 +468,15 @@ function extractResponsesImageStreamResult(text: string): ResponsesImageStreamRe
   }
 }
 
+function extractResponsesProviderError(text: string, payload: ResponsesApiPayload): ProviderPayloadError | undefined {
+  const payloads = parseSsePayloads(text)
+  for (let index = payloads.length - 1; index >= 0; index -= 1) {
+    const error = extractProviderError(payloads[index])
+    if (error) return error
+  }
+  return extractProviderError(payload)
+}
+
 function parseSsePayloads(text: string): Record<string, unknown>[] {
   const payloads: Record<string, unknown>[] = []
   for (const block of text.split(/\r?\n\r?\n/)) {
@@ -487,13 +506,14 @@ function extractResponsesImages(payload: ResponsesApiPayload): ImageApiData[] {
   return dedupeImages(images)
 }
 
-function summarizeResponsesImageResponse(text: string, payload: ResponsesApiPayload, eventCount: number): Record<string, unknown> {
+function summarizeResponsesImageResponse(text: string, payload: ResponsesApiPayload, eventCount: number, providerError?: ProviderPayloadError): Record<string, unknown> {
   const payloads = parseSsePayloads(text)
   return {
     eventCount,
     payloadCount: payloads.length,
     payloadSamples: payloads.slice(-6).map(summarizeUnknown),
-    finalPayload: summarizeUnknown(payload)
+    finalPayload: summarizeUnknown(payload),
+    ...(providerError ? { providerError } : {})
   }
 }
 
@@ -596,16 +616,26 @@ function extractProviderError(value: unknown): ProviderPayloadError | undefined 
   }
   if (!isRecord(value)) return undefined
   const nested = extractProviderError(value.error)
+  const responseNested = extractProviderError(value.response)
   const ownType = typeof value.type === 'string' ? value.type : undefined
-  const type = ownType === 'error' && nested?.type ? nested.type : ownType || nested?.type
-  const message = typeof value.message === 'string' ? value.message : nested?.message
-  const code = typeof value.code === 'string'
+  const ownMessage = typeof value.message === 'string' ? value.message : undefined
+  const ownCode = typeof value.code === 'string'
     ? value.code
     : typeof value.error_code === 'string'
       ? value.error_code
-      : nested?.code
-  const param = typeof value.param === 'string' ? value.param : nested?.param
-  const explicitError = type === 'error' || type?.endsWith('_error') || Boolean(value.error)
+      : undefined
+  const type = ownType === 'error' && nested?.type ? nested.type : ownType || nested?.type || responseNested?.type
+  const message = ownMessage || nested?.message || responseNested?.message
+  const code = ownCode || nested?.code || responseNested?.code
+  const param = typeof value.param === 'string' ? value.param : nested?.param || responseNested?.param
+  const explicitError =
+    type === 'error' ||
+    type === 'response.failed' ||
+    type?.endsWith('_error') ||
+    Boolean(value.error) ||
+    Boolean(nested) ||
+    Boolean(responseNested) ||
+    Boolean(ownMessage && ownCode)
   if (!explicitError) return undefined
   return {
     ...(message ? { message } : {}),

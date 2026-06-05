@@ -1,4 +1,7 @@
-use reqwest::{Client, Method};
+use reqwest::{
+    header::{HeaderValue, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    Client, Method,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -34,6 +37,7 @@ const SECRET_SERVICE: &str = "PixAI-Tauri";
 const CODEX_BRIDGE_HOST: &str = "127.0.0.1";
 const CODEX_BRIDGE_PORT: u16 = 43117;
 const MAX_CODEX_BRIDGE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
+const MAX_REFERENCE_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
 const CODEX_BRIDGE_REQUEST_EVENT: &str = "pixai://codex-bridge/request";
 #[cfg(target_os = "windows")]
 const SYSTEM_NOTIFICATION_ACTIVATED_EVENT: &str = "pixai://system-notification/activated";
@@ -127,6 +131,15 @@ struct SystemNotificationRequest {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LocalImageReadResult {
+    name: String,
+    mime_type: String,
+    data_url: String,
+    file_size_bytes: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RemoteImageReadResult {
     name: String,
     mime_type: String,
     data_url: String,
@@ -657,7 +670,68 @@ fn read_local_image_file(path: String) -> Result<LocalImageReadResult, String> {
         ),
         file_size_bytes: fs::metadata(&resolved)
             .map_err(|error| error.to_string())?
-            .len(),
+        .len(),
+    })
+}
+
+#[tauri::command]
+async fn read_remote_image_url(url: String) -> Result<RemoteImageReadResult, String> {
+    let request_url = reqwest::Url::parse(url.trim())
+        .map_err(|_| "请输入有效的 HTTP/HTTPS 图片链接。".to_string())?;
+    match request_url.scheme() {
+        "http" | "https" => {}
+        _ => return Err("仅支持 HTTP/HTTPS 图片链接。".to_string()),
+    }
+
+    let request_url_string = request_url.as_str().to_string();
+    let client = http_proxy_client()?;
+    let mut response = client
+        .get(request_url.clone())
+        .header("Accept", "image/png,image/jpeg,image/webp")
+        .timeout(Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|error| format_http_proxy_error("send", request_url_string.as_str(), &error))?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("图片链接下载失败：HTTP {}。", status.as_u16()));
+    }
+
+    let content_length = response
+        .content_length()
+        .or_else(|| header_u64(response.headers().get(CONTENT_LENGTH)));
+    if matches!(content_length, Some(length) if length > MAX_REFERENCE_IMAGE_BYTES) {
+        return Err("单张参考图不能超过 20MB。".to_string());
+    }
+
+    let filename = remote_filename(&request_url, response.headers().get(CONTENT_DISPOSITION));
+    let mime_type = normalize_remote_image_mime_type(response.headers().get(CONTENT_TYPE), &filename)?;
+    let name = ensure_image_filename(&filename, mime_type);
+    let mut data = Vec::with_capacity(
+        content_length
+            .unwrap_or(0)
+            .min(MAX_REFERENCE_IMAGE_BYTES) as usize,
+    );
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| format_http_proxy_error("read-body", request_url_string.as_str(), &error))?
+    {
+        if data.len() as u64 + chunk.len() as u64 > MAX_REFERENCE_IMAGE_BYTES {
+            return Err("单张参考图不能超过 20MB。".to_string());
+        }
+        data.extend_from_slice(chunk.as_ref());
+    }
+
+    Ok(RemoteImageReadResult {
+        name,
+        mime_type: mime_type.to_string(),
+        data_url: format!(
+            "data:{};base64,{}",
+            mime_type,
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data)
+        ),
+        file_size_bytes: data.len() as u64,
     })
 }
 
@@ -1474,6 +1548,172 @@ fn mime_type_from_path(path: &Path) -> &'static str {
     }
 }
 
+fn header_u64(value: Option<&HeaderValue>) -> Option<u64> {
+    value
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.trim().parse::<u64>().ok())
+}
+
+fn remote_filename(url: &reqwest::Url, content_disposition: Option<&HeaderValue>) -> String {
+    if let Some(filename) = filename_from_content_disposition(content_disposition) {
+        return sanitize_remote_filename(&filename);
+    }
+    let raw_name = url
+        .path_segments()
+        .and_then(|segments| segments.filter(|segment| !segment.is_empty()).last())
+        .unwrap_or("");
+    let decoded_name = decode_percent_component(raw_name);
+    sanitize_remote_filename(if decoded_name.trim().is_empty() {
+        "reference.png"
+    } else {
+        decoded_name.as_str()
+    })
+}
+
+fn filename_from_content_disposition(value: Option<&HeaderValue>) -> Option<String> {
+    let value = value?.to_str().ok()?;
+    for part in value.split(';').map(str::trim) {
+        let Some((name, raw_value)) = part.split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("filename*") {
+            let raw_value = raw_value.trim().trim_matches('"');
+            let encoded = raw_value.splitn(3, '\'').nth(2).unwrap_or(raw_value);
+            let decoded = decode_percent_component(encoded);
+            if !decoded.trim().is_empty() {
+                return Some(decoded);
+            }
+        }
+    }
+    for part in value.split(';').map(str::trim) {
+        let Some((name, raw_value)) = part.split_once('=') else {
+            continue;
+        };
+        if name.trim().eq_ignore_ascii_case("filename") {
+            let filename = raw_value.trim().trim_matches('"').to_string();
+            if !filename.trim().is_empty() {
+                return Some(filename);
+            }
+        }
+    }
+    None
+}
+
+fn decode_percent_component(value: &str) -> String {
+    let input = value.as_bytes();
+    let mut output = Vec::with_capacity(input.len());
+    let mut index = 0;
+    while index < input.len() {
+        if input[index] == b'%' && index + 2 < input.len() {
+            if let (Some(high), Some(low)) =
+                (hex_value(input[index + 1]), hex_value(input[index + 2]))
+            {
+                output.push((high << 4) | low);
+                index += 3;
+                continue;
+            }
+        }
+        output.push(input[index]);
+        index += 1;
+    }
+    match String::from_utf8(output) {
+        Ok(value) => value,
+        Err(error) => String::from_utf8_lossy(&error.into_bytes()).into_owned(),
+    }
+}
+
+fn hex_value(value: u8) -> Option<u8> {
+    match value {
+        b'0'..=b'9' => Some(value - b'0'),
+        b'a'..=b'f' => Some(value - b'a' + 10),
+        b'A'..=b'F' => Some(value - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn sanitize_remote_filename(value: &str) -> String {
+    let filename = value
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(value)
+        .chars()
+        .filter(|ch| !ch.is_control() && *ch != '/' && *ch != '\\')
+        .collect::<String>()
+        .trim()
+        .to_string();
+    if filename.is_empty() {
+        "reference.png".to_string()
+    } else {
+        filename
+    }
+}
+
+fn normalize_remote_image_mime_type(
+    content_type: Option<&HeaderValue>,
+    filename: &str,
+) -> Result<&'static str, String> {
+    let header_mime_type = content_type
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .map(str::trim)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if let Some(mime_type) = supported_reference_mime_type(&header_mime_type) {
+        return Ok(mime_type);
+    }
+    if !header_mime_type.is_empty()
+        && header_mime_type != "application/octet-stream"
+        && header_mime_type != "binary/octet-stream"
+    {
+        return Err("仅支持 PNG、JPG、WEBP 参考图。".to_string());
+    }
+    mime_type_from_filename(filename).ok_or_else(|| "仅支持 PNG、JPG、WEBP 参考图。".to_string())
+}
+
+fn supported_reference_mime_type(value: &str) -> Option<&'static str> {
+    match value {
+        "image/png" => Some("image/png"),
+        "image/jpeg" | "image/jpg" => Some("image/jpeg"),
+        "image/webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+fn mime_type_from_filename(filename: &str) -> Option<&'static str> {
+    match Path::new(filename)
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        _ => None,
+    }
+}
+
+fn ensure_image_filename(filename: &str, mime_type: &str) -> String {
+    if mime_type_from_filename(filename).is_some() {
+        return filename.to_string();
+    }
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or("reference");
+    format!("{stem}.{}", extension_from_mime_type(mime_type))
+}
+
+fn extension_from_mime_type(mime_type: &str) -> &'static str {
+    match mime_type {
+        "image/jpeg" => "jpg",
+        "image/webp" => "webp",
+        _ => "png",
+    }
+}
+
 fn unique_file_path(directory: &Path, filename: &str) -> PathBuf {
     let candidate = directory.join(filename);
     if !candidate.exists() {
@@ -1741,6 +1981,7 @@ pub fn run() {
             http_proxy,
             http_proxy_stream,
             read_local_image_file,
+            read_remote_image_url,
             write_data_url_file,
             read_binary_file_base64,
             write_binary_file,
