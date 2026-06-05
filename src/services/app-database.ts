@@ -232,13 +232,14 @@ export class AppDatabase {
     const now = nowIso()
     const references = files.map((file, index) => {
       const mimeType = validateReferenceImage(file)
+      const source = normalizeReferenceSource(file.dataUrl, file.storagePath)
       return {
         id: createId('reference'),
         name: file.name || `reference-${conversation.referenceImages.length + index + 1}.png`,
         mimeType,
-        dataUrl: file.dataUrl,
+        dataUrl: source.dataUrl,
         fileSizeBytes: file.fileSizeBytes,
-        storagePath: file.storagePath || null,
+        storagePath: source.storagePath,
         createdAt: now
       }
     })
@@ -328,20 +329,21 @@ async function normalizeData(data: PersistedData): Promise<{ data: PersistedData
   })
   const persistReference = async (reference: ReferenceImage): Promise<ReferenceImage> => {
     if (!reference.dataUrl?.startsWith('data:')) {
-      const recoveredPath = reference.storagePath || storagePathFromAssetUrl(reference.dataUrl)
-      if (recoveredPath && recoveredPath !== reference.storagePath) {
+      const source = normalizeReferenceSource(reference.dataUrl || '', reference.storagePath)
+      if (source.changed) {
         changed = true
-        return { ...reference, storagePath: recoveredPath }
+        return { ...reference, dataUrl: source.dataUrl, storagePath: source.storagePath }
       }
       return reference
     }
     const stored = await storeDataUrlFile('references', reference.name || `${reference.id}.png`, reference.dataUrl)
+    const source = normalizeReferenceSource(stored.dataUrl, stored.path)
     changed = true
     return {
       ...reference,
-      dataUrl: stored.dataUrl,
+      dataUrl: source.dataUrl,
       fileSizeBytes: stored.fileSizeBytes || reference.fileSizeBytes,
-      storagePath: stored.path
+      storagePath: source.storagePath
     }
   }
   const persistHistoryItem = async (item: ImageHistoryItem): Promise<ImageHistoryItem> => {
@@ -395,6 +397,21 @@ function stripReferenceImagePayloads(references: ReferenceImage[], onStripped?: 
   }))
 }
 
+function normalizeReferenceSource(dataUrl: string, storagePath?: string | null): { dataUrl: string; storagePath: string | null; changed: boolean } {
+  const assetPath = storagePathFromAssetUrl(dataUrl)
+  const localPath = storagePathFromLocalPath(dataUrl)
+  const recoveredPath = storagePath || assetPath || localPath
+  const shouldClearDataUrl = Boolean(recoveredPath && dataUrl && !dataUrl.startsWith('data:') && (assetPath || localPath))
+  const next = {
+    dataUrl: shouldClearDataUrl ? '' : dataUrl,
+    storagePath: recoveredPath || storagePath || null
+  }
+  return {
+    ...next,
+    changed: next.dataUrl !== dataUrl || next.storagePath !== (storagePath || null)
+  }
+}
+
 function normalizeConversationSize(ratio: ImageRatio, nextSize: string | undefined, currentSize: string | undefined): string {
   if (nextSize && isImageSizeCompatible(ratio, nextSize)) return nextSize
   if (currentSize && isImageSizeCompatible(ratio, currentSize)) return currentSize
@@ -438,6 +455,12 @@ function storagePathFromAssetUrl(value: string | null | undefined): string | nul
   const encoded = /^https?:\/\/asset\.localhost\/(.+)$/i.exec(value)?.[1]
   if (!encoded) return null
   return decodeURIComponent(encoded)
+}
+
+function storagePathFromLocalPath(value: string | null | undefined): string | null {
+  if (!value) return null
+  if (/^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\') || value.startsWith('/')) return value
+  return null
 }
 
 export function ratioFromSize(size: string | null): ImageRatio {

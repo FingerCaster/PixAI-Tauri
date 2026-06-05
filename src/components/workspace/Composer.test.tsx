@@ -399,6 +399,48 @@ describe('Composer', () => {
     host.remove()
   })
 
+  it('does not fall back to a raw local reference path when no safe display source is available', async () => {
+    const rawPath = 'C:\\stored\\references\\legacy.png'
+    setTauriRuntime(true)
+    vi.spyOn(platform, 'imageSourceForDisplay').mockResolvedValue(null)
+    vi.spyOn(platform, 'imageSourceForDisplaySync').mockReturnValue(null)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      flushSync(() => {
+        root.render(
+          <Composer
+            conversation={conversation({
+              referenceImages: [
+                {
+                  id: 'reference-legacy-path-test',
+                  name: 'legacy.png',
+                  mimeType: 'image/png',
+                  dataUrl: rawPath,
+                  storagePath: rawPath,
+                  fileSizeBytes: 12,
+                  createdAt: '2026-06-06T01:30:00.000Z'
+                }
+              ]
+            })}
+            generating={false}
+          />
+        )
+      })
+      await flushPromises()
+    })
+
+    expect(host.querySelector<HTMLImageElement>('.reference-thumb img')).toBeNull()
+    expect(host.innerHTML).not.toContain(rawPath)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('ignores non-image drops in the prompt box', async () => {
     const importReferenceFiles = vi.fn().mockResolvedValue(undefined)
     useAppStore.setState({ importReferenceFiles })

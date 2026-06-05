@@ -235,25 +235,24 @@ export function Composer({ conversation, generating }: { conversation: Conversat
       </div>
       {conversation.referenceImages.length > 0 ? (
         <div className="reference-row mb-3 flex gap-2 overflow-x-auto pb-1">
-          {conversation.referenceImages.map((reference) => (
-            <div className="reference-thumb group relative size-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted" key={reference.id}>
-              <button className="reference-preview-button h-full w-full" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
-                <img
-                  className="h-full w-full object-cover"
-                  src={referenceSources[reference.id] || synchronousReferenceSources[reference.id] || reference.dataUrl}
-                  alt={reference.name}
-                />
-              </button>
-              <button
-                className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
-                type="button"
-                onClick={() => void onRemoveReferenceImage(reference.id)}
-                title="移除参考图"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          ))}
+          {conversation.referenceImages.map((reference) => {
+            const source = referenceSources[reference.id] || synchronousReferenceSources[reference.id] || null
+            return (
+              <div className="reference-thumb group relative size-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted" key={reference.id}>
+                <button className="reference-preview-button h-full w-full" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
+                  {source ? <img className="h-full w-full object-cover" src={source} alt={reference.name} /> : null}
+                </button>
+                <button
+                  className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+                  type="button"
+                  onClick={() => void onRemoveReferenceImage(reference.id)}
+                  title="移除参考图"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            )
+          })}
         </div>
       ) : null}
       <div ref={promptBoxRef} className="prompt-box rounded-xl border border-input bg-background" onDragOver={onPromptDragOver} onDrop={onPromptDrop}>
@@ -310,7 +309,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
       {previewReference ? (
         <ReferencePreviewModal
           reference={previewReference}
-          source={referenceSources[previewReference.id] || synchronousReferenceSources[previewReference.id] || previewReference.dataUrl}
+          source={referenceSources[previewReference.id] || synchronousReferenceSources[previewReference.id] || null}
           onClose={() => setPreviewReference(null)}
         />
       ) : null}
@@ -349,7 +348,7 @@ function isTauriDropInsideElement(position: { x: number; y: number }, element: H
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
 
-function ReferencePreviewModal({ reference, source, onClose }: { reference: ReferenceImage; source: string; onClose: () => void }) {
+function ReferencePreviewModal({ reference, source, onClose }: { reference: ReferenceImage; source: string | null; onClose: () => void }) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onClose()
@@ -368,7 +367,7 @@ function ReferencePreviewModal({ reference, source, onClose }: { reference: Refe
           </span>
         </DialogHeader>
         <div className="image-preview-stage grid max-h-[72vh] place-items-center overflow-hidden rounded-xl bg-muted">
-          <img className="max-h-[72vh] max-w-full object-contain" src={source} alt={reference.name} />
+          {source ? <img className="max-h-[72vh] max-w-full object-contain" src={source} alt={reference.name} /> : null}
         </div>
       </DialogContent>
     </Dialog>
