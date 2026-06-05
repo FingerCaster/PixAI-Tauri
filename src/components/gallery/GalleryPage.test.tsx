@@ -6,7 +6,7 @@ import * as platformModule from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 import { GalleryPage } from './GalleryPage'
 
-function historyItem(id: string, overrides: Partial<ImageHistoryItem> = {}): ImageHistoryItem {
+function historyItem(id: string): ImageHistoryItem {
   return {
     id,
     conversationId: 'gallery-confirm-conversation',
@@ -27,8 +27,7 @@ function historyItem(id: string, overrides: Partial<ImageHistoryItem> = {}): Ima
     favorite: false,
     generationMode: 'text-to-image',
     referenceImages: [],
-    createdAt: '2026-06-02T10:00:00.000Z',
-    ...overrides
+    createdAt: '2026-06-02T10:00:00.000Z'
   }
 }
 
@@ -43,7 +42,6 @@ describe('GalleryPage destructive actions', () => {
       setFavoritesOnly: vi.fn().mockResolvedValue(undefined),
       setQuery: vi.fn(),
       deleteHistory: vi.fn().mockResolvedValue(undefined),
-      reuseHistory: vi.fn().mockResolvedValue(undefined),
       toggleFavorite: vi.fn().mockResolvedValue(undefined),
       notify: vi.fn()
     })
@@ -58,32 +56,6 @@ describe('GalleryPage destructive actions', () => {
     })
     return { host, root }
   }
-
-  it('asks before deleting one gallery image', async () => {
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const deleteHistory = useAppStore.getState().deleteHistory
-    const { host, root } = await renderGallery()
-    const galleryDeleteButton = document.querySelectorAll<HTMLButtonElement>('.gallery-actions button')[1]
-
-    await act(async () => {
-      galleryDeleteButton?.click()
-    })
-
-    expect(confirm).toHaveBeenCalledWith('确认删除这张图片记录？')
-    expect(deleteHistory).not.toHaveBeenCalled()
-
-    confirm.mockReturnValue(true)
-    await act(async () => {
-      galleryDeleteButton?.click()
-    })
-
-    expect(deleteHistory).toHaveBeenCalledWith('history-gallery-1')
-
-    await act(async () => {
-      root.unmount()
-    })
-    host.remove()
-  })
 
   it('asks once before deleting selected gallery images', async () => {
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
@@ -142,27 +114,6 @@ describe('GalleryPage destructive actions', () => {
       expect.objectContaining({ id: 'history-gallery-2' })
     ])
     expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
-
-    await act(async () => {
-      root.unmount()
-    })
-    host.remove()
-  })
-
-  it('uses the history redo action for the primary gallery button', async () => {
-    const reuseHistory = useAppStore.getState().reuseHistory
-    const { host, root } = await renderGallery()
-    const redoButton = findButtonByText('用此重做')
-
-    await act(async () => {
-      redoButton?.click()
-    })
-
-    expect(reuseHistory).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'history-gallery-1',
-      prompt: '测试图片 history-gallery-1'
-    }))
-    expect(findButtonByText('回填参数')).toBeUndefined()
 
     await act(async () => {
       root.unmount()

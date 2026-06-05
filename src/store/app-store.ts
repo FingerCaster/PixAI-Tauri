@@ -22,7 +22,6 @@ import type {
   ProviderProfileInput,
   ProviderSettings,
   ProviderSettingsUpdate,
-  ReferenceImage,
   ReferenceImageFilePayload
 } from '../shared/types'
 import {
@@ -67,7 +66,7 @@ type AppState = {
   setQuery: (query: string) => void
   setFavoritesOnly: (favoritesOnly: boolean) => Promise<void>
   setActiveConversation: (id: string) => Promise<void>
-  createConversation: (template?: ConversationCreateInput, options?: { silent?: boolean }) => Promise<void>
+  createConversation: (template?: ConversationCreateInput) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   updateActiveConversation: (input: ConversationUpdate) => Promise<void>
   updateSettings: (input: ProviderSettingsUpdate) => Promise<void>
@@ -98,7 +97,6 @@ type AppState = {
   deleteHistory: (id: string) => Promise<void>
   deleteHistoryItems: (ids: string[]) => Promise<void>
   toggleFavorite: (item: ImageHistoryItem) => Promise<void>
-  reuseHistory: (item: ImageHistoryItem) => Promise<void>
   loadTemplates: () => Promise<void>
   saveTemplate: (input: PromptTemplateInput & { id?: string }) => Promise<void>
   deleteTemplate: (id: string) => Promise<void>
@@ -209,12 +207,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ runsByConversation: { ...get().runsByConversation, [id]: runs } })
     }
   },
-  createConversation: async (template = {}, options = {}) => {
+  createConversation: async (template = {}) => {
     const current = getActiveConversation(get())
     const conversation = await pixaiApi.conversation.create({
-      title: template.title?.trim() || '新会话',
-      draftPrompt: template.draftPrompt || '',
-      referenceImages: cloneReferenceImages(template.referenceImages || []),
       ratio: template.ratio ?? current?.ratio,
       size: template.size ?? current?.size,
       quality: template.quality ?? current?.quality,
@@ -238,7 +233,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       view: 'workspace',
       runsByConversation: { ...get().runsByConversation, [conversation.id]: [] }
     })
-    if (!options.silent) get().notify('已新建会话')
+    get().notify('已新建会话')
   },
   deleteConversation: async (id) => {
     await pixaiApi.conversation.delete(id)
@@ -839,38 +834,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     await pixaiApi.history.favorite(item.id, !item.favorite)
     await get().reloadHistory()
   },
-  reuseHistory: async (item) => {
-    let sourceConversation = item.conversationId
-      ? get().conversations.find((conversation) => conversation.id === item.conversationId) || null
-      : null
-    if (!sourceConversation && item.conversationId) {
-      try {
-        sourceConversation = await pixaiApi.conversation.get(item.conversationId)
-      } catch {
-        sourceConversation = null
-      }
-    }
-    const { references: reusableReferences, missingCount } = resolveReusableHistoryReferences(item.referenceImages, sourceConversation?.referenceImages || [])
-    const size = item.size && isImageSizeCompatible(item.ratio, item.size) ? item.size : getDefaultImageSize(item.ratio)
-    await get().createConversation({
-      title: historyConversationTitle(item.prompt),
-      draftPrompt: item.prompt,
-      model: item.model,
-      ratio: item.ratio,
-      size,
-      quality: item.quality,
-      referenceImages: cloneReferenceImages(reusableReferences)
-    }, { silent: true })
-    if (missingCount > 0) {
-      get().notify(
-        reusableReferences.length > 0
-          ? '已用历史重做，部分原始参考图不可用'
-          : '已用历史重做，原始参考图不可用'
-      )
-      return
-    }
-    get().notify(reusableReferences.length > 0 ? '已用历史重做，已带入原始参考图' : '已用历史重做')
-  },
   loadTemplates: async () => {
     const templates = await pixaiApi.templates.list()
     set({ templates })
@@ -909,41 +872,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
 function getActiveConversation(state: AppState): Conversation | null {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || null
-}
-
-function cloneReferenceImages(references: ReferenceImage[]): ReferenceImage[] {
-  return references.map((reference) => ({ ...reference }))
-}
-
-function resolveReusableHistoryReferences(historyReferences: ReferenceImage[], sourceReferences: ReferenceImage[]): { references: ReferenceImage[]; missingCount: number } {
-  const recoverableHistoryReferences = historyReferences.filter(hasRecoverableReferenceImage)
-  const recoverableSourceReferences = sourceReferences.filter(hasRecoverableReferenceImage)
-  if (recoverableHistoryReferences.length === 0) {
-    return recoverableSourceReferences.length > 0
-      ? { references: cloneReferenceImages(recoverableSourceReferences), missingCount: 0 }
-      : { references: [], missingCount: historyReferences.length }
-  }
-
-  const sourceById = new Map(recoverableSourceReferences.map((reference) => [reference.id, reference]))
-  const references = historyReferences.map((reference) => {
-    if (hasRecoverableReferenceImage(reference)) return reference
-    return sourceById.get(reference.id) || reference
-  }).filter(hasRecoverableReferenceImage)
-
-  return {
-    references: cloneReferenceImages(references),
-    missingCount: historyReferences.length - references.length
-  }
-}
-
-function hasRecoverableReferenceImage(reference: ReferenceImage): boolean {
-  return Boolean(reference.dataUrl || reference.storagePath)
-}
-
-function historyConversationTitle(prompt: string): string {
-  const preview = prompt.trim().replace(/\s+/g, ' ')
-  if (!preview) return '新会话'
-  return preview.length > 18 ? `${preview.slice(0, 18)}...` : preview
 }
 
 function nextConversationUpdateVersion(conversationId: string): number {

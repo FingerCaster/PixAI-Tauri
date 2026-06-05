@@ -4,10 +4,10 @@ slug: ui-shadcn-workbench
 scope: PixAI React 前端 UI 基座、工作台、设置系统、图库和提示词库的当前结构
 summary: 前端界面已统一到 Tailwind v4 + shadcn/ui primitives，业务状态仍由 Zustand store 提供。
 status: current
-last_reviewed: 2026-06-05
-tags: [ui, react, shadcn, tailwind, desktop-workbench, reference-image-url]
+last_reviewed: 2026-05-29
+tags: [ui, react, shadcn, tailwind, desktop-workbench]
 depends_on: []
-implements: [reference-image-input, history-reuse-workflow]
+implements: [reference-image-input]
 ---
 
 ## 0. 术语
@@ -50,7 +50,7 @@ shadcn 配置固定为 TSX、CSS variables、lucide 图标和 `@/components/ui` 
 
 `Workspace` 是生成页容器，只负责选出当前会话、当前会话 runs 和生成状态，再组合 `Composer` 与 `CanvasArea`。`src/components/workspace/Workspace.tsx:5` `src/components/workspace/Workspace.tsx:21`
 
-`Composer` 承载提示词、参考图、灵感/丰富 prompt、生成按钮、提示词放大编辑和参考图预览；提示词编辑先进入组件本地 draft buffer，中文输入法 composition 结束或短延迟后再写回 `useAppStore`，避免异步持久化回写打断中间插入；主提示词输入区可把粘贴、DOM 拖入的图片 `File` 交给 `importReferenceFiles`，也可在 Tauri runtime 中把原生拖放路径读取成 payload 后交给 `importReferencePayloads`；参考图工具区还提供显式 HTTP/HTTPS 图片链接入口，先调用 `readRemoteImageUrl` 转成 payload，再复用 `importReferencePayloads`。`src/components/workspace/Composer.tsx:16` `src/components/workspace/Composer.tsx:33` `src/components/workspace/Composer.tsx:102` `src/components/workspace/Composer.tsx:206` `src/components/workspace/Composer.tsx:320` `src/lib/platform.ts:409` `src/store/app-store.ts:452`
+`Composer` 承载提示词、参考图、灵感/丰富 prompt、生成按钮、提示词放大编辑和参考图预览；提示词编辑先进入组件本地 draft buffer，中文输入法 composition 结束或短延迟后再写回 `useAppStore`，避免异步持久化回写打断中间插入；主提示词输入区可把粘贴、DOM 拖入的图片 `File` 交给 `importReferenceFiles`，也可在 Tauri runtime 中把原生拖放路径读取成 payload 后交给 `importReferencePayloads`。`src/components/workspace/Composer.tsx:16` `src/components/workspace/Composer.tsx:33` `src/components/workspace/Composer.tsx:164` `src/store/app-store.ts:451`
 
 `CanvasArea` 负责把 runs 映射为分页网格条目，生成中占位、失败清理和结果 summary 都在这里汇总。`src/components/workspace/CanvasArea.tsx:21` `src/components/workspace/CanvasArea.tsx:71` `src/components/workspace/CanvasArea.tsx:119`
 
@@ -70,7 +70,7 @@ shadcn 配置固定为 TSX、CSS variables、lucide 图标和 `@/components/ui` 
 
 ### 2.5 库页面
 
-`GalleryPage` 负责跨会话历史查询、收藏筛选、批量下载/收藏/删除和“用此重做”；卡片内容复用 `ImageTile`，多选使用 shadcn/Radix Checkbox primitive。`src/components/gallery/GalleryPage.tsx:12` `src/components/gallery/GalleryPage.tsx:63` `src/components/gallery/GalleryPage.tsx:113`
+`GalleryPage` 负责跨会话历史查询、收藏筛选和批量下载/收藏/删除；卡片内容复用 `ImageTile`，多选使用 shadcn/Radix Checkbox primitive。`src/components/gallery/GalleryPage.tsx:12` `src/components/gallery/GalleryPage.tsx:63`
 
 `PromptLibraryPage` 负责提示词模板查询、新建/编辑、复制、套用和删除，页面级布局使用 Card/Input/Textarea/Button primitives。`src/components/prompts/PromptLibraryPage.tsx:11` `src/components/prompts/PromptLibraryPage.tsx:25` `src/components/prompts/PromptLibraryPage.tsx:82`
 
@@ -78,21 +78,14 @@ shadcn 配置固定为 TSX、CSS variables、lucide 图标和 `@/components/ui` 
 
 UI 不直接持久化业务数据。`useAppStore` 仍拥有视图、主题、设置、偏好、会话、runs、history、templates、生成状态、Codex skill 状态和 app update 状态。`src/store/app-store.ts:34` `src/store/app-store.ts:36`
 
-`useAppStore.createConversation(template)` 现在承认 `title/draftPrompt/referenceImages` 初始化字段；`reuseHistory(item)` 会从历史快照创建并激活新会话，而不是更新当前 active conversation。`src/store/app-store.ts:212` `src/store/app-store.ts:842`
-
-历史重做优先复制历史快照里的原始 `referenceImages`，并把 `dataUrl || storagePath` 作为可恢复条件；如果快照里已经缺了引用但源会话仍在，会从源会话补回可恢复的参考图。旧历史缺失项才会通过 toast 提示，但不会阻塞新会话创建。`src/store/app-store.ts:843` `src/store/app-store.ts:854`
-
 全局初始化通过 `load()` 拉取 settings、preferences、conversations、runs、history 和 templates；UI 页面只消费这些状态并调用 store actions。`src/store/app-store.ts:164`
 
 主题状态是 `darkMode`，切换 action 是 `toggleTheme()`；`App` 把它翻译为 `.dark` class。`src/store/app-store.ts:39` `src/store/app-store.ts:64` `src/store/app-store.ts:194` `src/App.tsx:102`
-
-远程参考图链接不进入业务模型；`readRemoteImageUrl` 在浏览器侧用 `fetch`、在 Tauri runtime 下调用 `read_remote_image_url`，两边都输出 `ReferenceImageFilePayload`，并在 `Content-Length` 或流式累计超过 20MB 时拒绝导入。`src/lib/platform.ts:409` `src/lib/platform.ts:630` `src-tauri/src/lib.rs:678` `src-tauri/src/lib.rs:703` `src-tauri/src/lib.rs:720`
 
 ## 4. 关键决策
 
 - UI 技术栈采用 Tailwind v4 + shadcn/ui，详见 `.codestable/compound/2026-05-24-decision-shadcn-tailwind-ui-stack.md`。这条决策约束后续页面优先扩展 `src/components/ui/*`，不恢复旧 `styles.css`。
 - 设置系统继续分为工作区高频参数与全局低频设置。这个边界在总入口已有记录，并由 `WorkspaceConfigPanel` 与 `GlobalSettingsModal` 两个组件实现。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:99` `src/components/settings/global/GlobalSettingsModal.tsx:42`
-- Gallery 历史重做采用“用此重做”语义：历史快照只用于初始化新会话，图生图历史会优先复制快照里的原始参考图，必要时从源会话补回，不回填点击前会话。`src/components/gallery/GalleryPage.tsx:120` `src/store/app-store.ts:842`
 
 ## 5. 代码锚点
 
@@ -104,19 +97,15 @@ UI 不直接持久化业务数据。`useAppStore` 仍拥有视图、主题、设
 - `src/App.tsx:App` — 应用生命周期、主题 class、全局设置弹窗、页面切换。
 - `src/components/layout/MainLayout.tsx:MainLayout` — 桌面 shell、导航、会话列表、参数栏列布局。
 - `src/components/workspace/Workspace.tsx:Workspace` — 工作台组合入口。
-- `src/components/gallery/GalleryPage.tsx:GalleryPage` — 图库历史列表、批量操作和“用此重做”入口。
 - `src/components/settings/workspace/WorkspaceConfigPanel.tsx:WorkspaceConfigPanel` — 高频生图参数栏。
 - `src/components/settings/global/GlobalSettingsModal.tsx:GlobalSettingsModal` — 低频全局设置容器。
-- `src/store/app-store.ts:reuseHistory` — 历史快照创建新会话的状态动作。
 
 ## 6. 已知约束 / 边界情况
 
 - UI 重写不得改变 `useAppStore` actions 的业务语义；视觉组件从 store 读取或调用 action，但不重新定义持久化边界。`src/store/app-store.ts:60`
 - 高频生图参数必须在工作区一层可达；Provider 完整维护在全局 Services tab 内。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:121` `src/components/settings/global/ServicesSettingsTab.tsx:118`
-- Gallery 历史重做不把历史输出图自动当参考图，也不覆盖点击前 active conversation；它只走创建新会话的链路，并只在源会话仍存在时补回参考图。`src/components/gallery/GalleryPage.tsx:120` `src/store/app-store.ts:842`
 - 应用是桌面工作台，当前 CSS 基线设置了 `1080px × 720px` 最小尺寸，不按移动端响应式重排。`src/index.css:126`
 - 隐藏文件上传 input 仍保留在 `Composer` 中，因为浏览器文件选择能力需要真实 file input 作为入口；粘贴 / 拖入图片只是新增入口，不能替代文件选择控件。Windows Tauri 默认文件拖放会先进入原生 `onDragDropEvent`，不能只依赖 HTML5 `DataTransfer.files`。`src/components/workspace/Composer.tsx:71` `src/components/workspace/Composer.tsx:167`
-- 链接导入只处理用户显式输入的 HTTP/HTTPS 图片 URL；不从 prompt 文本、网页 HTML 或多 URL 批量文本里自动抽取参考图，也不改变 Provider 服务配置。`src/components/workspace/Composer.tsx:206` `src/lib/platform.ts:409`
 
 ## 7. 相关文档
 

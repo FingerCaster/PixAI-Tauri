@@ -1,4 +1,4 @@
-import { Download, Heart, Search, Square, SquareCheckBig, Trash2, WandSparkles } from 'lucide-react'
+import { Download, Heart, Search, Square, SquareCheckBig, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -11,7 +11,7 @@ import { downloadHistoryImages } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
 
 export function GalleryPage() {
-  const { favoritesOnly, history, query, reloadHistory, setFavoritesOnly, setQuery, deleteHistory, reuseHistory, toggleFavorite, notify } = useAppStore()
+  const { favoritesOnly, history, query, reloadHistory, setFavoritesOnly, setQuery, deleteHistory, toggleFavorite, notify } = useAppStore()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const filtered = useMemo(() => history.filter((item) => {
     const q = query.trim().toLowerCase()
@@ -44,11 +44,6 @@ export function GalleryPage() {
       await deleteHistory(item.id)
     }
     setSelectedIds([])
-  }
-
-  const deleteSingle = async (id: string) => {
-    if (!(await confirmDestructiveAction('确认删除这张图片记录？'))) return
-    await deleteHistory(id)
   }
 
   const favoriteSelected = async (favorite: boolean) => {
@@ -116,16 +111,6 @@ export function GalleryPage() {
                   选择
                 </label>
                 <ImageTile item={item} />
-                <div className="gallery-actions mt-2 flex gap-2">
-                  <Button className="flex-1" variant="outline" type="button" onClick={() => void reuseHistory(item)}>
-                    <WandSparkles size={15} />
-                    用此重做
-                  </Button>
-                  <Button variant="outline" type="button" onClick={() => void deleteSingle(item.id)}>
-                    <Trash2 size={15} />
-                    删除
-                  </Button>
-                </div>
               </Card>
             ))}
           </div>

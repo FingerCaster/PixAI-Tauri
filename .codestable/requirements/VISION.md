@@ -7,7 +7,6 @@
 ## current
 
 - `app-update` - 让用户随时知道应用是不是最新版本，并能一键检查更新。
-- `history-reuse-workflow` - 从历史图片一键开新会话重做，不打断当前正在编辑的内容。
 - `reference-image-input` - 把图片直接贴进或拖进输入区，就能作为参考图继续创作。
 
 ## outdated
