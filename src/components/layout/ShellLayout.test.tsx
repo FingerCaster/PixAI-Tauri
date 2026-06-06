@@ -1,11 +1,18 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { MainLayout } from './MainLayout'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { CanvasShell } from './CanvasShell'
+import { SharedLibraryShell } from './SharedLibraryShell'
+import { WorkspaceShell } from './WorkspaceShell'
 import { useAppStore } from '../../store/app-store'
 import { resetCanvasStoreForTests, useCanvasStore } from '../../store/canvas-store'
 
-describe('MainLayout', () => {
+describe('Shell layouts', () => {
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.restoreAllMocks()
+  })
+
   beforeEach(() => {
     resetCanvasStoreForTests()
     useAppStore.setState({
@@ -80,102 +87,31 @@ describe('MainLayout', () => {
     })
   })
 
-  it('shows an update banner in the sidebar and opens general settings when clicked', async () => {
-    const onOpenGlobalSettings = vi.fn()
+  it('keeps the workspace parameter panel inside WorkspaceShell', async () => {
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
 
     await act(async () => {
       root.render(
-        <MainLayout onOpenGlobalSettings={onOpenGlobalSettings}>
+        <WorkspaceShell onOpenGlobalSettings={vi.fn()}>
           <main />
-        </MainLayout>
+        </WorkspaceShell>
       )
     })
 
-    const banner = document.querySelector<HTMLButtonElement>('.sidebar-update-banner')
-    expect(banner?.textContent).toContain('有新版本')
-    expect(banner?.textContent).toContain('v0.0.3 可更新')
+    expect(findButtonByText('参数栏')).toBeTruthy()
+    expect(document.body.textContent).toContain('新建会话')
+    expect(document.body.textContent).toContain('测试会话')
+    expect(document.body.textContent).toContain('基础参数')
 
     await act(async () => {
-      banner?.click()
+      findButtonByText('参数栏')?.click()
     })
 
-    expect(onOpenGlobalSettings).toHaveBeenCalledWith('general')
-
-    await act(async () => {
-      root.unmount()
-    })
-    host.remove()
-  })
-
-  it('asks before deleting a session from the sidebar', async () => {
-    const deleteConversation = vi.fn().mockResolvedValue(undefined)
-    const firstConversation = useAppStore.getState().conversations[0]
-    useAppStore.setState({
-      conversations: [
-        firstConversation,
-        {
-          ...firstConversation,
-          id: 'layout-delete-test',
-          title: '待删除会话',
-          updatedAt: '2026-05-24T00:01:00.000Z'
-        }
-      ],
-      deleteConversation
-    })
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-
-    await act(async () => {
-      root.render(
-        <MainLayout onOpenGlobalSettings={vi.fn()}>
-          <main />
-        </MainLayout>
-      )
-    })
-
-    await act(async () => {
-      document.querySelector<HTMLElement>('.session-delete')?.click()
-    })
-
-    expect(confirm).toHaveBeenCalledWith('确认删除这个会话？会话下的生成任务会一起删除，历史图片会保留在图库。')
-    expect(deleteConversation).not.toHaveBeenCalled()
-
-    confirm.mockReturnValue(true)
-    await act(async () => {
-      document.querySelector<HTMLElement>('.session-delete')?.click()
-    })
-
-    expect(deleteConversation).toHaveBeenCalledWith('layout-update-test')
-
-    await act(async () => {
-      root.unmount()
-    })
-    host.remove()
-  })
-
-  it('switches to the Canvas workbench mode from the top navigation', async () => {
-    const host = document.createElement('div')
-    document.body.appendChild(host)
-    const root = createRoot(host)
-
-    await act(async () => {
-      root.render(
-        <MainLayout onOpenGlobalSettings={vi.fn()}>
-          <main />
-        </MainLayout>
-      )
-    })
-
-    await act(async () => {
-      findButtonByText('Canvas')?.click()
-    })
-
-    expect(useAppStore.getState().view).toBe('canvas')
+    expect(useAppStore.getState().view).toBe('workspace')
+    expect(useAppStore.getState().settingsVisible).toBe(false)
+    expect(document.body.textContent).not.toContain('基础参数')
 
     await act(async () => {
       root.unmount()
@@ -211,9 +147,9 @@ describe('MainLayout', () => {
 
     await act(async () => {
       root.render(
-        <MainLayout onOpenGlobalSettings={vi.fn()}>
+        <WorkspaceShell onOpenGlobalSettings={vi.fn()}>
           <main />
-        </MainLayout>
+        </WorkspaceShell>
       )
     })
 
@@ -226,7 +162,7 @@ describe('MainLayout', () => {
     host.remove()
   })
 
-  it('shows canvas projects and a canvas-specific create action in canvas mode', async () => {
+  it('keeps canvas project navigation inside CanvasShell without a parameter panel button', async () => {
     useAppStore.setState({ view: 'canvas' })
     useCanvasStore.setState({
       activeProjectId: 'canvas-sidebar-project',
@@ -246,12 +182,13 @@ describe('MainLayout', () => {
 
     await act(async () => {
       root.render(
-        <MainLayout onOpenGlobalSettings={vi.fn()}>
+        <CanvasShell onOpenGlobalSettings={vi.fn()}>
           <main />
-        </MainLayout>
+        </CanvasShell>
       )
     })
 
+    expect(findButtonByText('参数栏')).toBeUndefined()
     expect(document.body.textContent).toContain('Canvas 项目')
     expect(document.body.textContent).toContain('分镜画布')
     expect(document.body.textContent).toContain('新建 Canvas 项目')
@@ -262,8 +199,55 @@ describe('MainLayout', () => {
     })
     host.remove()
   })
+
+  it('renders shared library pages without workspace or canvas sidebars', async () => {
+    useAppStore.setState({ view: 'gallery' })
+    useCanvasStore.setState({
+      projects: [
+        {
+          id: 'canvas-sidebar-project',
+          title: '分镜画布',
+          conversationId: 'canvas-hidden-conversation',
+          updatedAt: '2026-06-05T00:11:00.000Z',
+          nodeCount: 5
+        }
+      ]
+    })
+    const onOpenGlobalSettings = vi.fn()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <SharedLibraryShell onOpenGlobalSettings={onOpenGlobalSettings}>
+          <main>图库内容</main>
+        </SharedLibraryShell>
+      )
+    })
+
+    expect(document.body.textContent).toContain('图库内容')
+    expect(document.body.textContent).not.toContain('新建会话')
+    expect(document.body.textContent).not.toContain('新建 Canvas 项目')
+    expect(document.body.textContent).not.toContain('测试会话')
+    expect(document.body.textContent).not.toContain('分镜画布')
+
+    await act(async () => {
+      findButtonByTitle('全局设置')?.click()
+    })
+    expect(onOpenGlobalSettings).toHaveBeenCalledWith('general')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })
 
 function findButtonByText(text: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text))
+}
+
+function findButtonByTitle(title: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.title === title)
 }

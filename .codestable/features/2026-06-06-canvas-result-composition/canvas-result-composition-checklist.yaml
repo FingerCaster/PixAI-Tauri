@@ -1,0 +1,45 @@
+feature: 2026-06-06-canvas-result-composition
+created: 2026-06-06
+
+steps:
+  - action: "数据契约：扩展 Canvas metadata 和输入类型，更新 normalize"
+    exit_signal: "project service test 能保留合法 metadata 并过滤无效值"
+    status: done
+  - action: "Store 编排：重写 recordGeneratedResult 的 result node 选择与追加逻辑"
+    exit_signal: "显式 result node 多图不会覆盖，重复 history item 不重复创建"
+    status: done
+  - action: "App 桥接：生成成功时透传 request/batch 上下文"
+    exit_signal: "app-store 测试证明 n > 1 会形成多个 result node"
+    status: done
+  - action: "UI 表达：result node footer 显示编号、批量和 History"
+    exit_signal: "CanvasViewport 测试能看到 PNG/#/批量/History"
+    status: done
+  - action: "验证与 review：跑 typecheck、定向 vitest、浏览器 smoke 和代码 review"
+    exit_signal: "测试通过，浏览器中 result node 多结果展示正常，页面仍无视频/音频入口"
+    status: done
+
+checks:
+  - item: "空显式 result node 会承载第一张成功图"
+    source: 验收场景
+    status: passed
+  - item: "第二张不同 historyItemId 会追加 result node，不覆盖第一张"
+    source: 验收场景
+    status: passed
+  - item: "n > 1 返回多个 success item 时形成多个 result node 和 result connection"
+    source: 验收场景
+    status: passed
+  - item: "重复 historyItemId 复用已有 result node"
+    source: 编排约束
+    status: passed
+  - item: "requestIndex/batchIndex/promptVariant 写入 result metadata 并通过 normalize 保留"
+    source: 名词契约
+    status: passed
+  - item: "result node footer 显示格式、请求编号、批量编号和 History"
+    source: UI 契约
+    status: passed
+  - item: "结果节点仍可作为 reference-image 连到下游 generate node"
+    source: 验收场景
+    status: passed
+  - item: "不出现视频/音频入口，不修改 Provider/ImageService/history/reference/Tauri API"
+    source: 范围守护
+    status: passed

@@ -1,7 +1,7 @@
 import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent, FormEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { Image, Link2, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
+import { Image, ImagePlus, Link2, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -20,6 +20,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   const {
     enrichPrompt,
     generate,
+    addReferenceToCanvas,
     importReferenceFiles,
     importReferencePayloads,
     inspirePrompt,
@@ -203,6 +204,10 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     await removeReferenceImage(referenceId)
   }
 
+  async function onAddReferenceToCanvas(referenceId: string): Promise<void> {
+    await addReferenceToCanvas(referenceId)
+  }
+
   async function onRemoteImageSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
     const url = remoteImageUrl.trim()
@@ -279,6 +284,18 @@ export function Composer({ conversation, generating }: { conversation: Conversat
               <div className="reference-thumb group relative size-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted" key={reference.id}>
                 <button className="reference-preview-button h-full w-full" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
                   {source ? <img className="h-full w-full object-cover" src={source} alt={reference.name} /> : null}
+                </button>
+                <button
+                  className="reference-canvas-button absolute bottom-1 right-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-primary hover:text-primary-foreground group-hover:opacity-100"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void onAddReferenceToCanvas(reference.id)
+                  }}
+                  title="加入 Canvas"
+                  aria-label="加入 Canvas"
+                >
+                  <ImagePlus size={14} />
                 </button>
                 <button
                   className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"

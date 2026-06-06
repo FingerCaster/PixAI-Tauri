@@ -1,0 +1,51 @@
+roadmap: canvas-image-workbench-upgrade
+created: 2026-06-06
+
+items:
+  - slug: canvas-workbench-dock-shell
+    description: 把 CanvasWorkspace 改成画布优先界面，新增浮动 dock、轻量项目命令区和更好的空状态
+    depends_on: []
+    status: done
+    feature: 2026-06-06-canvas-workbench-dock-shell
+    minimal_loop: true
+    notes: 做完后 Canvas 像一个独立无限画布，并且不出现视频/音频入口
+
+  - slug: canvas-node-action-toolbar
+    description: 升级节点选中和 hover 操作，提供文本一键生成、图片预览和 mask、生成重试及统一删除入口
+    depends_on: [canvas-workbench-dock-shell]
+    status: done
+    feature: 2026-06-06-canvas-node-action-toolbar
+    minimal_loop: false
+    notes: 只处理 text/image/generate/config/batch/result 节点，不新增视频或音频节点
+
+  - slug: canvas-connection-create-menu
+    description: 从节点连接到空白位置时直接创建下游节点并自动连线
+    depends_on: [canvas-node-action-toolbar]
+    status: done
+    feature: 2026-06-06-canvas-connection-create-menu
+    minimal_loop: false
+    notes: text/image/result/config/batch 创建 generate，generate 创建 result；不创建空 image，不新增视频或音频节点
+
+  - slug: canvas-generation-context-panel
+    description: 为生成节点补输入摘要和上下文解析 polish，让上游文本、图片、配置、批量变体在生成前可见
+    depends_on: [canvas-connection-create-menu]
+    status: done
+    feature: 2026-06-06-canvas-generation-context-panel
+    minimal_loop: false
+    notes: summary 只展示，不写 store，不改变 Provider 或 ImageService
+
+  - slug: canvas-result-composition
+    description: 优化单次多图、批量和 workflow 结果在 Canvas 中的布局、标题、状态和可继续引用能力
+    depends_on: [canvas-generation-context-panel]
+    status: done
+    feature: 2026-06-06-canvas-result-composition
+    minimal_loop: false
+    notes: historyItemId 仍是最终结果事实源
+
+  - slug: canvas-asset-bridge-polish
+    description: polish 本地图片、历史图、图库图和当前参考图加入 Canvas 的入口与反馈
+    depends_on: [canvas-workbench-dock-shell]
+    status: done
+    feature: 2026-06-06-canvas-asset-bridge-polish
+    minimal_loop: false
+    notes: 不新增平行素材库事实源

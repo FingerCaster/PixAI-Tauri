@@ -34,6 +34,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 const originalImportReferenceFiles = useAppStore.getState().importReferenceFiles
 const originalImportReferencePayloads = useAppStore.getState().importReferencePayloads
+const originalAddReferenceToCanvas = useAppStore.getState().addReferenceToCanvas
 const originalNotify = useAppStore.getState().notify
 const originalRemoveReferenceImage = useAppStore.getState().removeReferenceImage
 
@@ -82,6 +83,7 @@ describe('Composer', () => {
     })
     useAppStore.setState({
       activeConversationId: null,
+      addReferenceToCanvas: originalAddReferenceToCanvas,
       importReferenceFiles: originalImportReferenceFiles,
       importReferencePayloads: originalImportReferencePayloads,
       notify: originalNotify,
@@ -141,6 +143,40 @@ describe('Composer', () => {
 
     expect(document.querySelector('[aria-label="参考图预览"]')).not.toBeNull()
     expect(document.querySelector<HTMLImageElement>('.image-preview-stage img')?.src).toContain('data:image/png;base64,cmVmZXJlbmNl')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('adds a reference image thumbnail to canvas without opening preview or removing it', async () => {
+    const addReferenceToCanvas = vi.fn().mockResolvedValue(undefined)
+    const removeReferenceImage = vi.fn().mockResolvedValue(undefined)
+    useAppStore.setState({ addReferenceToCanvas, removeReferenceImage })
+    const { host, root } = await renderComposer(
+      conversation({
+        referenceImages: [
+          {
+            id: 'reference-canvas-button-test',
+            name: 'canvas-button.png',
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,Y2FudmFz',
+            fileSizeBytes: 6,
+            createdAt: '2026-06-06T00:00:00.000Z'
+          }
+        ]
+      })
+    )
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="加入 Canvas"]')?.click()
+      await flushPromises()
+    })
+
+    expect(addReferenceToCanvas).toHaveBeenCalledWith('reference-canvas-button-test')
+    expect(removeReferenceImage).not.toHaveBeenCalled()
+    expect(document.querySelector('[aria-label="参考图预览"]')).toBeNull()
 
     await act(async () => {
       root.unmount()

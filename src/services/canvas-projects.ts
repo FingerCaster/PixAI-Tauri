@@ -19,6 +19,7 @@ const MIN_ZOOM = 0.2
 const MAX_ZOOM = 3
 const MIN_NODE_SIZE = 80
 const MAX_NODE_SIZE = 640
+const DEFAULT_GENERATE_NODE_HEIGHT = 340
 const MAX_NODE_TITLE_LENGTH = 80
 const MAX_NODE_CONTENT_LENGTH = 500_000
 
@@ -184,6 +185,17 @@ export function normalizeCanvasConnections(input: CanvasConnection[], nodes: Can
   return connections
 }
 
+export function canvasConnectionKindForNodes(fromNode: CanvasNodeData, toNode: CanvasNodeData): CanvasConnectionKind | null {
+  if (toNode.type === 'generate') {
+    if (fromNode.type === 'text') return 'prompt'
+    if (fromNode.type === 'image' || fromNode.type === 'result') return 'reference-image'
+    if (fromNode.type === 'config') return 'config'
+    if (fromNode.type === 'batch') return 'batch'
+  }
+  if (fromNode.type === 'generate' && toNode.type === 'result') return 'result'
+  return null
+}
+
 export function wouldCreateCanvasConnectionCycle(
   connections: Array<Pick<CanvasConnection, 'fromNodeId' | 'toNodeId'>>,
   fromNodeId: string,
@@ -269,7 +281,16 @@ function normalizeImportedProject(input: unknown, conversationId: string): Canva
 function normalizeImportedCanvasNodes(input: CanvasNodeData[]): CanvasNodeData[] {
   return normalizeCanvasNodes(input).map((node) => {
     if ((node.type !== 'generate' && node.type !== 'result') || node.metadata.status !== 'running') return node
-    const { runId: _runId, requestIndex: _requestIndex, errorMessage: _errorMessage, historyItemId: _historyItemId, ...metadata } = node.metadata
+    const {
+      runId: _runId,
+      requestIndex: _requestIndex,
+      batchRootId: _batchRootId,
+      batchIndex: _batchIndex,
+      promptVariant: _promptVariant,
+      errorMessage: _errorMessage,
+      historyItemId: _historyItemId,
+      ...metadata
+    } = node.metadata
     return {
       ...node,
       metadata: {
@@ -329,11 +350,13 @@ function normalizeCanvasConnection(input: unknown, nodeById: Map<string, CanvasN
   const fromNode = nodeById.get(fromNodeId)
   const toNode = nodeById.get(toNodeId)
   if (!id || !fromNode || !toNode || fromNodeId === toNodeId) return null
+  const kind = canvasConnectionKindForNodes(fromNode, toNode)
+  if (!kind) return null
   return {
     id,
     fromNodeId,
     toNodeId,
-    kind: normalizeConnectionKind(input.kind, fromNode)
+    kind
   }
 }
 
@@ -346,15 +369,6 @@ function normalizeCanvasNodeType(value: unknown): CanvasNodeType | null {
     || value === 'result'
     ? value
     : null
-}
-
-function normalizeConnectionKind(value: unknown, fromNode: CanvasNodeData): CanvasConnectionKind {
-  if (value === 'prompt' || value === 'reference-image' || value === 'result' || value === 'config' || value === 'batch') return value
-  if (fromNode.type === 'generate') return 'result'
-  if (fromNode.type === 'image' || fromNode.type === 'result') return 'reference-image'
-  if (fromNode.type === 'config') return 'config'
-  if (fromNode.type === 'batch') return 'batch'
-  return 'prompt'
 }
 
 function normalizeCanvasNodeMetadata(type: CanvasNodeType, input: Record<string, unknown>): CanvasNodeMetadata | null {
@@ -373,6 +387,9 @@ function normalizeCanvasNodeMetadata(type: CanvasNodeType, input: Record<string,
     ...(n ? { n } : {}),
     ...(stringValue(input.runId) ? { runId: stringValue(input.runId) } : {}),
     ...(Number.isInteger(input.requestIndex) && Number(input.requestIndex) >= 0 ? { requestIndex: Number(input.requestIndex) } : {}),
+    ...(stringValue(input.batchRootId) ? { batchRootId: stringValue(input.batchRootId) } : {}),
+    ...(Number.isInteger(input.batchIndex) && Number(input.batchIndex) >= 0 ? { batchIndex: Number(input.batchIndex) } : {}),
+    ...(stringValue(input.promptVariant) ? { promptVariant: stringValue(input.promptVariant).slice(0, MAX_NODE_CONTENT_LENGTH) } : {}),
     ...(stringValue(input.errorMessage) ? { errorMessage: stringValue(input.errorMessage) } : {}),
     ...(stringValue(input.referenceImageId) ? { referenceImageId: stringValue(input.referenceImageId) } : {}),
     ...(stringValue(input.historyItemId) ? { historyItemId: stringValue(input.historyItemId) } : {}),
@@ -456,7 +473,7 @@ function defaultNodeWidth(type: CanvasNodeType): number {
 }
 
 function defaultNodeHeight(type: CanvasNodeType): number {
-  if (type === 'generate') return 260
+  if (type === 'generate') return DEFAULT_GENERATE_NODE_HEIGHT
   if (type === 'batch' || type === 'result') return 220
   if (type === 'config') return 250
   return type === 'image' ? 180 : 140

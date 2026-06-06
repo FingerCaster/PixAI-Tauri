@@ -1,0 +1,45 @@
+feature: 2026-06-06-canvas-asset-bridge-polish
+created: 2026-06-06
+
+steps:
+  - action: "文档与 roadmap：落 design/checklist，items.yaml 标记 in-progress"
+    exit_signal: "feature 文档存在，YAML 校验通过"
+    status: done
+  - action: "Store 编排：实现 addReferenceToCanvas"
+    exit_signal: "store 测试证明参考图能写入 Canvas image node、切换 Canvas、保留 metadata"
+    status: done
+  - action: "UI 入口：Composer reference thumb 增加加入 Canvas 按钮"
+    exit_signal: "组件测试点击按钮会调用 addReferenceToCanvas(reference.id)，预览/移除仍独立"
+    status: done
+  - action: "反馈 polish：本地/历史/参考图加入 Canvas toast 更明确"
+    exit_signal: "成功 toast 能区分参考图/历史图/本地图片路径"
+    status: done
+  - action: "验证与 review：跑 typecheck、定向 vitest、浏览器 smoke 和代码 review"
+    exit_signal: "测试通过，浏览器里当前参考图可加入 Canvas，页面仍无视频/音频入口"
+    status: done
+
+checks:
+  - item: "当前参考图点击加入 Canvas 会创建带 referenceImageId 的 Canvas image node 并切到 canvas"
+    source: 验收场景
+    status: passed
+  - item: "同一参考图重复加入不重复创建 Canvas image node"
+    source: 编排约束
+    status: passed
+  - item: "本地 storagePath 参考图使用安全展示源"
+    source: 验收场景
+    status: passed
+  - item: "reference 不存在或图片源不可用时不创建 Canvas node，并显示失败 toast"
+    source: 错误语义
+    status: passed
+  - item: "reference thumb 的预览、移除、加入 Canvas 三个按钮互不串扰"
+    source: UI 契约
+    status: passed
+  - item: "历史 / 图库图继续通过 addHistoryToCanvas 和 reference.addFromHistoryMany"
+    source: 范围守护
+    status: passed
+  - item: "本地图片 dock 仍能加入 Canvas，反馈可见"
+    source: 验收场景
+    status: passed
+  - item: "不出现视频/音频入口，不修改 Provider/ImageService/history/reference API/Tauri API"
+    source: 范围守护
+    status: passed

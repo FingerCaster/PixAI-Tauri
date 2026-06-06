@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CanvasConnection, CanvasNodeData, CanvasProject } from '../shared/types'
-import { buildCanvasGenerationPlanForNode, buildCanvasWorkflowPlan, MAX_CANVAS_WORKFLOW_REQUESTS } from './canvas-workflow'
+import { buildCanvasGenerationPlanForNode, buildCanvasWorkflowPlan, MAX_CANVAS_WORKFLOW_REQUESTS, summarizeCanvasGenerationInput } from './canvas-workflow'
 
 function project(nodes: CanvasNodeData[], connections: CanvasConnection[] = []): CanvasProject {
   return {
@@ -71,5 +71,73 @@ describe('canvas workflow planning', () => {
     expect(plan.items).toEqual([])
     expect(plan.missingPromptNodeIds).toEqual([emptyGenerate.id])
     expect(plan.skippedRunningNodeIds).toEqual([runningGenerate.id])
+  })
+
+  it('summarizes prompt, reference image, config, batch, and request context for generate nodes', () => {
+    const promptOne = node('prompt-one', 'text', 'connected one')
+    const promptTwo = node('prompt-two', 'text', 'connected two')
+    const blankPrompt = node('blank-prompt', 'text', '   ')
+    const image = node('image-reference', 'image', 'data:image/png;base64,AA==')
+    const result = node('result-reference', 'result', '', { referenceImageId: 'reference-from-result' })
+    const emptyImage = node('empty-image-reference', 'image', '')
+    const config = node('config-node', 'config', '', { ratio: '16:9', quality: 'high', n: 9 })
+    const batch = node('batch-node', 'batch', 'variant one\n\nvariant two')
+    const generate = node('generate-node', 'generate', 'local prompt')
+    const summary = summarizeCanvasGenerationInput(project([
+      promptOne,
+      promptTwo,
+      blankPrompt,
+      image,
+      result,
+      emptyImage,
+      config,
+      batch,
+      generate
+    ], [
+      { id: 'prompt-one-link', fromNodeId: promptOne.id, toNodeId: generate.id, kind: 'prompt' },
+      { id: 'prompt-two-link', fromNodeId: promptTwo.id, toNodeId: generate.id, kind: 'prompt' },
+      { id: 'blank-prompt-link', fromNodeId: blankPrompt.id, toNodeId: generate.id, kind: 'prompt' },
+      { id: 'image-link', fromNodeId: image.id, toNodeId: generate.id, kind: 'reference-image' },
+      { id: 'result-link', fromNodeId: result.id, toNodeId: generate.id, kind: 'reference-image' },
+      { id: 'empty-image-link', fromNodeId: emptyImage.id, toNodeId: generate.id, kind: 'reference-image' },
+      { id: 'config-link', fromNodeId: config.id, toNodeId: generate.id, kind: 'config' },
+      { id: 'batch-link', fromNodeId: batch.id, toNodeId: generate.id, kind: 'batch' }
+    ]), generate.id)
+
+    expect(summary).toEqual({
+      promptTextCount: 2,
+      localPromptPresent: true,
+      referenceImageCount: 2,
+      configCount: 1,
+      batchVariantCount: 2,
+      requestCount: 2,
+      missingPrompt: false,
+      hasConfig: true,
+      config: { ratio: '16:9', quality: 'high', n: 4 }
+    })
+  })
+
+  it('summarizes missing prompt and invalid nodes without changing workflow semantics', () => {
+    const emptyGenerate = node('empty-generate', 'generate', '')
+    const text = node('text-node', 'text', 'standalone')
+    const emptySummary = summarizeCanvasGenerationInput(project([emptyGenerate, text]), emptyGenerate.id)
+    const invalidSummary = summarizeCanvasGenerationInput(project([emptyGenerate, text]), text.id)
+
+    expect(emptySummary).toMatchObject({
+      promptTextCount: 0,
+      localPromptPresent: false,
+      referenceImageCount: 0,
+      configCount: 0,
+      batchVariantCount: 0,
+      requestCount: 1,
+      missingPrompt: true,
+      hasConfig: false,
+      config: {}
+    })
+    expect(buildCanvasWorkflowPlan(project([emptyGenerate])).missingPromptNodeIds).toEqual([emptyGenerate.id])
+    expect(invalidSummary).toMatchObject({
+      requestCount: 0,
+      missingPrompt: true
+    })
   })
 })

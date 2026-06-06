@@ -26,6 +26,18 @@ export type CanvasWorkflowPlan = {
   exceedsBudget: boolean
 }
 
+export type CanvasGenerationInputSummary = {
+  promptTextCount: number
+  localPromptPresent: boolean
+  referenceImageCount: number
+  configCount: number
+  batchVariantCount: number
+  requestCount: number
+  missingPrompt: boolean
+  hasConfig: boolean
+  config: CanvasGenerationConfigPatch
+}
+
 export function buildCanvasGenerationPlanForNode(
   project: CanvasProject,
   nodeId: string,
@@ -50,6 +62,29 @@ export function buildCanvasGenerationPlanForNode(
     batchVariant: variant,
     batchIndex: index
   }))
+}
+
+export function summarizeCanvasGenerationInput(project: CanvasProject, nodeId: string): CanvasGenerationInputSummary {
+  const node = project.nodes.find((item) => item.id === nodeId)
+  if (!node || node.type !== 'generate') return emptyCanvasGenerationInputSummary()
+
+  const promptTexts = resolveConnectedPromptTexts(project, node.id)
+  const configNodes = resolveConnectedConfigNodes(project, node.id)
+  const batchVariants = resolveBatchVariants(project, node.id)
+  const allPlanItems = buildCanvasGenerationPlanForNode(project, node.id, 'all')
+  const runnableItemCount = allPlanItems.filter((item) => item.prompt.trim()).length
+
+  return {
+    promptTextCount: promptTexts.length,
+    localPromptPresent: Boolean(node.metadata.content.trim()),
+    referenceImageCount: resolveReferenceImageInputCount(project, node.id),
+    configCount: configNodes.length,
+    batchVariantCount: batchVariants.length,
+    requestCount: allPlanItems.length,
+    missingPrompt: runnableItemCount === 0,
+    hasConfig: configNodes.length > 0,
+    config: resolveConfigPatchFromNodes(configNodes)
+  }
 }
 
 export function buildCanvasWorkflowPlan(project: CanvasProject): CanvasWorkflowPlan {
@@ -80,14 +115,17 @@ export function buildCanvasWorkflowPlan(project: CanvasProject): CanvasWorkflowP
 }
 
 function resolveBasePrompt(project: CanvasProject, generateNode: CanvasNodeData): string {
+  return joinPromptParts([...resolveConnectedPromptTexts(project, generateNode.id), generateNode.metadata.content])
+}
+
+function resolveConnectedPromptTexts(project: CanvasProject, generateNodeId: string): string[] {
   const nodeById = new Map(project.nodes.map((node) => [node.id, node]))
-  const connectedPrompts = project.connections
-    .filter((connection) => connection.toNodeId === generateNode.id && connection.kind === 'prompt')
+  return project.connections
+    .filter((connection) => connection.toNodeId === generateNodeId && connection.kind === 'prompt')
     .map((connection) => nodeById.get(connection.fromNodeId))
     .filter((node): node is CanvasNodeData => Boolean(node && node.type === 'text'))
     .map((node) => node.metadata.content.trim())
     .filter(Boolean)
-  return joinPromptParts([...connectedPrompts, generateNode.metadata.content])
 }
 
 function resolveBatchVariants(project: CanvasProject, generateNodeId: string): string[] {
@@ -100,11 +138,19 @@ function resolveBatchVariants(project: CanvasProject, generateNodeId: string): s
 }
 
 function resolveConfigPatch(project: CanvasProject, generateNodeId: string): CanvasGenerationConfigPatch {
+  return resolveConfigPatchFromNodes(resolveConnectedConfigNodes(project, generateNodeId))
+}
+
+function resolveConnectedConfigNodes(project: CanvasProject, generateNodeId: string): CanvasNodeData[] {
   const nodeById = new Map(project.nodes.map((node) => [node.id, node]))
   return project.connections
     .filter((connection) => connection.toNodeId === generateNodeId && connection.kind === 'config')
     .map((connection) => nodeById.get(connection.fromNodeId))
     .filter((node): node is CanvasNodeData => Boolean(node && node.type === 'config'))
+}
+
+function resolveConfigPatchFromNodes(nodes: CanvasNodeData[]): CanvasGenerationConfigPatch {
+  return nodes
     .reduce<CanvasGenerationConfigPatch>((patch, node) => ({
       ...patch,
       ...(node.metadata.ratio ? { ratio: node.metadata.ratio } : {}),
@@ -113,6 +159,35 @@ function resolveConfigPatch(project: CanvasProject, generateNodeId: string): Can
     }), {})
 }
 
+function resolveReferenceImageInputCount(project: CanvasProject, generateNodeId: string): number {
+  const nodeById = new Map(project.nodes.map((node) => [node.id, node]))
+  return project.connections
+    .filter((connection) => connection.toNodeId === generateNodeId && connection.kind === 'reference-image')
+    .map((connection) => nodeById.get(connection.fromNodeId))
+    .filter((node): node is CanvasNodeData => Boolean(node && (node.type === 'image' || node.type === 'result')))
+    .filter((node) => Boolean(
+      node.metadata.content ||
+      node.metadata.referenceImageId ||
+      node.metadata.historyItemId ||
+      node.metadata.storagePath
+    ))
+    .length
+}
+
 function joinPromptParts(parts: Array<string | undefined>): string {
   return parts.map((part) => (part || '').trim()).filter(Boolean).join('\n\n')
+}
+
+function emptyCanvasGenerationInputSummary(): CanvasGenerationInputSummary {
+  return {
+    promptTextCount: 0,
+    localPromptPresent: false,
+    referenceImageCount: 0,
+    configCount: 0,
+    batchVariantCount: 0,
+    requestCount: 0,
+    missingPrompt: true,
+    hasConfig: false,
+    config: {}
+  }
 }

@@ -1,14 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Download, HelpCircle, ImageUp, ListPlus, PanelTop, Play, RotateCcw, SlidersHorizontal, Type, Upload, WandSparkles } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
 import { DownloadCanceledError, downloadTextFile, readTextFile, storeDataUrlFile } from '../../lib/platform'
 import { pixaiApi } from '../../services/app-api'
 import { useAppStore } from '../../store/app-store'
@@ -34,6 +29,8 @@ export function CanvasWorkspace() {
   const addResultNode = useCanvasStore((state) => state.addResultNode)
   const addTextNode = useCanvasStore((state) => state.addTextNode)
   const addConnection = useCanvasStore((state) => state.addConnection)
+  const addConnectedNode = useCanvasStore((state) => state.addConnectedNode)
+  const createGenerateNodeFromText = useCanvasStore((state) => state.createGenerateNodeFromText)
   const deleteConnection = useCanvasStore((state) => state.deleteConnection)
   const deleteNode = useCanvasStore((state) => state.deleteNode)
   const moveNode = useCanvasStore((state) => state.moveNode)
@@ -60,14 +57,16 @@ export function CanvasWorkspace() {
 
   if (!activeProject) {
     return (
-      <section className="canvas-workspace grid h-full place-items-center bg-background p-4">
-        <div className="grid gap-3 rounded-xl border border-dashed border-border bg-card px-6 py-8 text-center shadow-sm">
-          <div className="text-base font-semibold">还没有 Canvas 项目</div>
-          <div className="text-sm text-muted-foreground">新建一个项目后，就可以开始排布节点、连线和生成。</div>
-          <Button type="button" className="justify-self-center" onClick={() => void createCanvasProject()}>
-            新建 Canvas 项目
-          </Button>
-        </div>
+      <section className="canvas-workspace relative h-full overflow-hidden bg-background">
+        <CanvasEmptyWorkbench
+          title="还没有 Canvas 项目"
+          description="新建一个画布后，就可以用文本、参考图和生成节点连续迭代图片。"
+          action={(
+            <Button type="button" onClick={() => void createCanvasProject()}>
+              新建 Canvas 项目
+            </Button>
+          )}
+        />
       </section>
     )
   }
@@ -119,115 +118,14 @@ export function CanvasWorkspace() {
     if (message) notify(message)
   }
 
+  const generateFromTextNode = async (nodeId: string) => {
+    const generateNodeId = await createGenerateNodeFromText(nodeId)
+    if (!generateNodeId) return
+    await generateCanvasNode(generateNodeId)
+  }
+
   return (
-    <section className="canvas-workspace grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden bg-background p-4">
-      <header className="grid gap-2 rounded-lg border border-border bg-card px-3 py-2 shadow-sm lg:min-h-14 lg:grid-cols-[minmax(170px,1fr)_auto_auto] lg:items-center">
-        <div className="grid min-w-0 gap-0.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-sm font-semibold">{activeProject?.title || 'Canvas 项目'}</h1>
-            <Badge variant="outline" className="h-5 px-1.5 text-[11px]">Canvas</Badge>
-          </div>
-          <p className="truncate text-[11px] text-muted-foreground">
-            {activeProject ? `${nodeCount} 个节点 · ${projects.length || 1} 个项目` : '正在加载项目'}
-          </p>
-        </div>
-        <div className="flex min-w-0 items-center justify-center gap-1 rounded-lg border border-border bg-muted/35 p-1">
-          <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={!activeProject || loading} onClick={() => void addTextNode()}>
-            <Type />
-            文本
-          </Button>
-          <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={!activeProject || loading} onClick={() => imageInputRef.current?.click()}>
-            <ImageUp />
-            图片
-          </Button>
-          <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={!activeProject || loading} onClick={() => void addGenerateNode()}>
-            <WandSparkles />
-            生成
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={!activeProject || loading}>
-                <SlidersHorizontal />
-                高级
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-40">
-              <DropdownMenuItem onSelect={() => void addConfigNode()}>
-                <SlidersHorizontal />
-                配置节点
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void addBatchNode()}>
-                <ListPlus />
-                批量节点
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => void addResultNode()}>
-                <PanelTop />
-                结果节点
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-        <div className="flex shrink-0 items-center justify-end gap-1.5">
-          {errorMessage ? <Badge variant="destructive" className="max-w-36 truncate">{errorMessage}</Badge> : null}
-          <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={!activeProject || loading} onClick={() => setGuideOpen(true)} title="查看 Canvas 引导">
-            <HelpCircle />
-            引导
-          </Button>
-          <Button className="h-8 px-2 text-xs" type="button" variant="outline" disabled={!activeProject || loading} onClick={() => void exportCanvasProject()}>
-            <Download />
-            导出
-          </Button>
-          <Button className="h-8 px-2 text-xs" type="button" variant="outline" disabled={loading} onClick={() => projectInputRef.current?.click()}>
-            <Upload />
-            导入
-          </Button>
-          <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={!activeProject || loading} onClick={() => void resetViewport()} title="重置视图">
-            <RotateCcw />
-            重置
-          </Button>
-          <Button className="h-8 px-3 text-xs font-semibold" type="button" disabled={!activeProject || loading} onClick={() => void runCanvasWorkflow()}>
-            <Play />
-            运行
-          </Button>
-          <input
-            ref={imageInputRef}
-            className="hidden"
-            type="file"
-            accept="image/*"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              event.currentTarget.value = ''
-              if (!file) return
-              void readImageFile(file)
-                .then(async (image) => {
-                  await addImageNode({
-                    name: file.name,
-                    dataUrl: image.dataUrl,
-                    mimeType: image.mimeType,
-                    fileSizeBytes: image.fileSizeBytes,
-                    storagePath: image.storagePath,
-                    naturalWidth: image.naturalWidth,
-                    naturalHeight: image.naturalHeight
-                  })
-                  notify('图片已加入 Canvas')
-                })
-                .catch((error) => notify(error instanceof Error ? error.message : '图片加入 Canvas 失败'))
-            }}
-          />
-          <input
-            ref={projectInputRef}
-            className="hidden"
-            type="file"
-            accept="application/json,.json"
-            onChange={(event) => {
-              const file = event.target.files?.[0]
-              event.currentTarget.value = ''
-              if (!file) return
-              void importCanvasProjectFile(file)
-            }}
-          />
-        </div>
-      </header>
+    <section className="canvas-workspace relative flex h-full min-h-0 overflow-hidden bg-background">
       <CanvasViewport
         viewport={activeProject?.viewport || { x: 0, y: 0, k: 1 }}
         nodes={activeProject?.nodes || []}
@@ -239,11 +137,76 @@ export function CanvasWorkspace() {
         onNodeMetadataChange={(nodeId, patch) => updateNodeMetadata(nodeId, patch)}
         onNodeDelete={(nodeId) => deleteNode(nodeId)}
         onConnectionAdd={(fromNodeId, toNodeId) => addConnection(fromNodeId, toNodeId)}
+        onConnectionCreate={(input) => addConnectedNode(input)}
         onConnectionDelete={(connectionId) => deleteConnection(connectionId)}
         onTextNodeEnrich={(nodeId) => enrichCanvasTextNode(nodeId)}
+        onTextNodeGenerate={(nodeId) => generateFromTextNode(nodeId)}
         onGenerateNodeRun={(nodeId) => generateCanvasNode(nodeId)}
         generationPreviews={generationPreviews}
         promptEnriching={promptEnriching}
+        emptyTitle="从这里开始生图"
+        emptyDescription="先添加文本或图片，再放入生成节点；连接后点击生成节点运行。"
+      />
+      <CanvasProjectCommandBar
+        title={activeProject?.title || 'Canvas 项目'}
+        nodeCount={nodeCount}
+        projectCount={projects.length || 1}
+        errorMessage={errorMessage}
+        disabled={!activeProject || loading}
+        onOpenGuide={() => setGuideOpen(true)}
+        onExport={() => void exportCanvasProject()}
+        onImport={() => projectInputRef.current?.click()}
+      />
+      <CanvasWorkbenchDock
+        disabled={!activeProject || loading}
+        onAddText={() => void addTextNode()}
+        onAddImage={() => imageInputRef.current?.click()}
+        onAddGenerate={() => void addGenerateNode()}
+        onAddConfig={() => void addConfigNode()}
+        onAddBatch={() => void addBatchNode()}
+        onAddResult={() => void addResultNode()}
+        onRunWorkflow={() => void runCanvasWorkflow()}
+        onResetViewport={() => void resetViewport()}
+        onImport={() => projectInputRef.current?.click()}
+        onExport={() => void exportCanvasProject()}
+        onOpenGuide={() => setGuideOpen(true)}
+      />
+      <input
+        ref={imageInputRef}
+        className="hidden"
+        type="file"
+        accept="image/*"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.currentTarget.value = ''
+          if (!file) return
+          void readImageFile(file)
+            .then(async (image) => {
+              await addImageNode({
+                name: file.name,
+                dataUrl: image.dataUrl,
+                mimeType: image.mimeType,
+                fileSizeBytes: image.fileSizeBytes,
+                storagePath: image.storagePath,
+                naturalWidth: image.naturalWidth,
+                naturalHeight: image.naturalHeight
+              })
+              notify(`本地图片已加入 Canvas：${file.name}`)
+            })
+            .catch((error) => notify(error instanceof Error ? error.message : '图片加入 Canvas 失败'))
+        }}
+      />
+      <input
+        ref={projectInputRef}
+        className="hidden"
+        type="file"
+        accept="application/json,.json"
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          event.currentTarget.value = ''
+          if (!file) return
+          void importCanvasProjectFile(file)
+        }}
       />
       <CanvasGuideDialog
         open={guideOpen}
@@ -251,6 +214,158 @@ export function CanvasWorkspace() {
         onSkip={() => closeGuide('之后可点击工具栏“引导”重新查看 Canvas 用法')}
       />
     </section>
+  )
+}
+
+function CanvasProjectCommandBar({
+  title,
+  nodeCount,
+  projectCount,
+  errorMessage,
+  disabled,
+  onOpenGuide,
+  onExport,
+  onImport
+}: {
+  title: string
+  nodeCount: number
+  projectCount: number
+  errorMessage: string | null
+  disabled: boolean
+  onOpenGuide: () => void
+  onExport: () => void
+  onImport: () => void
+}) {
+  return (
+    <div className="pointer-events-none absolute left-4 top-4 z-30 flex max-w-[min(620px,calc(100%-2rem))] items-center gap-2">
+      <div className="pointer-events-auto grid min-w-0 gap-1 rounded-xl border border-border bg-background/88 px-3 py-2 shadow-sm backdrop-blur">
+        <div className="flex min-w-0 items-center gap-2">
+          <h1 className="truncate text-sm font-semibold">{title}</h1>
+          <Badge variant="outline" className="h-5 px-1.5 text-[11px]">Canvas</Badge>
+        </div>
+        <p className="truncate text-[11px] text-muted-foreground">
+          {nodeCount} 个节点 · {projectCount} 个画布
+        </p>
+      </div>
+      {errorMessage ? <Badge variant="destructive" className="pointer-events-auto max-w-52 truncate shadow-sm">{errorMessage}</Badge> : null}
+      <div className="pointer-events-auto inline-flex items-center gap-1 rounded-xl border border-border bg-background/88 p-1 shadow-sm backdrop-blur">
+        <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={disabled} onClick={onOpenGuide} title="查看 Canvas 引导">
+          <HelpCircle />
+          引导
+        </Button>
+        <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={disabled} onClick={onExport}>
+          <Download />
+          导出
+        </Button>
+        <Button className="h-8 px-2 text-xs" type="button" variant="ghost" disabled={disabled} onClick={onImport}>
+          <Upload />
+          导入
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function CanvasWorkbenchDock({
+  disabled,
+  onAddText,
+  onAddImage,
+  onAddGenerate,
+  onAddConfig,
+  onAddBatch,
+  onAddResult,
+  onRunWorkflow,
+  onResetViewport,
+  onImport,
+  onExport,
+  onOpenGuide
+}: {
+  disabled: boolean
+  onAddText: () => void
+  onAddImage: () => void
+  onAddGenerate: () => void
+  onAddConfig: () => void
+  onAddBatch: () => void
+  onAddResult: () => void
+  onRunWorkflow: () => void
+  onResetViewport: () => void
+  onImport: () => void
+  onExport: () => void
+  onOpenGuide: () => void
+}) {
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center px-4">
+      <div className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-2xl border border-border bg-background/90 p-1.5 shadow-xl backdrop-blur">
+        <DockButton label="文本" icon={<Type />} disabled={disabled} onClick={onAddText} />
+        <DockButton label="图片" icon={<ImageUp />} disabled={disabled} onClick={onAddImage} />
+        <DockButton label="生成" icon={<WandSparkles />} disabled={disabled} onClick={onAddGenerate} />
+        <DockDivider />
+        <DockButton label="配置" icon={<SlidersHorizontal />} disabled={disabled} onClick={onAddConfig} />
+        <DockButton label="批量" icon={<ListPlus />} disabled={disabled} onClick={onAddBatch} />
+        <DockButton label="结果" icon={<PanelTop />} disabled={disabled} onClick={onAddResult} />
+        <DockDivider />
+        <DockButton label="运行" icon={<Play />} disabled={disabled} onClick={onRunWorkflow} strong />
+        <DockButton label="重置" icon={<RotateCcw />} disabled={disabled} onClick={onResetViewport} />
+        <DockDivider />
+        <DockButton label="导入" icon={<Upload />} disabled={disabled} onClick={onImport} />
+        <DockButton label="导出" icon={<Download />} disabled={disabled} onClick={onExport} />
+        <DockButton label="引导" icon={<HelpCircle />} disabled={disabled} onClick={onOpenGuide} />
+      </div>
+    </div>
+  )
+}
+
+function DockButton({
+  label,
+  icon,
+  disabled,
+  onClick,
+  strong = false
+}: {
+  label: string
+  icon: ReactNode
+  disabled: boolean
+  onClick: () => void
+  strong?: boolean
+}) {
+  return (
+    <Button
+      className="h-10 shrink-0 px-3 text-xs"
+      type="button"
+      variant={strong ? 'default' : 'ghost'}
+      disabled={disabled}
+      title={label}
+      onClick={onClick}
+    >
+      {icon}
+      {label}
+    </Button>
+  )
+}
+
+function DockDivider() {
+  return <div className="mx-1 h-7 w-px shrink-0 bg-border" />
+}
+
+function CanvasEmptyWorkbench({ title, description, action }: { title: string; description: string; action: ReactNode }) {
+  return (
+    <div className="relative grid h-full place-items-center overflow-hidden bg-background p-6">
+      <div
+        className="absolute inset-0 opacity-55"
+        style={{
+          backgroundImage:
+            'linear-gradient(color-mix(in oklch, var(--border) 52%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklch, var(--border) 52%, transparent) 1px, transparent 1px)',
+          backgroundSize: '32px 32px'
+        }}
+      />
+      <div className="relative grid max-w-md gap-4 rounded-2xl border border-dashed border-border bg-background/88 px-7 py-8 text-center shadow-sm backdrop-blur">
+        <div className="grid gap-2">
+          <div className="text-lg font-semibold">{title}</div>
+          <div className="text-sm leading-6 text-muted-foreground">{description}</div>
+        </div>
+        <div className="justify-self-center">{action}</div>
+      </div>
+    </div>
   )
 }
 

@@ -169,11 +169,21 @@ describe('CanvasProjectService', () => {
         maskUpdatedAt: '2026-06-06T10:00:00.000Z'
       }
     }
+    const generateNode: CanvasNodeData = {
+      id: 'node-generate',
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 620, y: 80 },
+      width: 300,
+      height: 260,
+      metadata: { content: '', status: 'idle' }
+    }
     const connections: CanvasConnection[] = [
-      { id: 'connection-ok', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' },
-      { id: 'connection-duplicate', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' },
+      { id: 'connection-ok', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' },
+      { id: 'connection-duplicate', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' },
       { id: 'connection-self', fromNodeId: textNode.id, toNodeId: textNode.id, kind: 'prompt' },
       { id: 'connection-cycle', fromNodeId: imageNode.id, toNodeId: textNode.id, kind: 'reference-image' },
+      { id: 'connection-invalid-target', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' },
       { id: 'connection-missing', fromNodeId: textNode.id, toNodeId: 'missing', kind: 'prompt' }
     ]
 
@@ -181,18 +191,19 @@ describe('CanvasProjectService', () => {
       nodes: [
         textNode,
         imageNode,
+        generateNode,
         { ...imageNode, id: 'bad-image', metadata: { content: 'not-an-image' } },
         { ...textNode, id: textNode.id, metadata: { content: 'duplicate' } }
       ],
       connections
     })
 
-    expect(updated.nodes).toHaveLength(2)
+    expect(updated.nodes).toHaveLength(3)
     expect(updated.nodes[0]).toMatchObject({
       id: textNode.id,
       position: { x: 10, y: 21 }
     })
-    expect(updated.connections).toEqual([{ id: 'connection-ok', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' }])
+    expect(updated.connections).toEqual([{ id: 'connection-ok', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }])
     expect(updated.nodes[1].metadata).toMatchObject({
       content: 'browser-memory/references/ref.png',
       referenceImageId: 'reference-1',
@@ -202,8 +213,12 @@ describe('CanvasProjectService', () => {
       maskUpdatedAt: '2026-06-06T10:00:00.000Z'
     })
     await expect(service.get(created.id)).resolves.toMatchObject({
-      nodes: expect.arrayContaining([expect.objectContaining({ id: textNode.id }), expect.objectContaining({ id: imageNode.id })]),
-      connections: [{ id: 'connection-ok', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' }]
+      nodes: expect.arrayContaining([
+        expect.objectContaining({ id: textNode.id }),
+        expect.objectContaining({ id: imageNode.id }),
+        expect.objectContaining({ id: generateNode.id })
+      ]),
+      connections: [{ id: 'connection-ok', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }]
     })
   })
 
@@ -248,25 +263,30 @@ describe('CanvasProjectService', () => {
         requestIndex: 0
       }
     }
-    const imageNode: CanvasNodeData = {
+    const resultNode: CanvasNodeData = {
       id: 'node-result',
-      type: 'image',
+      type: 'result',
       title: '结果图',
       position: { x: 464, y: 120 },
       width: 240,
       height: 180,
       metadata: {
         content: 'data:image/png;base64,AA==',
+        status: 'succeeded',
         historyItemId: 'history-canvas-result',
+        requestIndex: 1,
+        batchRootId: 'node-generate',
+        batchIndex: 0,
+        promptVariant: 'variant one',
         mimeType: 'image/png',
         fileSizeBytes: 2
       }
     }
 
     const updated = await service.update(created.id, {
-      nodes: [generateNode, imageNode],
+      nodes: [generateNode, resultNode],
       connections: [
-        { id: 'connection-result', fromNodeId: generateNode.id, toNodeId: imageNode.id, kind: 'result' }
+        { id: 'connection-result', fromNodeId: generateNode.id, toNodeId: resultNode.id, kind: 'result' }
       ]
     })
 
@@ -279,8 +299,15 @@ describe('CanvasProjectService', () => {
       }
     })
     expect(updated.connections).toEqual([
-      { id: 'connection-result', fromNodeId: generateNode.id, toNodeId: imageNode.id, kind: 'result' }
+      { id: 'connection-result', fromNodeId: generateNode.id, toNodeId: resultNode.id, kind: 'result' }
     ])
+    expect(updated.nodes[1].metadata).toMatchObject({
+      historyItemId: 'history-canvas-result',
+      requestIndex: 1,
+      batchRootId: 'node-generate',
+      batchIndex: 0,
+      promptVariant: 'variant one'
+    })
   })
 
   it('persists advanced workflow nodes and normalizes running result imports', async () => {
@@ -313,10 +340,19 @@ describe('CanvasProjectService', () => {
           metadata: { content: 'one\n\ntwo' }
         },
         {
+          id: 'node-generate',
+          type: 'generate',
+          title: '',
+          position: { x: 600, y: 20 },
+          width: 300,
+          height: 260,
+          metadata: { content: '', status: 'idle' }
+        },
+        {
           id: 'node-result',
           type: 'result',
           title: '',
-          position: { x: 600, y: 20 },
+          position: { x: 960, y: 20 },
           width: 260,
           height: 220,
           metadata: {
@@ -337,13 +373,14 @@ describe('CanvasProjectService', () => {
         }
       ],
       connections: [
-        { id: 'connection-config', fromNodeId: 'node-config', toNodeId: 'node-result', kind: 'config' },
-        { id: 'connection-batch', fromNodeId: 'node-batch', toNodeId: 'node-result', kind: 'batch' },
-        { id: 'connection-result-reference', fromNodeId: 'node-result', toNodeId: 'node-config', kind: 'reference-image' }
+        { id: 'connection-config', fromNodeId: 'node-config', toNodeId: 'node-generate', kind: 'config' },
+        { id: 'connection-batch', fromNodeId: 'node-batch', toNodeId: 'node-generate', kind: 'batch' },
+        { id: 'connection-result', fromNodeId: 'node-generate', toNodeId: 'node-result', kind: 'result' },
+        { id: 'connection-result-reference', fromNodeId: 'node-result', toNodeId: 'node-generate', kind: 'reference-image' }
       ]
     }, 'conversation-advanced-import')
 
-    expect(imported.nodes).toHaveLength(3)
+    expect(imported.nodes).toHaveLength(4)
     expect(imported.nodes[0]).toMatchObject({
       type: 'config',
       title: '配置节点',
@@ -361,6 +398,11 @@ describe('CanvasProjectService', () => {
       metadata: { content: 'one\n\ntwo' }
     })
     expect(imported.nodes[2]).toMatchObject({
+      type: 'generate',
+      title: '生成节点',
+      metadata: { status: 'idle' }
+    })
+    expect(imported.nodes[3]).toMatchObject({
       type: 'result',
       title: '结果节点',
       metadata: {
@@ -370,9 +412,9 @@ describe('CanvasProjectService', () => {
         fileSizeBytes: 2
       }
     })
-    expect(imported.nodes[2].metadata.runId).toBeUndefined()
-    expect(imported.nodes[2].metadata.historyItemId).toBeUndefined()
-    expect(imported.connections.map((connection) => connection.kind)).toEqual(['config', 'batch'])
+    expect(imported.nodes[3].metadata.runId).toBeUndefined()
+    expect(imported.nodes[3].metadata.historyItemId).toBeUndefined()
+    expect(imported.connections.map((connection) => connection.kind)).toEqual(['config', 'batch', 'result'])
   })
 
   it('recovers invalid persisted canvas state without leaking into app data', async () => {

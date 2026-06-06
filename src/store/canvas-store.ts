@@ -1,8 +1,8 @@
 import { create } from 'zustand'
 import { createId } from '../lib/ids'
-import { DEFAULT_CANVAS_VIEWPORT, wouldCreateCanvasConnectionCycle } from '../services/canvas-projects'
+import { DEFAULT_CANVAS_VIEWPORT, canvasConnectionKindForNodes, wouldCreateCanvasConnectionCycle } from '../services/canvas-projects'
 import { pixaiApi } from '../services/app-api'
-import type { CanvasConnectionKind, CanvasNodeData, CanvasNodeMetadata, CanvasPoint, CanvasProject, CanvasProjectSummary, CanvasViewport } from '../shared/types'
+import type { CanvasNodeData, CanvasNodeMetadata, CanvasNodeType, CanvasPoint, CanvasProject, CanvasProjectSummary, CanvasViewport } from '../shared/types'
 
 export type CanvasImageNodeInput = {
   name: string
@@ -14,6 +14,26 @@ export type CanvasImageNodeInput = {
   referenceImageId?: string
   historyItemId?: string
   storagePath?: string | null
+  requestIndex?: number
+  batchRootId?: string
+  batchIndex?: number
+  promptVariant?: string
+}
+
+export type CanvasFailedResultInput = {
+  errorMessage: string
+  runId?: string
+  historyItemId?: string
+  requestIndex?: number
+  batchRootId?: string
+  batchIndex?: number
+  promptVariant?: string
+}
+
+export type CanvasConnectedNodeInput = {
+  sourceNodeId: string
+  type: CanvasNodeType
+  position: CanvasPoint
 }
 
 export type CanvasStoreState = {
@@ -37,6 +57,8 @@ export type CanvasStoreState = {
   addConfigNode: () => Promise<void>
   addBatchNode: () => Promise<void>
   addResultNode: () => Promise<void>
+  createGenerateNodeFromText: (textNodeId: string) => Promise<string | null>
+  addConnectedNode: (input: CanvasConnectedNodeInput) => Promise<CanvasNodeData | null>
   updateNodeContent: (nodeId: string, content: string) => Promise<void>
   updateNodeMetadata: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => Promise<void>
   updateGenerateNodeState: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => Promise<void>
@@ -47,6 +69,7 @@ export type CanvasStoreState = {
   deleteConnection: (connectionId: string) => Promise<void>
   addGeneratedImageNode: (sourceNodeId: string, input: CanvasImageNodeInput) => Promise<void>
   recordGeneratedResult: (sourceNodeId: string, input: CanvasImageNodeInput) => Promise<void>
+  recordFailedResult: (sourceNodeId: string, input: CanvasFailedResultInput) => Promise<void>
 }
 
 const initialCanvasStoreState = {
@@ -61,6 +84,7 @@ let defaultProjectRequest: { conversationId: string; promise: Promise<CanvasProj
 type CanvasSet = (partial: Partial<CanvasStoreState>) => void
 const IMAGE_NODE_WIDTH = 320
 const IMAGE_NODE_HEIGHT = 260
+const GENERATE_NODE_HEIGHT = 340
 
 export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   ...initialCanvasStoreState,
@@ -234,6 +258,53 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       nodes: [...project.nodes, createResultNode(project)]
     }))
   },
+  createGenerateNodeFromText: async (textNodeId) => {
+    let generatedNodeId: string | null = null
+    const persisted = await persistActiveProject(set, get, (project) => {
+      const textNode = project.nodes.find((node) => node.id === textNodeId && node.type === 'text')
+      if (!textNode || !textNode.metadata.content.trim()) return project
+      const generateNode = createGenerateNodeAt({
+        x: textNode.position.x + textNode.width + 72,
+        y: textNode.position.y
+      })
+      generatedNodeId = generateNode.id
+      return {
+        ...project,
+        nodes: [...project.nodes, generateNode],
+        connections: [
+          ...project.connections,
+          { id: createId('canvas-connection'), fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }
+        ]
+      }
+    })
+    return persisted ? generatedNodeId : null
+  },
+  addConnectedNode: async (input) => {
+    let connectedNode: CanvasNodeData | null = null
+    const persisted = await persistActiveProject(set, get, (project) => {
+      const sourceNode = project.nodes.find((node) => node.id === input.sourceNodeId)
+      if (!sourceNode) return project
+      const targetNode = createBlankCanvasNodeAt(input.type, normalizePoint(input.position))
+      if (!targetNode) return project
+      const kind = canvasConnectionKindForNodes(sourceNode, targetNode)
+      if (!kind) return project
+      const exists = project.connections.some(
+        (connection) => connection.fromNodeId === sourceNode.id && connection.toNodeId === targetNode.id && connection.kind === kind
+      )
+      if (exists) return project
+      if (wouldCreateCanvasConnectionCycle(project.connections, sourceNode.id, targetNode.id)) return project
+      connectedNode = targetNode
+      return {
+        ...project,
+        nodes: [...project.nodes, targetNode],
+        connections: [
+          ...project.connections,
+          { id: createId('canvas-connection'), fromNodeId: sourceNode.id, toNodeId: targetNode.id, kind }
+        ]
+      }
+    })
+    return persisted ? connectedNode : null
+  },
   updateNodeContent: async (nodeId, content) => {
     await persistActiveProject(set, get, (project) => ({
       ...project,
@@ -285,7 +356,8 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       const fromNode = project.nodes.find((node) => node.id === fromNodeId)
       const toNode = project.nodes.find((node) => node.id === toNodeId)
       if (!fromNode || !toNode) return project
-      const kind = connectionKindForNode(fromNode)
+      const kind = canvasConnectionKindForNodes(fromNode, toNode)
+      if (!kind) return project
       const exists = project.connections.some(
         (connection) => connection.fromNodeId === fromNodeId && connection.toNodeId === toNodeId && connection.kind === kind
       )
@@ -311,50 +383,87 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     await persistActiveProject(set, get, (project) => {
       const sourceNode = project.nodes.find((node) => node.id === sourceNodeId && node.type === 'generate')
       if (!sourceNode) return project
-      const resultNodes = findConnectedResultNodes(project, sourceNodeId)
-      const nodesWithSourceState = project.nodes.map((node) => {
+      const connectedResultNodes = findConnectedResultNodes(project, sourceNodeId)
+      const existingResultNode = findResultNodeBinding(project, input)
+      const targetResultNode = existingResultNode || findWritableConnectedResultNode(connectedResultNodes, input)
+      const resultNode = targetResultNode || createGeneratedResultNodeAt(input, nextResultNodePosition(sourceNode, project))
+      const resultNodeExists = project.nodes.some((node) => node.id === resultNode.id)
+      const requestIndex = validCanvasResultIndex(input.requestIndex)
+      const nodes = project.nodes.map((node) => {
         if (node.id === sourceNodeId) {
-          return { ...node, metadata: { ...node.metadata, status: 'succeeded' as const, historyItemId: input.historyItemId, errorMessage: '' } }
-        }
-        if (resultNodes.some((resultNode) => resultNode.id === node.id)) {
           return {
             ...node,
             metadata: {
               ...node.metadata,
-              content: input.dataUrl,
               status: 'succeeded' as const,
-              historyItemId: input.historyItemId,
-              errorMessage: '',
-              ...(input.storagePath ? { storagePath: input.storagePath } : {}),
-              mimeType: input.mimeType,
-              fileSizeBytes: input.fileSizeBytes,
-              ...(input.naturalWidth ? { naturalWidth: input.naturalWidth } : {}),
-              ...(input.naturalHeight ? { naturalHeight: input.naturalHeight } : {}),
-              maskDataUrl: '',
-              maskUpdatedAt: ''
+              ...(input.historyItemId ? { historyItemId: input.historyItemId } : {}),
+              ...(requestIndex != null ? { requestIndex } : {}),
+              errorMessage: ''
             }
+          }
+        }
+        if (node.id === resultNode.id) {
+          return {
+            ...node,
+            title: resultNodeTitle(input),
+            metadata: generatedResultMetadata(node.metadata, input)
           }
         }
         return node
       })
-      if (resultNodes.length > 0) {
-        return {
-          ...project,
-          nodes: nodesWithSourceState
-        }
-      }
-      const existingNode = findImageNodeBinding({ ...project, nodes: nodesWithSourceState }, input)
-      const imageNode = existingNode || createImageNodeAt(input, nextResultNodePosition(sourceNode, project))
-      const nodes = nodesWithSourceState.concat(existingNode ? [] : [imageNode])
       const hasResultConnection = project.connections.some(
-        (connection) => connection.fromNodeId === sourceNodeId && connection.toNodeId === imageNode.id && connection.kind === 'result'
+        (connection) => connection.fromNodeId === sourceNodeId && connection.toNodeId === resultNode.id && connection.kind === 'result'
       )
       return {
         ...project,
-        nodes,
+        nodes: resultNodeExists ? nodes : nodes.concat(resultNode),
         connections: hasResultConnection
           ? project.connections
-          : [...project.connections, { id: createId('canvas-connection'), fromNodeId: sourceNodeId, toNodeId: imageNode.id, kind: 'result' }]
+          : [...project.connections, { id: createId('canvas-connection'), fromNodeId: sourceNodeId, toNodeId: resultNode.id, kind: 'result' }]
+      }
+    })
+  },
+  recordFailedResult: async (sourceNodeId, input) => {
+    await persistActiveProject(set, get, (project) => {
+      const sourceNode = project.nodes.find((node) => node.id === sourceNodeId && node.type === 'generate')
+      if (!sourceNode) return project
+      const connectedResultNodes = findConnectedResultNodes(project, sourceNodeId)
+      const existingResultNode = findFailedResultNodeBinding(project, sourceNodeId, input)
+      const targetResultNode = existingResultNode || findWritableConnectedResultNode(connectedResultNodes, input)
+      const resultNode = targetResultNode || createFailedResultNodeAt(input, nextResultNodePosition(sourceNode, project))
+      const resultNodeExists = project.nodes.some((node) => node.id === resultNode.id)
+      const requestIndex = validCanvasResultIndex(input.requestIndex)
+      const nodes = project.nodes.map((node) => {
+        if (node.id === sourceNodeId) {
+          return {
+            ...node,
+            metadata: {
+              ...node.metadata,
+              status: 'failed' as const,
+              ...(input.runId ? { runId: input.runId } : {}),
+              ...(requestIndex != null ? { requestIndex } : {}),
+              errorMessage: input.errorMessage
+            }
+          }
+        }
+        if (node.id === resultNode.id) {
+          return {
+            ...node,
+            title: failedResultNodeTitle(input),
+            metadata: failedResultMetadata(node.metadata, input)
+          }
+        }
+        return node
+      })
+      const hasResultConnection = project.connections.some(
+        (connection) => connection.fromNodeId === sourceNodeId && connection.toNodeId === resultNode.id && connection.kind === 'result'
+      )
+      return {
+        ...project,
+        nodes: resultNodeExists ? nodes : nodes.concat(resultNode),
+        connections: hasResultConnection
+          ? project.connections
+          : [...project.connections, { id: createId('canvas-connection'), fromNodeId: sourceNodeId, toNodeId: resultNode.id, kind: 'result' }]
       }
     })
   }
@@ -427,10 +536,11 @@ async function persistActiveProject(
   set: CanvasSet,
   get: typeof useCanvasStore.getState,
   mutate: (project: CanvasProject) => CanvasProject
-): Promise<void> {
+): Promise<boolean> {
   const project = get().activeProject
-  if (!project) return
+  if (!project) return false
   const next = mutate(project)
+  if (next === project) return false
   set({ activeProject: next, activeProjectId: next.id, errorMessage: null })
   try {
     const updated = await pixaiApi.canvas.update(project.id, {
@@ -443,8 +553,10 @@ async function persistActiveProject(
       activeProjectId: updated.id,
       projects: updateProjectSummary(get().projects, updated)
     })
+    return true
   } catch (error) {
     set({ activeProject: project, activeProjectId: project.id, errorMessage: getCanvasErrorMessage(error) })
+    return false
   }
 }
 
@@ -485,14 +597,42 @@ function createImageNodeAt(input: CanvasImageNodeInput, position: CanvasPoint): 
   }
 }
 
+function createGeneratedResultNodeAt(input: CanvasImageNodeInput, position: CanvasPoint): CanvasNodeData {
+  return {
+    id: createId('canvas-node'),
+    type: 'result',
+    title: resultNodeTitle(input),
+    position,
+    width: IMAGE_NODE_WIDTH,
+    height: IMAGE_NODE_HEIGHT,
+    metadata: generatedResultMetadata({}, input)
+  }
+}
+
+function createFailedResultNodeAt(input: CanvasFailedResultInput, position: CanvasPoint): CanvasNodeData {
+  return {
+    id: createId('canvas-node'),
+    type: 'result',
+    title: failedResultNodeTitle(input),
+    position,
+    width: IMAGE_NODE_WIDTH,
+    height: IMAGE_NODE_HEIGHT,
+    metadata: failedResultMetadata({}, input)
+  }
+}
+
 function createGenerateNode(project: CanvasProject): CanvasNodeData {
+  return createGenerateNodeAt(nextNodePosition(project))
+}
+
+function createGenerateNodeAt(position: CanvasPoint): CanvasNodeData {
   return {
     id: createId('canvas-node'),
     type: 'generate',
     title: '生成节点',
-    position: nextNodePosition(project),
+    position,
     width: 300,
-    height: 260,
+    height: GENERATE_NODE_HEIGHT,
     metadata: {
       content: '',
       status: 'idle'
@@ -529,11 +669,15 @@ function createBatchNode(project: CanvasProject): CanvasNodeData {
 }
 
 function createResultNode(project: CanvasProject): CanvasNodeData {
+  return createResultNodeAt(nextNodePosition(project))
+}
+
+function createResultNodeAt(position: CanvasPoint): CanvasNodeData {
   return {
     id: createId('canvas-node'),
     type: 'result',
     title: '结果节点',
-    position: nextNodePosition(project),
+    position,
     width: IMAGE_NODE_WIDTH,
     height: IMAGE_NODE_HEIGHT,
     metadata: {
@@ -543,6 +687,45 @@ function createResultNode(project: CanvasProject): CanvasNodeData {
   }
 }
 
+function createBlankCanvasNodeAt(type: CanvasNodeType, position: CanvasPoint): CanvasNodeData | null {
+  if (type === 'generate') return createGenerateNodeAt(position)
+  if (type === 'result') return createResultNodeAt(position)
+  if (type === 'text') {
+    return {
+      id: createId('canvas-node'),
+      type: 'text',
+      title: '文本节点',
+      position,
+      width: 220,
+      height: 140,
+      metadata: { content: '新文本' }
+    }
+  }
+  if (type === 'config') {
+    return {
+      id: createId('canvas-node'),
+      type: 'config',
+      title: '配置节点',
+      position,
+      width: 260,
+      height: 250,
+      metadata: { content: '' }
+    }
+  }
+  if (type === 'batch') {
+    return {
+      id: createId('canvas-node'),
+      type: 'batch',
+      title: '批量节点',
+      position,
+      width: 260,
+      height: 220,
+      metadata: { content: '' }
+    }
+  }
+  return null
+}
+
 function findImageNodeBinding(project: CanvasProject, input: CanvasImageNodeInput): CanvasNodeData | null {
   return project.nodes.find((node) => {
     if (node.type !== 'image') return false
@@ -550,6 +733,44 @@ function findImageNodeBinding(project: CanvasProject, input: CanvasImageNodeInpu
     if (input.historyItemId && node.metadata.historyItemId === input.historyItemId) return true
     return false
   }) || null
+}
+
+function findResultNodeBinding(project: CanvasProject, input: CanvasImageNodeInput): CanvasNodeData | null {
+  return project.nodes.find((node) => (
+    node.type === 'result' && Boolean(input.historyItemId) && node.metadata.historyItemId === input.historyItemId
+  )) || null
+}
+
+function findFailedResultNodeBinding(project: CanvasProject, sourceNodeId: string, input: CanvasFailedResultInput): CanvasNodeData | null {
+  const connectedIds = new Set(
+    project.connections
+      .filter((connection) => connection.fromNodeId === sourceNodeId && connection.kind === 'result')
+      .map((connection) => connection.toNodeId)
+  )
+  const requestIndex = validCanvasResultIndex(input.requestIndex)
+  const batchIndex = validCanvasResultIndex(input.batchIndex)
+  return project.nodes.find((node) => {
+    if (node.type !== 'result' || !connectedIds.has(node.id)) return false
+    if (input.historyItemId && node.metadata.historyItemId === input.historyItemId) return true
+    if (node.metadata.status !== 'failed') return false
+    const sameRequest = validCanvasResultIndex(node.metadata.requestIndex) === requestIndex
+    const sameBatch = validCanvasResultIndex(node.metadata.batchIndex) === batchIndex
+    const sameBatchRoot = (node.metadata.batchRootId || '') === (input.batchRootId || '')
+    return sameRequest && sameBatch && sameBatchRoot
+  }) || null
+}
+
+function findWritableConnectedResultNode(resultNodes: CanvasNodeData[], input: { historyItemId?: string }): CanvasNodeData | null {
+  if (input.historyItemId) {
+    const matchingResultNode = resultNodes.find((node) => node.metadata.historyItemId === input.historyItemId)
+    if (matchingResultNode) return matchingResultNode
+  }
+  return resultNodes.find((node) => (
+    !node.metadata.content &&
+    !node.metadata.historyItemId &&
+    !node.metadata.errorMessage &&
+    (!node.metadata.status || node.metadata.status === 'idle')
+  )) || null
 }
 
 function findConnectedResultNodes(project: CanvasProject, sourceNodeId: string): CanvasNodeData[] {
@@ -600,12 +821,66 @@ function imageNodeTitle(input: CanvasImageNodeInput): string {
   return title || '图片节点'
 }
 
-function connectionKindForNode(node: CanvasNodeData): CanvasConnectionKind {
-  if (node.type === 'generate') return 'result'
-  if (node.type === 'image' || node.type === 'result') return 'reference-image'
-  if (node.type === 'config') return 'config'
-  if (node.type === 'batch') return 'batch'
-  return 'prompt'
+function resultNodeTitle(input: CanvasImageNodeInput): string {
+  const requestIndex = validCanvasResultIndex(input.requestIndex)
+  const batchIndex = validCanvasResultIndex(input.batchIndex)
+  if (batchIndex != null && requestIndex != null) return `批量 ${batchIndex + 1} · #${requestIndex + 1}`
+  if (batchIndex != null) return `批量结果 #${batchIndex + 1}`
+  if (requestIndex != null) return `生成结果 #${requestIndex + 1}`
+  const title = imageNodeTitle(input)
+  return title === '图片节点' ? '生成结果' : title
+}
+
+function failedResultNodeTitle(input: CanvasFailedResultInput): string {
+  const requestIndex = validCanvasResultIndex(input.requestIndex)
+  const batchIndex = validCanvasResultIndex(input.batchIndex)
+  if (batchIndex != null && requestIndex != null) return `批量 ${batchIndex + 1} · #${requestIndex + 1} 失败`
+  if (batchIndex != null) return `批量 ${batchIndex + 1} 失败`
+  if (requestIndex != null) return `生成结果 #${requestIndex + 1} 失败`
+  return '生成失败'
+}
+
+function generatedResultMetadata(base: Partial<CanvasNodeMetadata>, input: CanvasImageNodeInput): CanvasNodeMetadata {
+  const requestIndex = validCanvasResultIndex(input.requestIndex)
+  const batchIndex = validCanvasResultIndex(input.batchIndex)
+  return {
+    content: input.dataUrl,
+    status: 'succeeded',
+    ...(base.referenceImageId ? { referenceImageId: base.referenceImageId } : {}),
+    ...(input.historyItemId ? { historyItemId: input.historyItemId } : {}),
+    ...(input.storagePath ? { storagePath: input.storagePath } : {}),
+    mimeType: input.mimeType,
+    fileSizeBytes: input.fileSizeBytes,
+    ...(input.naturalWidth ? { naturalWidth: input.naturalWidth } : {}),
+    ...(input.naturalHeight ? { naturalHeight: input.naturalHeight } : {}),
+    ...(requestIndex != null ? { requestIndex } : {}),
+    ...(input.batchRootId?.trim() ? { batchRootId: input.batchRootId.trim() } : {}),
+    ...(batchIndex != null ? { batchIndex } : {}),
+    ...(input.promptVariant?.trim() ? { promptVariant: input.promptVariant.trim() } : {}),
+    maskDataUrl: '',
+    maskUpdatedAt: ''
+  }
+}
+
+function failedResultMetadata(base: Partial<CanvasNodeMetadata>, input: CanvasFailedResultInput): CanvasNodeMetadata {
+  const requestIndex = validCanvasResultIndex(input.requestIndex)
+  const batchIndex = validCanvasResultIndex(input.batchIndex)
+  return {
+    content: '',
+    status: 'failed',
+    ...(base.referenceImageId ? { referenceImageId: base.referenceImageId } : {}),
+    ...(input.runId ? { runId: input.runId } : {}),
+    ...(input.historyItemId ? { historyItemId: input.historyItemId } : {}),
+    ...(requestIndex != null ? { requestIndex } : {}),
+    ...(input.batchRootId?.trim() ? { batchRootId: input.batchRootId.trim() } : {}),
+    ...(batchIndex != null ? { batchIndex } : {}),
+    ...(input.promptVariant?.trim() ? { promptVariant: input.promptVariant.trim() } : {}),
+    errorMessage: input.errorMessage
+  }
+}
+
+function validCanvasResultIndex(value: unknown): number | null {
+  return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : null
 }
 
 function getCanvasErrorMessage(error: unknown): string {

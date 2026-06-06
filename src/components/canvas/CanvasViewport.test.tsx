@@ -45,13 +45,22 @@ describe('CanvasViewport', () => {
       id: 'node-image',
       type: 'image',
       title: '图片节点',
-      position: { x: 20, y: 224 },
+      position: { x: 20, y: 264 },
       width: 240,
       height: 180,
       metadata: { content: 'data:image/png;base64,AA==', mimeType: 'image/png', fileSizeBytes: 2 }
     }
+    const generateNode: CanvasNodeData = {
+      id: 'node-generate',
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 320, y: 24 },
+      width: 300,
+      height: 260,
+      metadata: { content: '', status: 'idle' }
+    }
     const connections: CanvasConnection[] = [
-      { id: 'connection-one', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' }
+      { id: 'connection-one', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }
     ]
     const onViewportCommit = vi.fn()
     const onConnectionAdd = vi.fn()
@@ -66,7 +75,7 @@ describe('CanvasViewport', () => {
       root.render(
         <CanvasViewport
           viewport={{ x: 0, y: 0, k: 1 }}
-          nodes={[textNode, imageNode]}
+          nodes={[textNode, generateNode, imageNode]}
           connections={connections}
           onViewportCommit={onViewportCommit}
           onConnectionAdd={onConnectionAdd}
@@ -83,7 +92,8 @@ describe('CanvasViewport', () => {
     expect(document.querySelector('img')?.className).toContain('object-contain')
     expect(document.querySelectorAll('path.cursor-pointer')).toHaveLength(1)
     expect(document.querySelector('path.cursor-pointer')?.getAttribute('stroke')).toBe('currentColor')
-    expect(document.querySelector('path.cursor-pointer')?.getAttribute('d')).toBe('M 202 42 C -44 42, -44 242, 28 242')
+    expect(document.querySelector('path.cursor-pointer')?.getAttribute('d')).toBe('M 232 42 C 304 42, 256 42, 328 42')
+    expect(document.querySelector('svg')?.textContent).toContain('提示词')
     expect(document.querySelector('svg')?.classList.contains('text-primary')).toBe(true)
 
     await act(async () => {
@@ -92,12 +102,12 @@ describe('CanvasViewport', () => {
     expect(onViewportCommit).not.toHaveBeenCalled()
 
     await act(async () => {
-      findButtonByTitle('开始连线')?.click()
+      findButtonByTitle('从提示词端口连线')?.click()
     })
     await act(async () => {
-      findButtonsByTitle('完成连线')[1]?.click()
+      findButtonByTitle('连接为提示词')?.click()
     })
-    expect(onConnectionAdd).toHaveBeenCalledWith(textNode.id, imageNode.id)
+    expect(onConnectionAdd).toHaveBeenCalledWith(textNode.id, generateNode.id)
 
     await act(async () => {
       Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('丰富'))?.click()
@@ -176,7 +186,8 @@ describe('CanvasViewport', () => {
       )
     })
 
-    expect(findButtonsByTitle('开始连线')).toHaveLength(2)
+    expect(findButtonsByTitle('从提示词端口连线')).toHaveLength(1)
+    expect(findButtonsByTitle('从参考图端口连线')).toHaveLength(1)
     expect(findButtonsByTitle('删除节点')).toHaveLength(2)
     const imageElement = document.querySelector<HTMLElement>('[data-canvas-node-id="node-long-title-image"]')
     const imageTitle = imageElement?.querySelector<HTMLElement>('span.truncate')
@@ -194,6 +205,289 @@ describe('CanvasViewport', () => {
       findButtonsByTitle('删除节点')[1]?.click()
     })
     expect(onNodeDelete).toHaveBeenCalledWith(imageNode.id)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('runs node actions from the floating action toolbar', async () => {
+    const textNode: CanvasNodeData = {
+      id: 'node-toolbar-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'toolbar prompt' }
+    }
+    const emptyTextNode: CanvasNodeData = {
+      id: 'node-toolbar-empty-text',
+      type: 'text',
+      title: '空文本节点',
+      position: { x: 20, y: 224 },
+      width: 220,
+      height: 140,
+      metadata: { content: '   ' }
+    }
+    const imageNode: CanvasNodeData = {
+      id: 'node-toolbar-image',
+      type: 'image',
+      title: '图片节点',
+      position: { x: 300, y: 24 },
+      width: 240,
+      height: 180,
+      metadata: { content: 'data:image/png;base64,AA==', mimeType: 'image/png', fileSizeBytes: 2 }
+    }
+    const resultNode: CanvasNodeData = {
+      id: 'node-toolbar-result',
+      type: 'result',
+      title: '结果节点',
+      position: { x: 580, y: 24 },
+      width: 260,
+      height: 220,
+      metadata: {
+        content: 'data:image/png;base64,cmVzdWx0',
+        status: 'succeeded',
+        mimeType: 'image/png',
+        fileSizeBytes: 6
+      }
+    }
+    const failedGenerateNode: CanvasNodeData = {
+      id: 'node-toolbar-generate-failed',
+      type: 'generate',
+      title: '失败生成节点',
+      position: { x: 860, y: 24 },
+      width: 300,
+      height: 260,
+      metadata: { content: 'retry prompt', status: 'failed', errorMessage: 'failed once' }
+    }
+    const runningGenerateNode: CanvasNodeData = {
+      id: 'node-toolbar-generate-running',
+      type: 'generate',
+      title: '运行中生成节点',
+      position: { x: 1180, y: 24 },
+      width: 300,
+      height: 260,
+      metadata: { content: 'running prompt', status: 'running' }
+    }
+    const onNodeContentChange = vi.fn().mockResolvedValue(undefined)
+    const onTextNodeGenerate = vi.fn()
+    const onGenerateNodeRun = vi.fn()
+    const onNodeDelete = vi.fn()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[textNode, emptyTextNode, imageNode, resultNode, failedGenerateNode, runningGenerateNode]}
+          onViewportCommit={vi.fn()}
+          onNodeContentChange={onNodeContentChange}
+          onTextNodeGenerate={onTextNodeGenerate}
+          onGenerateNodeRun={onGenerateNodeRun}
+          onNodeDelete={onNodeDelete}
+          onNodeMetadataChange={vi.fn()}
+        />
+      )
+    })
+
+    const textToolbar = toolbarForNode(textNode.id)
+    expect(textToolbar?.className).toContain('opacity-0')
+    await act(async () => {
+      nodeElement(textNode.id)?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    })
+    expect(toolbarForNode(textNode.id)?.className).toContain('opacity-100')
+
+    await act(async () => {
+      toolbarButton(textNode.id, '从文本生成')?.click()
+      await Promise.resolve()
+    })
+    expect(onNodeContentChange).toHaveBeenCalledWith(textNode.id, textNode.metadata.content)
+    expect(onTextNodeGenerate).toHaveBeenCalledWith(textNode.id)
+
+    expect(toolbarButton(emptyTextNode.id, '从文本生成')?.disabled).toBe(true)
+    await act(async () => {
+      toolbarButton(emptyTextNode.id, '从文本生成')?.click()
+      await Promise.resolve()
+    })
+    expect(onTextNodeGenerate).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      toolbarButton(imageNode.id, '预览图片')?.click()
+      await Promise.resolve()
+    })
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas 图片预览"]')?.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,AA==')
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="关闭图片预览"]')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
+    })
+
+    await act(async () => {
+      toolbarButton(imageNode.id, '添加 mask')?.click()
+      await Promise.resolve()
+    })
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas mask 编辑器"]')).toBeTruthy()
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[aria-label="Canvas mask 编辑器"] button[title="关闭"]')?.click()
+    })
+
+    await act(async () => {
+      toolbarButton(resultNode.id, '预览图片')?.click()
+      await Promise.resolve()
+    })
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas 图片预览"]')?.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,cmVzdWx0')
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="关闭图片预览"]')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
+    })
+
+    await act(async () => {
+      toolbarButton(failedGenerateNode.id, '重试生成')?.click()
+    })
+    expect(onGenerateNodeRun).toHaveBeenCalledWith(failedGenerateNode.id)
+    expect(toolbarButton(runningGenerateNode.id, '运行生成')?.disabled).toBe(true)
+
+    await act(async () => {
+      toolbarButton(imageNode.id, '删除节点')?.click()
+    })
+    expect(onNodeDelete).toHaveBeenCalledWith(imageNode.id)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('opens a create menu from a connection to empty canvas space', async () => {
+    const textNode: CanvasNodeData = {
+      id: 'node-create-menu-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'create menu prompt' }
+    }
+    const onViewportCommit = vi.fn()
+    const onConnectionCreate = vi.fn().mockResolvedValue({
+      id: 'node-created-generate',
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 210, y: 100 },
+      width: 300,
+      height: 260,
+      metadata: { content: '', status: 'idle' }
+    })
+    const captureSpy = installPointerCaptureSpies()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 40, y: -20, k: 2 }}
+          nodes={[textNode]}
+          onViewportCommit={onViewportCommit}
+          onConnectionCreate={onConnectionCreate}
+        />
+      )
+    })
+
+    await act(async () => {
+      findButtonByTitle('从提示词端口连线')?.click()
+    })
+    await act(async () => {
+      dispatchPointer(canvasSurface()!, 'pointerdown', { clientX: 460, clientY: 180 })
+    })
+
+    const menu = document.querySelector<HTMLElement>('[data-canvas-connection-create-menu="true"]')
+    expect(menu).toBeTruthy()
+    expect(menu?.style.left).toBe('210px')
+    expect(menu?.style.top).toBe('100px')
+    expect(menu?.textContent).toContain('生成节点')
+    expect(menu?.textContent).not.toContain('结果节点')
+    expect(document.body.textContent).not.toContain('视频')
+    expect(document.body.textContent).not.toContain('音频')
+    expect(captureSpy.setPointerCapture).not.toHaveBeenCalled()
+    expect(onViewportCommit).not.toHaveBeenCalled()
+
+    await act(async () => {
+      findButtonByTitle('创建生成节点')?.click()
+      await Promise.resolve()
+    })
+
+    expect(onConnectionCreate).toHaveBeenCalledWith({
+      sourceNodeId: textNode.id,
+      type: 'generate',
+      position: { x: 210, y: 100 }
+    })
+    expect(document.querySelector<HTMLElement>('[data-canvas-connection-create-menu="true"]')).toBeNull()
+    expect(onViewportCommit).not.toHaveBeenCalled()
+
+    captureSpy.restore()
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('offers result nodes when creating from a generate connection', async () => {
+    const generateNode: CanvasNodeData = {
+      id: 'node-create-menu-generate',
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 20, y: 24 },
+      width: 300,
+      height: 260,
+      metadata: { content: 'prompt', status: 'idle' }
+    }
+    const onConnectionCreate = vi.fn().mockResolvedValue({
+      id: 'node-created-result',
+      type: 'result',
+      title: '结果节点',
+      position: { x: 320, y: 160 },
+      width: 320,
+      height: 260,
+      metadata: { content: '', status: 'idle' }
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[generateNode]}
+          onViewportCommit={vi.fn()}
+          onConnectionCreate={onConnectionCreate}
+        />
+      )
+    })
+
+    await act(async () => {
+      findButtonByTitle('从结果端口连线')?.click()
+    })
+    await act(async () => {
+      dispatchPointer(canvasSurface()!, 'pointerdown', { clientX: 320, clientY: 160 })
+    })
+
+    const menu = document.querySelector<HTMLElement>('[data-canvas-connection-create-menu="true"]')
+    expect(menu?.textContent).toContain('结果节点')
+    expect(menu?.textContent).not.toContain('生成节点')
+
+    await act(async () => {
+      findButtonByTitle('创建结果节点')?.click()
+      await Promise.resolve()
+    })
+    expect(onConnectionCreate).toHaveBeenCalledWith({
+      sourceNodeId: generateNode.id,
+      type: 'result',
+      position: { x: 320, y: 160 }
+    })
 
     await act(async () => {
       root.unmount()
@@ -359,6 +653,57 @@ describe('CanvasViewport', () => {
     host.remove()
   })
 
+  it('keeps expanded text dialog controls outside canvas drag capture', async () => {
+    const textNode: CanvasNodeData = {
+      id: 'node-expanded-text-close',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'dialog prompt' }
+    }
+    const onViewportCommit = vi.fn()
+    const captureSpy = installPointerCaptureSpies()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[textNode]}
+          onViewportCommit={onViewportCommit}
+        />
+      )
+    })
+
+    await act(async () => {
+      findButtonByTitle('放大编辑')?.click()
+    })
+    const dialog = document.querySelector<HTMLElement>('[aria-label="Canvas 文本节点编辑器"]')
+    expect(dialog).toBeTruthy()
+
+    const closeButton = dialog?.querySelector<HTMLButtonElement>('button[title="关闭"]')
+    expect(closeButton).toBeTruthy()
+    await act(async () => {
+      dispatchPointer(closeButton!, 'pointerdown')
+      dispatchPointer(closeButton!, 'pointerup')
+      closeButton!.click()
+    })
+
+    expect(captureSpy.setPointerCapture).not.toHaveBeenCalled()
+    expect(onViewportCommit).not.toHaveBeenCalled()
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas 文本节点编辑器"]')).toBeNull()
+
+    captureSpy.restore()
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('renders generate node preview and run action', async () => {
     const generateNode: CanvasNodeData = {
       id: 'node-generate',
@@ -415,6 +760,134 @@ describe('CanvasViewport', () => {
     host.remove()
   })
 
+  it('renders generation input summary from connected canvas nodes', async () => {
+    const textNode: CanvasNodeData = {
+      id: 'node-summary-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'upstream prompt' }
+    }
+    const imageNode: CanvasNodeData = {
+      id: 'node-summary-image',
+      type: 'image',
+      title: '图片节点',
+      position: { x: 20, y: 224 },
+      width: 240,
+      height: 180,
+      metadata: { content: 'data:image/png;base64,AA==', mimeType: 'image/png', fileSizeBytes: 2 }
+    }
+    const resultNode: CanvasNodeData = {
+      id: 'node-summary-result',
+      type: 'result',
+      title: '结果节点',
+      position: { x: 20, y: 444 },
+      width: 260,
+      height: 220,
+      metadata: { content: '', status: 'succeeded', referenceImageId: 'reference-summary-result' }
+    }
+    const configNode: CanvasNodeData = {
+      id: 'node-summary-config',
+      type: 'config',
+      title: '配置节点',
+      position: { x: 320, y: 24 },
+      width: 260,
+      height: 180,
+      metadata: { content: '', ratio: '16:9', quality: 'high', n: 2 }
+    }
+    const batchNode: CanvasNodeData = {
+      id: 'node-summary-batch',
+      type: 'batch',
+      title: '批量节点',
+      position: { x: 320, y: 244 },
+      width: 260,
+      height: 220,
+      metadata: { content: 'variant one\n\nvariant two' }
+    }
+    const generateNode: CanvasNodeData = {
+      id: 'node-summary-generate',
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 640, y: 24 },
+      width: 300,
+      height: 280,
+      metadata: { content: 'local prompt', status: 'idle' }
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[textNode, imageNode, resultNode, configNode, batchNode, generateNode]}
+          connections={[
+            { id: 'summary-prompt', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' },
+            { id: 'summary-image', fromNodeId: imageNode.id, toNodeId: generateNode.id, kind: 'reference-image' },
+            { id: 'summary-result', fromNodeId: resultNode.id, toNodeId: generateNode.id, kind: 'reference-image' },
+            { id: 'summary-config', fromNodeId: configNode.id, toNodeId: generateNode.id, kind: 'config' },
+            { id: 'summary-batch', fromNodeId: batchNode.id, toNodeId: generateNode.id, kind: 'batch' }
+          ]}
+          onViewportCommit={vi.fn()}
+        />
+      )
+    })
+
+    const generateElement = nodeElement(generateNode.id)
+    expect(generateElement?.textContent).toContain('提示词 1+本节点')
+    expect(generateElement?.textContent).toContain('参考图 2')
+    expect(generateElement?.textContent).toContain('参数 1')
+    expect(generateElement?.textContent).toContain('批量 2')
+    expect(generateElement?.textContent).toContain('工作流请求 2')
+    expect(generateElement?.textContent).not.toContain('缺少有效提示词')
+    expect(document.body.textContent).not.toContain('视频')
+    expect(document.body.textContent).not.toContain('音频')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('warns when a generate node has no effective prompt', async () => {
+    const generateNode: CanvasNodeData = {
+      id: 'node-summary-missing-prompt',
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 20, y: 24 },
+      width: 300,
+      height: 280,
+      metadata: { content: '   ', status: 'idle' }
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[generateNode]}
+          onViewportCommit={vi.fn()}
+        />
+      )
+    })
+
+    const generateElement = nodeElement(generateNode.id)
+    expect(generateElement?.textContent).toContain('缺提示词')
+    expect(generateElement?.textContent).toContain('缺少有效提示词，运行前请连接文本节点或填写本节点提示词。')
+    expect(generateElement?.textContent).toContain('工作流请求 1')
+    expect(generateElement?.textContent).not.toContain('待运行')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('opens the canvas mask editor from image nodes', async () => {
     const imageNode: CanvasNodeData = {
       id: 'node-mask-image',
@@ -455,6 +928,68 @@ describe('CanvasViewport', () => {
     host.remove()
   })
 
+  it('keeps mask editor toolbar actions outside canvas drag capture', async () => {
+    const imageNode: CanvasNodeData = {
+      id: 'node-mask-toolbar-image',
+      type: 'image',
+      title: '图片节点',
+      position: { x: 20, y: 24 },
+      width: 240,
+      height: 180,
+      metadata: { content: 'data:image/png;base64,AA==', mimeType: 'image/png', fileSizeBytes: 2 }
+    }
+    const onNodeMetadataChange = vi.fn()
+    const onViewportCommit = vi.fn()
+    const captureSpy = installPointerCaptureSpies()
+    const canvasContextSpy = installEmptyCanvasContext()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[imageNode]}
+          onViewportCommit={onViewportCommit}
+          onNodeMetadataChange={onNodeMetadataChange}
+        />
+      )
+    })
+
+    await act(async () => {
+      findButtonByTitle('添加 mask')?.click()
+    })
+    const editor = document.querySelector<HTMLElement>('[aria-label="Canvas mask 编辑器"]')
+    expect(editor).toBeTruthy()
+
+    const eraserButton = findButtonByTitle('橡皮')
+    await act(async () => {
+      dispatchPointer(eraserButton!, 'pointerdown')
+      dispatchPointer(eraserButton!, 'pointerup')
+      eraserButton?.click()
+    })
+    expect(eraserButton?.getAttribute('data-variant')).toBe('secondary')
+
+    const saveButton = findButtonByTitle('保存 mask')
+    await act(async () => {
+      dispatchPointer(saveButton!, 'pointerdown')
+      dispatchPointer(saveButton!, 'pointerup')
+      saveButton?.click()
+    })
+    expect(captureSpy.setPointerCapture).not.toHaveBeenCalled()
+    expect(onViewportCommit).not.toHaveBeenCalled()
+    expect(onNodeMetadataChange).toHaveBeenCalledWith(imageNode.id, { maskDataUrl: '', maskUpdatedAt: '' })
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas mask 编辑器"]')).toBeNull()
+
+    captureSpy.restore()
+    canvasContextSpy.mockRestore()
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('renders advanced workflow node bodies and commits batch edits', async () => {
     const configNode: CanvasNodeData = {
       id: 'node-config',
@@ -485,6 +1020,9 @@ describe('CanvasViewport', () => {
         content: 'data:image/png;base64,cmVzdWx0',
         status: 'succeeded',
         historyItemId: 'history-result',
+        requestIndex: 1,
+        batchIndex: 0,
+        promptVariant: 'variant result',
         mimeType: 'image/png',
         fileSizeBytes: 6
       }
@@ -507,6 +1045,7 @@ describe('CanvasViewport', () => {
 
     expect(document.body.textContent).toContain('比例')
     expect(document.body.textContent).toContain('Prompt 变体')
+    expect(document.body.textContent).toContain('PNG · #2 · 批量 1 · History')
     expect(document.querySelector<HTMLImageElement>('img[alt="结果节点"]')?.src).toBe('data:image/png;base64,cmVzdWx0')
 
     const batchTextarea = Array.from(document.querySelectorAll<HTMLTextAreaElement>('textarea')).find((item) => item.value.includes('first'))
@@ -530,4 +1069,68 @@ function findButtonByTitle(title: string): HTMLButtonElement | undefined {
 
 function findButtonsByTitle(title: string): HTMLButtonElement[] {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).filter((button) => button.title === title)
+}
+
+function nodeElement(nodeId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-canvas-node-id="${nodeId}"]`)
+}
+
+function toolbarForNode(nodeId: string): HTMLElement | null {
+  return nodeElement(nodeId)?.querySelector<HTMLElement>('[data-canvas-node-action-toolbar="true"]') || null
+}
+
+function toolbarButton(nodeId: string, title: string): HTMLButtonElement | undefined {
+  return Array.from(toolbarForNode(nodeId)?.querySelectorAll<HTMLButtonElement>('button') || []).find((button) => button.title === title)
+}
+
+function canvasSurface(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.canvas-viewport > div.absolute.inset-0')
+}
+
+function dispatchPointer(element: HTMLElement, type: string, init: MouseEventInit = {}): void {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+    ...init
+  })
+  Object.defineProperty(event, 'pointerId', { value: 1 })
+  element.dispatchEvent(event)
+}
+
+function installPointerCaptureSpies(): {
+  setPointerCapture: ReturnType<typeof vi.fn>
+  releasePointerCapture: ReturnType<typeof vi.fn>
+  restore: () => void
+} {
+  const setPointerCapture = vi.fn()
+  const releasePointerCapture = vi.fn()
+  const previousSetPointerCapture = HTMLElement.prototype.setPointerCapture
+  const previousReleasePointerCapture = HTMLElement.prototype.releasePointerCapture
+  HTMLElement.prototype.setPointerCapture = setPointerCapture
+  HTMLElement.prototype.releasePointerCapture = releasePointerCapture
+  return {
+    setPointerCapture,
+    releasePointerCapture,
+    restore: () => {
+      if (previousSetPointerCapture) {
+        HTMLElement.prototype.setPointerCapture = previousSetPointerCapture
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).setPointerCapture
+      }
+      if (previousReleasePointerCapture) {
+        HTMLElement.prototype.releasePointerCapture = previousReleasePointerCapture
+      } else {
+        delete (HTMLElement.prototype as Partial<HTMLElement>).releasePointerCapture
+      }
+    }
+  }
+}
+
+function installEmptyCanvasContext() {
+  return vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => ({
+    getImageData: () => ({ data: new Uint8ClampedArray(4) })
+  }) as unknown as CanvasRenderingContext2D)
 }

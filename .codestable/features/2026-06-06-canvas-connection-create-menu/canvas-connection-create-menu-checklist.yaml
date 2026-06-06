@@ -1,0 +1,48 @@
+feature: 2026-06-06-canvas-connection-create-menu
+created: 2026-06-06
+
+steps:
+  - action: "编排骨架：在 Viewport/NodeLayer 加入空白点击接管和连接创建菜单状态"
+    exit_signal: "连接状态下点击空白出现菜单，非连接状态下背景平移仍可用"
+    status: done
+  - action: "目标类型和菜单 UI：根据 source node 类型展示合法菜单项，并阻止菜单点击触发 pan"
+    exit_signal: "text/image/result/config/batch 只展示生成节点，generate 只展示结果节点，无视频/音频文案"
+    status: done
+  - action: "Store 原子 action：新增 addConnectedNode()，创建目标节点、判定 connection kind、防重复/防环并持久化"
+    exit_signal: "store 测试覆盖 text->generate、generate->result、非法目标不写盘"
+    status: done
+  - action: "Workspace 接线与测试：接入 addConnectedNode()，补组件和集成测试"
+    exit_signal: "通过 UI 能从 text 节点连接到空白并创建 generate 节点及 prompt connection"
+    status: done
+  - action: "验证与 review：跑 typecheck、定向 vitest、浏览器 smoke 和代码 review"
+    exit_signal: "测试通过，浏览器中菜单创建链路可用，页面仍无视频/音频入口"
+    status: done
+
+checks:
+  - item: "点击 text node 的连接入口后，再点击画布空白处，会出现连接创建菜单"
+    source: 验收场景
+    status: passed
+  - item: "text source 菜单选择生成节点会创建 generate node 并建立 prompt connection"
+    source: 验收场景
+    status: passed
+  - item: "image/result/config/batch source 只提供生成节点并建立对应合法 connection kind"
+    source: 验收场景
+    status: passed
+  - item: "generate source 只提供结果节点并建立 result connection"
+    source: 验收场景
+    status: passed
+  - item: "菜单点击不触发背景平移或 viewport commit"
+    source: 编排约束
+    status: passed
+  - item: "非连接状态点击空白仍可平移视口"
+    source: 回归场景
+    status: passed
+  - item: "非法 source、非法目标、重复连接或潜在环路不写盘"
+    source: 边界场景
+    status: passed
+  - item: "新节点坐标按当前 viewport 正确反算为世界坐标"
+    source: 名词契约
+    status: passed
+  - item: "不出现视频/音频入口，不新增 Canvas node type，不创建空 image node"
+    source: 范围守护
+    status: passed

@@ -53,6 +53,13 @@ function DialogContent({
   overlayClassName,
   overlayProps,
   showCloseButton = true,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
+  onMouseDown,
+  onClick,
+  onWheel,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   overlayClassName?: string
@@ -60,6 +67,9 @@ function DialogContent({
   showCloseButton?: boolean
 }) {
   const { className: overlayPropsClassName, ...restOverlayProps } = overlayProps ?? {}
+  const stopDialogEvent = <Event extends React.SyntheticEvent>(event: Event) => {
+    event.stopPropagation()
+  }
 
   return (
     <DialogPortal>
@@ -70,6 +80,34 @@ function DialogContent({
           "fixed top-1/2 left-1/2 z-50 grid w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-100 outline-none sm:w-full data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
+        onPointerDown={(event) => {
+          onPointerDown?.(event)
+          stopDialogEvent(event)
+        }}
+        onPointerMove={(event) => {
+          onPointerMove?.(event)
+          stopDialogEvent(event)
+        }}
+        onPointerUp={(event) => {
+          onPointerUp?.(event)
+          stopDialogEvent(event)
+        }}
+        onPointerCancel={(event) => {
+          onPointerCancel?.(event)
+          stopDialogEvent(event)
+        }}
+        onMouseDown={(event) => {
+          onMouseDown?.(event)
+          stopDialogEvent(event)
+        }}
+        onClick={(event) => {
+          onClick?.(event)
+          stopDialogEvent(event)
+        }}
+        onWheel={(event) => {
+          onWheel?.(event)
+          stopDialogEvent(event)
+        }}
         {...props}
       >
         {children}

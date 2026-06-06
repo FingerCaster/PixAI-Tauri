@@ -28,6 +28,7 @@ import type {
   ProviderProfileInput,
   ProviderSettings,
   ProviderSettingsUpdate,
+  ReferenceImage,
   ReferenceImageFilePayload
 } from '../shared/types'
 import {
@@ -101,6 +102,7 @@ type AppState = {
   importReferencePayloads: (payloads: ReferenceImageFilePayload[]) => Promise<void>
   addHistoryAsReference: (historyId: string) => Promise<void>
   addHistoryToCanvas: (historyId: string) => Promise<void>
+  addReferenceToCanvas: (referenceImageId: string) => Promise<void>
   openCanvasProject: (projectId: string) => Promise<void>
   generateCanvasNode: (nodeId: string) => Promise<void>
   runCanvasWorkflow: () => Promise<void>
@@ -127,6 +129,11 @@ type AppState = {
 type CanvasGenerationReferences = {
   referenceImageIds: string[]
   referenceImageMasks?: Record<string, string>
+}
+
+type CanvasGenerationRunResult = {
+  succeeded: number
+  failed: number
 }
 
 let generationClockTimer: number | null = null
@@ -230,7 +237,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   setView: (view) => set({ view }),
-  toggleSettings: () => set((state) => ({ settingsVisible: !state.settingsVisible, view: 'workspace' })),
+  toggleSettings: () => set((state) => ({ settingsVisible: !state.settingsVisible })),
   toggleTheme: () => set((state) => ({ darkMode: !state.darkMode })),
   setQuery: (query) => set({ query }),
   setFavoritesOnly: async (favoritesOnly) => {
@@ -637,7 +644,41 @@ export const useAppStore = create<AppState>((set, get) => ({
         storagePath: reference.storagePath || item.storagePath || null
       })
       set({ view: 'canvas' })
-      get().notify('已加入 Canvas')
+      get().notify(`历史图已加入 Canvas：${reference.name || item.id}`)
+    } catch (error) {
+      get().notify(error instanceof Error ? error.message : '加入 Canvas 失败')
+    }
+  },
+  addReferenceToCanvas: async (referenceImageId) => {
+    const normalizedReferenceId = referenceImageId.trim()
+    if (!normalizedReferenceId) return
+    try {
+      const workspaceConversation = getActiveConversation(get())
+      if (!useCanvasStore.getState().activeProject) {
+        await get().openCanvasWorkspace()
+      }
+      const project = useCanvasStore.getState().activeProject
+      if (!project) throw new Error('Canvas 项目尚未准备好。')
+      const canvasConversation = await getCanvasProjectConversation(get(), project)
+      if (!canvasConversation) throw new Error('Canvas 项目绑定的会话不存在。')
+      const reference = findReferenceImage(normalizedReferenceId, [
+        canvasConversation,
+        workspaceConversation,
+        ...get().conversations
+      ])
+      if (!reference) throw new Error('参考图不存在，无法加入 Canvas。')
+      const displaySource = await imageSourceForDisplay(reference.dataUrl, reference.storagePath)
+      if (!displaySource) throw new Error('图片内容不可用，无法加入 Canvas。')
+      await useCanvasStore.getState().addImageNode({
+        name: reference.name || `${reference.id}.${extensionFromImageSource(reference.dataUrl || reference.storagePath || '')}`,
+        dataUrl: displaySource,
+        mimeType: reference.mimeType || mimeTypeFromImageSource(reference.dataUrl || reference.storagePath || ''),
+        fileSizeBytes: reference.fileSizeBytes || estimateDataUrlBytes(reference.dataUrl) || 0,
+        referenceImageId: reference.id,
+        storagePath: reference.storagePath || null
+      })
+      set({ view: 'canvas' })
+      get().notify(`参考图已加入 Canvas：${reference.name || reference.id}`)
     } catch (error) {
       get().notify(error instanceof Error ? error.message : '加入 Canvas 失败')
     }
@@ -679,13 +720,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().notify('未找到 Canvas project 绑定的会话')
       return
     }
-    const planItem = buildCanvasGenerationPlanForNode(project, nodeId, 'first').find((item) => item.prompt.trim())
-    if (!planItem) {
+    const planItems = buildCanvasGenerationPlanForNode(project, nodeId, 'all').filter((item) => item.prompt.trim())
+    if (planItems.length === 0) {
       await canvasStore.updateGenerateNodeState(nodeId, { status: 'failed', errorMessage: '请先连接文本节点或填写生成节点 prompt。' })
       get().notify('请先填写 Canvas 生成 prompt')
       return
     }
-    await runCanvasGenerationPlanItem(planItem, conversation, set, get)
+    if (planItems.length > MAX_CANVAS_WORKFLOW_REQUESTS) {
+      get().notify(`Canvas workflow 请求数 ${planItems.length} 超过上限 ${MAX_CANVAS_WORKFLOW_REQUESTS}`)
+      return
+    }
+    if (planItems.length === 1) {
+      await runCanvasGenerationPlanItem(planItems[0], conversation, set, get)
+      return
+    }
+    let succeeded = 0
+    let failed = 0
+    for (const item of planItems) {
+      const result = await runCanvasGenerationPlanItem(item, conversation, set, get, {
+        notifySuccess: false,
+        notifyFailure: false
+      })
+      succeeded += result.succeeded
+      failed += result.failed
+    }
+    if (failed > 0) {
+      await useCanvasStore.getState().updateGenerateNodeState(nodeId, {
+        status: 'failed',
+        errorMessage: `批量生成部分失败：${succeeded} 成功，${failed} 失败`
+      })
+    }
+    get().notify(`Canvas 批量生成完成：${succeeded} 成功，${failed} 失败`)
   },
   runCanvasWorkflow: async () => {
     const canvasStore = useCanvasStore.getState()
@@ -717,12 +782,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     let succeeded = 0
     let failed = 0
     for (const item of plan.items) {
-      const ok = await runCanvasGenerationPlanItem(item, conversation, set, get, {
+      const result = await runCanvasGenerationPlanItem(item, conversation, set, get, {
         notifySuccess: false,
         notifyFailure: false
       })
-      if (ok) succeeded += 1
-      else failed += 1
+      succeeded += result.succeeded
+      failed += result.failed
     }
     get().notify(`Canvas workflow 完成：${succeeded} 成功，${failed} 失败`)
   },
@@ -1172,6 +1237,14 @@ function getActiveConversation(state: AppState): Conversation | null {
   return state.conversations.find((conversation) => conversation.id === state.activeConversationId) || null
 }
 
+function findReferenceImage(referenceImageId: string, conversations: Array<Conversation | null>): ReferenceImage | null {
+  for (const conversation of conversations) {
+    const reference = conversation?.referenceImages.find((item) => item.id === referenceImageId)
+    if (reference) return reference
+  }
+  return null
+}
+
 function nextConversationUpdateVersion(conversationId: string): number {
   const nextVersion = (conversationUpdateVersions.get(conversationId) || 0) + 1
   conversationUpdateVersions.set(conversationId, nextVersion)
@@ -1217,23 +1290,23 @@ async function runCanvasGenerationPlanItem(
   set: (partial: Partial<AppState>) => void,
   get: () => AppState,
   options: { notifySuccess?: boolean; notifyFailure?: boolean } = {}
-): Promise<boolean> {
+): Promise<CanvasGenerationRunResult> {
   const { notifySuccess = true, notifyFailure = true } = options
   const canvasStore = useCanvasStore.getState()
   const project = canvasStore.activeProject
   const node = project?.nodes.find((item) => item.id === planItem.nodeId)
   if (!project || !node || node.type !== 'generate') {
     if (notifyFailure) get().notify('未找到可运行的生成节点')
-    return false
+    return emptyCanvasGenerationRunResult()
   }
   if (node.metadata.status === 'running') {
     if (notifyFailure) get().notify('这个生成节点正在运行')
-    return false
+    return emptyCanvasGenerationRunResult()
   }
   if (!planItem.prompt.trim()) {
     await canvasStore.updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: '请先连接文本节点或填写生成节点 prompt。' })
     if (notifyFailure) get().notify('请先填写 Canvas 生成 prompt')
-    return false
+    return failedCanvasGenerationRunResult()
   }
 
   let references: CanvasGenerationReferences
@@ -1242,8 +1315,9 @@ async function runCanvasGenerationPlanItem(
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Canvas 参考图解析失败'
     await canvasStore.updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: message })
+    await recordCanvasFailedGenerationResult(planItem, message, { requestIndex: 0 })
     if (notifyFailure) get().notify(message)
-    return false
+    return failedCanvasGenerationRunResult()
   }
 
   const ratio = planItem.config.ratio || conversation.ratio
@@ -1331,19 +1405,36 @@ async function runCanvasGenerationPlanItem(
       generationPreviews: clearGenerationPreviewsForRun(get().generationPreviews, result.run.id)
     })
     const successItems = result.items.filter((item) => item.status === 'succeeded' && (item.dataUrl || item.storagePath))
+    const failedItems = result.items.filter((item) => item.status === 'failed')
     if (successItems.length === 0) {
-      const message = result.errorMessage || result.items.find((item) => item.status === 'failed')?.errorMessage || 'Canvas 生成没有返回成功图片。'
-      await canvasStore.updateGenerateNodeState(planItem.nodeId, {
-        status: 'failed',
-        runId: result.run.id,
-        requestIndex: 0,
-        errorMessage: message
-      })
+      const message = result.errorMessage || failedItems[0]?.errorMessage || 'Canvas 生成没有返回成功图片。'
+      if (failedItems.length > 0) {
+        for (const failedItem of failedItems) {
+          await recordCanvasFailedGenerationResult(planItem, failedItem.errorMessage || message, {
+            runId: result.run.id,
+            requestIndex: failedItem.requestIndex ?? 0,
+            historyItemId: failedItem.id
+          })
+        }
+      } else {
+        await recordCanvasFailedGenerationResult(planItem, message, {
+          runId: result.run.id,
+          requestIndex: result.items.find((item) => typeof item.requestIndex === 'number')?.requestIndex ?? 0
+        })
+      }
       if (notifyFailure) get().notify(`Canvas 生成失败：${message}`)
       await notifyGenerationFinished(result.items, message, get, '')
-      return false
+      return { succeeded: 0, failed: Math.max(1, failedItems.length) }
     }
-    for (const successItem of successItems) {
+    for (const failedItem of failedItems) {
+      await recordCanvasFailedGenerationResult(planItem, failedItem.errorMessage || result.errorMessage || 'Canvas 生成失败', {
+        runId: result.run.id,
+        requestIndex: failedItem.requestIndex ?? 0,
+        historyItemId: failedItem.id
+      })
+    }
+    for (let index = 0; index < successItems.length; index += 1) {
+      const successItem = successItems[index]
       const displaySource = await imageSourceForDisplay(successItem.dataUrl, successItem.storagePath)
       const source = displaySource || successItem.dataUrl || successItem.storagePath || ''
       await useCanvasStore.getState().recordGeneratedResult(planItem.nodeId, {
@@ -1352,30 +1443,39 @@ async function runCanvasGenerationPlanItem(
         mimeType: mimeTypeFromImageSource(successItem.dataUrl || successItem.storagePath || source),
         fileSizeBytes: successItem.fileSizeBytes || estimateDataUrlBytes(successItem.dataUrl) || 0,
         historyItemId: successItem.id,
-        storagePath: successItem.storagePath || null
+        storagePath: successItem.storagePath || null,
+        requestIndex: successItem.requestIndex ?? index,
+        ...(planItem.batchIndex != null ? { batchRootId: planItem.nodeId, batchIndex: planItem.batchIndex } : {}),
+        ...(planItem.batchVariant ? { promptVariant: planItem.batchVariant } : {})
       })
     }
     const finalItem = successItems.at(-1)!
     await useCanvasStore.getState().updateGenerateNodeState(planItem.nodeId, {
-      status: 'succeeded',
+      status: failedItems.length > 0 ? 'failed' : 'succeeded',
       runId: result.run.id,
       requestIndex: finalItem.requestIndex ?? 0,
       historyItemId: finalItem.id,
-      errorMessage: ''
+      errorMessage: failedItems.length > 0 ? `生成部分失败：${successItems.length} 成功，${failedItems.length} 失败` : ''
     })
     const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
-    if (notifySuccess) get().notify(`Canvas 生成完成${durationText}`)
+    if (notifySuccess) {
+      get().notify(
+        failedItems.length > 0
+          ? `Canvas 生成完成：${successItems.length} 成功，${failedItems.length} 失败${durationText}`
+          : `Canvas 生成完成${durationText}`
+      )
+    }
     await notifyGenerationFinished(result.items, result.errorMessage || null, get, durationText)
-    return true
+    return { succeeded: successItems.length, failed: failedItems.length }
   } catch (error) {
     const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? error.message : 'Canvas 生成失败'
-    await useCanvasStore.getState().updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: message })
+    await recordCanvasFailedGenerationResult(planItem, message, { requestIndex: 0 })
     if (notifyFailure) get().notify(`Canvas 生成失败：${message}`)
     await notifyGenerationFinished([], message, get, '')
     if (previewRunIds.size > 0) {
       set({ generationPreviews: clearGenerationPreviewsForRuns(get().generationPreviews, previewRunIds) })
     }
-    return false
+    return failedCanvasGenerationRunResult()
   } finally {
     const endedGenerationState = endConversationGeneration(conversation.id, {
       generatingByConversation: get().generatingByConversation,
@@ -1390,6 +1490,27 @@ async function runCanvasGenerationPlanItem(
     })
     if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
   }
+}
+
+function emptyCanvasGenerationRunResult(): CanvasGenerationRunResult {
+  return { succeeded: 0, failed: 0 }
+}
+
+function failedCanvasGenerationRunResult(): CanvasGenerationRunResult {
+  return { succeeded: 0, failed: 1 }
+}
+
+async function recordCanvasFailedGenerationResult(
+  planItem: CanvasGenerationPlanItem,
+  errorMessage: string,
+  input: { runId?: string; historyItemId?: string; requestIndex?: number }
+): Promise<void> {
+  await useCanvasStore.getState().recordFailedResult(planItem.nodeId, {
+    errorMessage,
+    ...input,
+    ...(planItem.batchIndex != null ? { batchRootId: planItem.nodeId, batchIndex: planItem.batchIndex } : {}),
+    ...(planItem.batchVariant ? { promptVariant: planItem.batchVariant } : {})
+  })
 }
 
 async function resolveCanvasGenerationReferences(

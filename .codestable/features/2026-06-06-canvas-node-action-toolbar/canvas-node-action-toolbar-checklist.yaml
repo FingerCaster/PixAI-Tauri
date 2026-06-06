@@ -1,0 +1,45 @@
+feature: 2026-06-06-canvas-node-action-toolbar
+created: 2026-06-06
+
+steps:
+  - action: "动作条界面骨架：把节点容器改为外层 wrapper + 内层 card，新增 hover/selected toolbar 和统一删除入口"
+    exit_signal: "节点选择、拖动、连接、删除测试仍可通过，toolbar 在选中节点时可见"
+    status: done
+  - action: "文本一键生成链路：新增 store action，Workspace/Viewport/NodeLayer 接线"
+    exit_signal: "点击文本节点动作条“生成”会创建 generate node、连 prompt connection，并调用现有 generateCanvasNode()"
+    status: done
+  - action: "图片/结果/生成动作：toolbar 接入预览、mask、运行/重试"
+    exit_signal: "image/result 可从 toolbar 打开预览/mask，generate 可从 toolbar 运行"
+    status: done
+  - action: "测试与浏览器 smoke：补 store/组件测试，跑 typecheck、定向 vitest 和本地浏览器验证"
+    exit_signal: "测试通过，浏览器中 hover/选中节点时动作条可见且无视频/音频入口"
+    status: done
+
+checks:
+  - item: "选中或 hover text node 时显示动作条"
+    source: 验收场景
+    status: passed
+  - item: "text node 内容非空时点击生成会创建 generate node、建立 prompt connection，并调用 generateCanvasNode()"
+    source: 验收场景
+    status: passed
+  - item: "text node 内容为空时生成不可触发或不创建节点"
+    source: 边界场景
+    status: passed
+  - item: "image node 动作条可打开图片预览和 mask 编辑"
+    source: 验收场景
+    status: passed
+  - item: "result node 且已有图片时动作条可打开结果预览和 mask 编辑"
+    source: 验收场景
+    status: passed
+  - item: "generate node 动作条可运行，failed/succeeded 表达重试，running 不可重复点击"
+    source: 验收场景
+    status: passed
+  - item: "删除节点入口从动作条触发且仍调用 deleteNode() 清理连线"
+    source: 编排骨架
+    status: passed
+  - item: "连接入口仍可触发，连接规则不变"
+    source: 编排骨架
+    status: passed
+  - item: "不出现视频/音频入口，不新增 Canvas node type"
+    source: 范围守护
+    status: passed

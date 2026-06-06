@@ -80,3 +80,23 @@ tags: [canvas, node, frontend, interaction, image-node]
 
 - 本次未重构 Canvas 节点系统整体结构。
 - 当前修复通过渲染层兼容旧项目持久化尺寸；未做数据库迁移，避免批量改写已有 Canvas 项目数据。
+
+## 7. 2026-06-06 追加修复：Dialog 内按钮被 Canvas 拖拽层抢事件
+
+用户复核发现：图片预览关闭按钮已能工作，但文本节点放大编辑器的关闭按钮，以及 mask 编辑器里的画笔 / 橡皮 / 清空 / 保存等普通按钮仍会点击无效。
+
+根因是 `Dialog` 使用 portal 渲染到 body 后，React 事件仍会沿组件树冒泡回 `CanvasViewport`。Canvas 画布层在 `pointerdown` 时会进入拖拽并调用 pointer capture，导致 Dialog 内普通按钮的后续点击链路被打断；此前图片预览关闭按钮只是通过局部 `pointerdown` capture 绕开了这个问题，没有解决通用弹窗按钮。
+
+本次修复将事件隔离收敛到 `src/components/ui/dialog.tsx`：`DialogContent` 对 `pointerdown / pointermove / pointerup / pointercancel / mousedown / click / wheel` 先调用传入 handler，再 `stopPropagation()`，避免弹窗内部交互继续冒泡到 Canvas 画布拖拽层。同步在 `src/components/canvas/CanvasViewport.test.tsx` 增加两个回归测试：
+
+- 文本节点放大编辑器：点击默认关闭按钮后弹窗关闭，且不会触发画布 pointer capture 或 viewport commit。
+- Canvas mask 编辑器：点击橡皮和保存按钮有效，保存后弹窗关闭，且不会触发画布 pointer capture 或 viewport commit。
+
+验证结果：
+
+- `pnpm exec vitest run src/components/canvas/CanvasViewport.test.tsx`
+  - 1 个测试文件通过，11 个测试通过。
+- `pnpm exec tsc --noEmit`
+  - 通过。
+- `pnpm check`
+  - TypeScript 校验通过，33 个测试文件通过，214 个测试通过。

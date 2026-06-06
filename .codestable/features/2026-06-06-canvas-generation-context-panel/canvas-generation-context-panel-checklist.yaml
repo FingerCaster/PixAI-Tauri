@@ -1,0 +1,42 @@
+feature: 2026-06-06-canvas-generation-context-panel
+created: 2026-06-06
+
+steps:
+  - action: "计算契约：在 workflow service 增加 CanvasGenerationInputSummary 和纯函数"
+    exit_signal: "service test 能证明 prompt、reference、config、batch、missingPrompt、requestCount 规则"
+    status: done
+  - action: "UI 表达：让生成节点 body 展示摘要 chips 和缺 prompt 警示"
+    exit_signal: "组件测试能在 generate node 内看到提示词/参考图/参数/批量/请求数"
+    status: done
+  - action: "渲染接线：由 NodeLayer 基于当前 nodes/connections 传入 summary"
+    exit_signal: "CanvasViewport 测试覆盖真实节点连线后的摘要展示"
+    status: done
+  - action: "验证与 review：跑 typecheck、定向 vitest、浏览器 smoke 和代码 review"
+    exit_signal: "测试通过，浏览器中生成节点能显示摘要，页面仍无视频/音频入口"
+    status: done
+
+checks:
+  - item: "generate node 没有本地或上游 prompt 时显示缺提示词警示"
+    source: 验收场景
+    status: passed
+  - item: "generate node 有本地 prompt 时显示本节点提示词已计入"
+    source: 验收场景
+    status: passed
+  - item: "多个上游 text prompt 会计入提示词数量"
+    source: 名词契约
+    status: passed
+  - item: "image/result 参考图连接会计入参考图数量"
+    source: 名词契约
+    status: passed
+  - item: "config 连接会计入参数数量并保留 config patch"
+    source: 名词契约
+    status: passed
+  - item: "batch 连接会显示非空变体数量和工作流请求数"
+    source: 名词契约
+    status: passed
+  - item: "summary 只读，不写 Canvas project，不改变单节点运行和 workflow 运行语义"
+    source: 编排约束
+    status: passed
+  - item: "不出现视频/音频入口，不修改 Provider/ImageService/history/reference/Tauri API"
+    source: 范围守护
+    status: passed

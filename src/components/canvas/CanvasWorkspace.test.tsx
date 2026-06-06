@@ -45,17 +45,17 @@ function conversation(): Conversation {
   }
 }
 
-function canvasProject(): CanvasProject {
+function canvasProject(input: Partial<CanvasProject> = {}): CanvasProject {
   return {
-    id: 'canvas-reference-project',
-    title: 'Canvas 项目',
-    conversationId: 'canvas-reference-conversation',
+    id: input.id || 'canvas-reference-project',
+    title: input.title || 'Canvas 项目',
+    conversationId: input.conversationId || 'canvas-reference-conversation',
     schemaVersion: 1,
-    nodes: [],
-    connections: [],
-    viewport: { x: 0, y: 0, k: 1 },
-    createdAt: '2026-06-05T00:00:00.000Z',
-    updatedAt: '2026-06-05T00:00:00.000Z'
+    nodes: input.nodes || [],
+    connections: input.connections || [],
+    viewport: input.viewport || { x: 0, y: 0, k: 1 },
+    createdAt: input.createdAt || '2026-06-05T00:00:00.000Z',
+    updatedAt: input.updatedAt || '2026-06-05T00:00:00.000Z'
   }
 }
 
@@ -160,6 +160,231 @@ describe('CanvasWorkspace', () => {
     host.remove()
   })
 
+  it('renders an image-generation dock without video or audio entries', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const project = canvasProject()
+    useAppStore.setState({
+      activeConversationId: currentConversation.id,
+      conversations: [currentConversation],
+      notify: vi.fn()
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 0 }]
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(<CanvasWorkspace />)
+    })
+
+    for (const label of ['文本', '图片', '生成', '配置', '批量', '结果', '运行', '重置', '导入', '导出', '引导']) {
+      expect(findButtonByText(label)).toBeTruthy()
+    }
+    expect(findButtonByText('视频')).toBeUndefined()
+    expect(findButtonByText('音频')).toBeUndefined()
+    expect(document.body.textContent).toContain('从这里开始生图')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('generates from a text node through the node action toolbar', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const textNode = {
+      id: 'node-workspace-text-generate',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'neon city portrait' }
+    }
+    const project = canvasProject({ nodes: [textNode] })
+    const generateCanvasNode = vi.fn()
+    useAppStore.setState({
+      activeConversationId: currentConversation.id,
+      conversations: [currentConversation],
+      notify: vi.fn(),
+      generateCanvasNode
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 1 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:12:00.000Z'
+    }))
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(<CanvasWorkspace />)
+    })
+    await act(async () => {
+      nodeElement(textNode.id)?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    })
+    await act(async () => {
+      toolbarButton(textNode.id, '从文本生成')?.click()
+      await vi.waitFor(() => expect(generateCanvasNode).toHaveBeenCalled())
+    })
+
+    const activeProject = useCanvasStore.getState().activeProject!
+    const generateNode = activeProject.nodes.find((node) => node.type === 'generate')
+    expect(generateNode).toBeTruthy()
+    expect(activeProject.connections).toEqual([
+      expect.objectContaining({
+        fromNodeId: textNode.id,
+        toNodeId: generateNode?.id,
+        kind: 'prompt'
+      })
+    ])
+    expect(generateCanvasNode).toHaveBeenCalledWith(generateNode?.id)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('creates a connected generate node from the connection create menu', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const textNode = {
+      id: 'node-workspace-create-menu-text',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'empty-space connection prompt' }
+    }
+    const project = canvasProject({ nodes: [textNode], viewport: { x: 40, y: -20, k: 2 } })
+    useAppStore.setState({
+      activeConversationId: currentConversation.id,
+      conversations: [currentConversation],
+      notify: vi.fn()
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 1 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:22:00.000Z'
+    }))
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(<CanvasWorkspace />)
+    })
+    await act(async () => {
+      findButtonByTitle('从提示词端口连线')?.click()
+    })
+    await act(async () => {
+      dispatchPointer(canvasSurface()!, 'pointerdown', { clientX: 460, clientY: 180 })
+    })
+
+    expect(document.querySelector<HTMLElement>('[data-canvas-connection-create-menu="true"]')?.textContent).toContain('生成节点')
+    expect(document.body.textContent).not.toContain('视频')
+    expect(document.body.textContent).not.toContain('音频')
+
+    await act(async () => {
+      findButtonByTitle('创建生成节点')?.click()
+      await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(2))
+    })
+
+    const activeProject = useCanvasStore.getState().activeProject!
+    const generateNode = activeProject.nodes.find((node) => node.type === 'generate')
+    expect(generateNode).toMatchObject({
+      type: 'generate',
+      position: { x: 210, y: 100 },
+      metadata: { content: '', status: 'idle' }
+    })
+    expect(activeProject.connections).toEqual([
+      expect.objectContaining({
+        fromNodeId: textNode.id,
+        toNodeId: generateNode?.id,
+        kind: 'prompt'
+      })
+    ])
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('shows generation context summary inside the canvas workspace', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const textNode = {
+      id: 'node-workspace-summary-text',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'workspace prompt' }
+    }
+    const generateNode = {
+      id: 'node-workspace-summary-generate',
+      type: 'generate' as const,
+      title: '生成节点',
+      position: { x: 320, y: 24 },
+      width: 300,
+      height: 280,
+      metadata: { content: '', status: 'idle' as const }
+    }
+    const project = canvasProject({
+      nodes: [textNode, generateNode],
+      connections: [
+        { id: 'workspace-summary-prompt', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }
+      ]
+    })
+    useAppStore.setState({
+      activeConversationId: currentConversation.id,
+      conversations: [currentConversation],
+      notify: vi.fn()
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 2 }]
+    })
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(<CanvasWorkspace />)
+    })
+
+    const generateElement = nodeElement(generateNode.id)
+    expect(generateElement?.textContent).toContain('提示词 1')
+    expect(generateElement?.textContent).toContain('参考图 0')
+    expect(generateElement?.textContent).toContain('参数 0')
+    expect(generateElement?.textContent).toContain('批量 0')
+    expect(generateElement?.textContent).toContain('工作流请求 1')
+    expect(generateElement?.textContent).not.toContain('缺少有效提示词')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('adds a local image node from the canvas toolbar', async () => {
     const currentConversation = { ...conversation(), referenceImages: [] }
     const project = canvasProject()
@@ -224,7 +449,7 @@ describe('CanvasWorkspace', () => {
     expect(storeDataUrlFile).toHaveBeenCalledWith('references', 'local-cat.png', expect.stringMatching(/^data:image\/png;base64,/))
     expect(document.querySelector<HTMLElement>('[data-canvas-image-frame="true"]')?.className).toContain('h-full')
     expect(document.querySelector<HTMLImageElement>('img[alt="local-cat"]')?.className).toContain('object-contain')
-    expect(notify).toHaveBeenCalledWith('图片已加入 Canvas')
+    expect(notify).toHaveBeenCalledWith('本地图片已加入 Canvas：local-cat.png')
 
     await act(async () => {
       root.unmount()
@@ -419,25 +644,16 @@ describe('CanvasWorkspace', () => {
       root.render(<CanvasWorkspace />)
     })
     await act(async () => {
-      openDropdownTrigger(Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('高级')) || null)
+      findButtonByText('配置')?.click()
     })
     await act(async () => {
-      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent?.includes('配置节点'))?.click()
+      findButtonByText('批量')?.click()
     })
     await act(async () => {
-      openDropdownTrigger(Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('高级')) || null)
+      findButtonByText('结果')?.click()
     })
     await act(async () => {
-      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent?.includes('批量节点'))?.click()
-    })
-    await act(async () => {
-      openDropdownTrigger(Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('高级')) || null)
-    })
-    await act(async () => {
-      Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find((item) => item.textContent?.includes('结果节点'))?.click()
-    })
-    await act(async () => {
-      Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('运行'))?.click()
+      findButtonByText('运行')?.click()
     })
 
     expect(useCanvasStore.getState().activeProject?.nodes.map((node) => node.type)).toEqual(['config', 'batch', 'result'])
@@ -450,11 +666,37 @@ describe('CanvasWorkspace', () => {
   })
 })
 
-function openDropdownTrigger(trigger: HTMLElement | null): void {
-  if (!trigger) return
-  trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
-  trigger.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, button: 0 }))
-  trigger.click()
+function findButtonByText(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text))
+}
+
+function findButtonByTitle(title: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.title === title)
+}
+
+function nodeElement(nodeId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`[data-canvas-node-id="${nodeId}"]`)
+}
+
+function toolbarButton(nodeId: string, title: string): HTMLButtonElement | undefined {
+  return Array.from(nodeElement(nodeId)?.querySelectorAll<HTMLButtonElement>('[data-canvas-node-action-toolbar="true"] button') || []).find((button) => button.title === title)
+}
+
+function canvasSurface(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('.canvas-viewport > div.absolute.inset-0')
+}
+
+function dispatchPointer(element: HTMLElement, type: string, init: MouseEventInit = {}): void {
+  const event = new MouseEvent(type, {
+    bubbles: true,
+    cancelable: true,
+    button: 0,
+    clientX: 10,
+    clientY: 10,
+    ...init
+  })
+  Object.defineProperty(event, 'pointerId', { value: 1 })
+  element.dispatchEvent(event)
 }
 
 function pngHeaderBytes(width: number, height: number): Uint8Array {

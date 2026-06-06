@@ -91,6 +91,17 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().toast).toBe('检查更新失败：updater endpoint missing')
   })
 
+  it('toggles the workspace settings panel without changing the active view', () => {
+    useAppStore.setState({ view: 'canvas', settingsVisible: true })
+
+    useAppStore.getState().toggleSettings()
+
+    expect(useAppStore.getState()).toMatchObject({
+      view: 'canvas',
+      settingsVisible: false
+    })
+  })
+
   it('applies prompt templates to the active conversation', async () => {
     await useAppStore.getState().load()
     const template = useAppStore.getState().templates[0]
@@ -688,6 +699,184 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().activeConversationId).toBe(workspaceConversation.id)
   })
 
+  it('adds a current reference image to the active canvas project', async () => {
+    await useAppStore.getState().load()
+    const reference = {
+      id: 'reference-add-canvas-test',
+      name: 'current-reference.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,cmVmZXJlbmNl',
+      fileSizeBytes: 9,
+      storagePath: null,
+      createdAt: '2026-06-06T00:00:00.000Z'
+    }
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      referenceImages: [reference]
+    }
+    const project = canvasProjectForAppStore(conversation.id, [], [])
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      activeCanvasConversationId: conversation.id,
+      view: 'workspace'
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, conversationId: conversation.id, updatedAt: project.updatedAt, nodeCount: 0 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:10:00.000Z'
+    }))
+
+    await useAppStore.getState().addReferenceToCanvas(reference.id)
+
+    expect(useAppStore.getState()).toMatchObject({
+      view: 'canvas',
+      toast: '参考图已加入 Canvas：current-reference.png'
+    })
+    expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(1)
+    expect(useCanvasStore.getState().activeProject?.nodes[0]).toMatchObject({
+      type: 'image',
+      title: 'current-reference',
+      metadata: {
+        content: reference.dataUrl,
+        referenceImageId: reference.id,
+        mimeType: 'image/png',
+        fileSizeBytes: 9
+      }
+    })
+  })
+
+  it('does not duplicate the same reference image when adding it to canvas again', async () => {
+    await useAppStore.getState().load()
+    const reference = {
+      id: 'reference-dedupe-canvas-test',
+      name: 'dedupe.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,ZGVkdXBl',
+      fileSizeBytes: 6,
+      storagePath: null,
+      createdAt: '2026-06-06T00:00:00.000Z'
+    }
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      referenceImages: [reference]
+    }
+    const existingNode = canvasNode({
+      id: 'node-existing-reference',
+      type: 'image',
+      content: reference.dataUrl,
+      metadata: { referenceImageId: reference.id, mimeType: 'image/png', fileSizeBytes: 6 }
+    })
+    const project = canvasProjectForAppStore(conversation.id, [existingNode], [])
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      activeCanvasConversationId: conversation.id,
+      view: 'workspace'
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, conversationId: conversation.id, updatedAt: project.updatedAt, nodeCount: 1 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:11:00.000Z'
+    }))
+
+    await useAppStore.getState().addReferenceToCanvas(reference.id)
+
+    expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(1)
+    expect(useCanvasStore.getState().activeProject?.nodes[0]?.id).toBe(existingNode.id)
+  })
+
+  it('uses a safe display source when adding a stored reference image to canvas', async () => {
+    await useAppStore.getState().load()
+    const reference = {
+      id: 'reference-safe-source-canvas-test',
+      name: 'stored.png',
+      mimeType: 'image/png',
+      dataUrl: 'C:\\stored\\references\\stored.png',
+      fileSizeBytes: 12,
+      storagePath: 'C:\\stored\\references\\stored.png',
+      createdAt: '2026-06-06T00:00:00.000Z'
+    }
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      referenceImages: [reference]
+    }
+    const project = canvasProjectForAppStore(conversation.id, [], [])
+    vi.spyOn(platformModule, 'imageSourceForDisplay').mockResolvedValue('asset://localhost/C:/stored/references/stored.png')
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      activeCanvasConversationId: conversation.id,
+      view: 'workspace'
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, conversationId: conversation.id, updatedAt: project.updatedAt, nodeCount: 0 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:12:00.000Z'
+    }))
+
+    await useAppStore.getState().addReferenceToCanvas(reference.id)
+
+    expect(platformModule.imageSourceForDisplay).toHaveBeenCalledWith(reference.dataUrl, reference.storagePath)
+    expect(useCanvasStore.getState().activeProject?.nodes[0]?.metadata).toMatchObject({
+      content: 'asset://localhost/C:/stored/references/stored.png',
+      referenceImageId: reference.id,
+      storagePath: reference.storagePath
+    })
+  })
+
+  it('does not create a canvas node when the reference display source is unavailable', async () => {
+    await useAppStore.getState().load()
+    const reference = {
+      id: 'reference-missing-source-canvas-test',
+      name: 'missing.png',
+      mimeType: 'image/png',
+      dataUrl: 'C:\\stored\\references\\missing.png',
+      fileSizeBytes: 12,
+      storagePath: 'C:\\stored\\references\\missing.png',
+      createdAt: '2026-06-06T00:00:00.000Z'
+    }
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      referenceImages: [reference]
+    }
+    const project = canvasProjectForAppStore(conversation.id, [], [])
+    vi.spyOn(platformModule, 'imageSourceForDisplay').mockResolvedValue(null)
+    const update = vi.spyOn(pixaiApi.canvas, 'update')
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      activeCanvasConversationId: conversation.id,
+      view: 'workspace'
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, conversationId: conversation.id, updatedAt: project.updatedAt, nodeCount: 0 }]
+    })
+
+    await useAppStore.getState().addReferenceToCanvas(reference.id)
+
+    expect(update).not.toHaveBeenCalled()
+    expect(useCanvasStore.getState().activeProject?.nodes).toEqual([])
+    expect(useAppStore.getState().toast).toBe('图片内容不可用，无法加入 Canvas。')
+  })
+
   it('generates from a canvas generate node using only connected prompt and references', async () => {
     await useAppStore.getState().load()
     const conversation = {
@@ -795,12 +984,18 @@ describe('useAppStore', () => {
     })
     expect(activeProject.nodes).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        type: 'image',
-        metadata: expect.objectContaining({ historyItemId: item.id })
+        type: 'result',
+        metadata: expect.objectContaining({
+          content: item.dataUrl,
+          historyItemId: item.id,
+          status: 'succeeded'
+        })
       })
     ]))
+    const resultNode = activeProject.nodes.find((node) => node.type === 'result' && node.metadata.historyItemId === item.id)
+    expect(resultNode).toBeTruthy()
     expect(activeProject.connections).toEqual(expect.arrayContaining([
-      expect.objectContaining({ fromNodeId: generateNode.id, kind: 'result' })
+      expect.objectContaining({ fromNodeId: generateNode.id, toNodeId: resultNode?.id, kind: 'result' })
     ]))
     expect(useAppStore.getState().generationPreviews[run.id]).toBeUndefined()
   })
@@ -1144,6 +1339,246 @@ describe('useAppStore', () => {
         historyItemId: item.id
       }
     })
+  })
+
+  it('keeps multiple canvas generation results when an explicit result node is connected', async () => {
+    await useAppStore.getState().load()
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      ratio: '1:1' as const,
+      size: '1024x1024',
+      quality: 'high' as const
+    }
+    const configNode = canvasNode({
+      id: 'node-multi-config',
+      type: 'config',
+      content: '',
+      metadata: { n: 2 }
+    })
+    const generateNode = canvasNode({ id: 'node-multi-generate', type: 'generate', content: 'multi result prompt' })
+    const resultNode = canvasNode({ id: 'node-multi-result', type: 'result', content: '', metadata: { status: 'idle' } })
+    const project = canvasProjectForAppStore(conversation.id, [configNode, generateNode, resultNode], [
+      { id: 'connection-multi-config', fromNodeId: configNode.id, toNodeId: generateNode.id, kind: 'config' },
+      { id: 'connection-multi-result', fromNodeId: generateNode.id, toNodeId: resultNode.id, kind: 'result' }
+    ])
+    const firstItem = succeededHistoryItem({
+      id: 'history-multi-first',
+      conversationId: conversation.id,
+      runId: 'run-multi-result',
+      prompt: 'multi result prompt',
+      requestIndex: 0,
+      dataUrl: 'data:image/png;base64,Zmlyc3Q=',
+      fileSizeBytes: 5
+    })
+    const secondItem = succeededHistoryItem({
+      id: 'history-multi-second',
+      conversationId: conversation.id,
+      runId: 'run-multi-result',
+      prompt: 'multi result prompt',
+      requestIndex: 1,
+      dataUrl: 'data:image/png;base64,c2Vjb25k',
+      fileSizeBytes: 6
+    })
+    const run = generationRunForAppStore({
+      id: 'run-multi-result',
+      conversationId: conversation.id,
+      prompt: 'multi result prompt',
+      items: [firstItem, secondItem]
+    })
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      history: [],
+      runsByConversation: {},
+      notify: vi.fn()
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T01:10:00.000Z'
+    }))
+    const generateSpy = vi.spyOn(pixaiApi.image, 'generate').mockResolvedValue({ run, items: [firstItem, secondItem] })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([run])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([secondItem, firstItem])
+
+    await useAppStore.getState().generateCanvasNode(generateNode.id)
+
+    expect(generateSpy).toHaveBeenCalledWith(expect.objectContaining({ n: 2 }), expect.anything())
+    const activeProject = useCanvasStore.getState().activeProject!
+    const resultNodes = activeProject.nodes.filter((node) => node.type === 'result')
+    expect(resultNodes).toHaveLength(2)
+    expect(resultNodes.map((node) => node.metadata.historyItemId)).toEqual(['history-multi-first', 'history-multi-second'])
+    expect(resultNodes.map((node) => node.metadata.requestIndex)).toEqual([0, 1])
+    expect(activeProject.connections.filter((connection) => connection.fromNodeId === generateNode.id && connection.kind === 'result')).toHaveLength(2)
+  })
+
+  it('runs every batch variant from a canvas generate node and records failed result nodes', async () => {
+    await useAppStore.getState().load()
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      ratio: '1:1' as const,
+      size: '1024x1024',
+      quality: 'high' as const
+    }
+    const batchNode = canvasNode({
+      id: 'node-batch-all',
+      type: 'batch',
+      content: ['variant one', 'variant two', 'variant three'].join('\n')
+    })
+    const configNode = canvasNode({
+      id: 'node-batch-config',
+      type: 'config',
+      content: '',
+      metadata: { n: 2 }
+    })
+    const generateNode = canvasNode({ id: 'node-batch-generate', type: 'generate', content: 'shared base prompt' })
+    const project = canvasProjectForAppStore(conversation.id, [batchNode, configNode, generateNode], [
+      { id: 'connection-batch-all', fromNodeId: batchNode.id, toNodeId: generateNode.id, kind: 'batch' },
+      { id: 'connection-batch-config', fromNodeId: configNode.id, toNodeId: generateNode.id, kind: 'config' }
+    ])
+    const firstItems = [
+      succeededHistoryItem({
+        id: 'history-batch-1-1',
+        conversationId: conversation.id,
+        runId: 'run-batch-1',
+        prompt: 'shared base prompt\n\nvariant one',
+        requestIndex: 0,
+        dataUrl: 'data:image/png;base64,YmF0Y2gxMQ==',
+        fileSizeBytes: 8
+      }),
+      succeededHistoryItem({
+        id: 'history-batch-1-2',
+        conversationId: conversation.id,
+        runId: 'run-batch-1',
+        prompt: 'shared base prompt\n\nvariant one',
+        requestIndex: 1,
+        dataUrl: 'data:image/png;base64,YmF0Y2gxMg==',
+        fileSizeBytes: 8
+      })
+    ]
+    const secondSuccess = succeededHistoryItem({
+      id: 'history-batch-2-1',
+      conversationId: conversation.id,
+      runId: 'run-batch-2',
+      prompt: 'shared base prompt\n\nvariant two',
+      requestIndex: 0,
+      dataUrl: 'data:image/png;base64,YmF0Y2gyMQ==',
+      fileSizeBytes: 8
+    })
+    const secondFailure = succeededHistoryItem({
+      id: 'history-batch-2-2-failed',
+      conversationId: conversation.id,
+      runId: 'run-batch-2',
+      prompt: 'shared base prompt\n\nvariant two',
+      requestIndex: 1,
+      dataUrl: null,
+      fileSizeBytes: null,
+      status: 'failed',
+      errorMessage: 'variant two second image failed'
+    })
+    const thirdItems = [
+      succeededHistoryItem({
+        id: 'history-batch-3-1',
+        conversationId: conversation.id,
+        runId: 'run-batch-3',
+        prompt: 'shared base prompt\n\nvariant three',
+        requestIndex: 0,
+        dataUrl: 'data:image/png;base64,YmF0Y2gzMQ==',
+        fileSizeBytes: 8
+      }),
+      succeededHistoryItem({
+        id: 'history-batch-3-2',
+        conversationId: conversation.id,
+        runId: 'run-batch-3',
+        prompt: 'shared base prompt\n\nvariant three',
+        requestIndex: 1,
+        dataUrl: 'data:image/png;base64,YmF0Y2gzMg==',
+        fileSizeBytes: 8
+      })
+    ]
+    const firstRun = generationRunForAppStore({
+      id: 'run-batch-1',
+      conversationId: conversation.id,
+      prompt: 'shared base prompt\n\nvariant one',
+      items: firstItems
+    })
+    const secondRun = generationRunForAppStore({
+      id: 'run-batch-2',
+      conversationId: conversation.id,
+      prompt: 'shared base prompt\n\nvariant two',
+      items: [secondSuccess, secondFailure]
+    })
+    const thirdRun = generationRunForAppStore({
+      id: 'run-batch-3',
+      conversationId: conversation.id,
+      prompt: 'shared base prompt\n\nvariant three',
+      items: thirdItems
+    })
+    const notify = vi.fn()
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      history: [],
+      runsByConversation: {},
+      notify
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T01:20:00.000Z'
+    }))
+    const generateSpy = vi.spyOn(pixaiApi.image, 'generate')
+      .mockResolvedValueOnce({ run: firstRun, items: firstItems })
+      .mockResolvedValueOnce({ run: secondRun, items: [secondSuccess, secondFailure], errorMessage: 'one image failed' })
+      .mockResolvedValueOnce({ run: thirdRun, items: thirdItems })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([thirdRun, secondRun, firstRun])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([...thirdItems, secondFailure, secondSuccess, ...firstItems])
+
+    await useAppStore.getState().generateCanvasNode(generateNode.id)
+
+    expect(generateSpy).toHaveBeenCalledTimes(3)
+    expect(generateSpy.mock.calls.map(([input]) => input.prompt)).toEqual([
+      'shared base prompt\n\nvariant one',
+      'shared base prompt\n\nvariant two',
+      'shared base prompt\n\nvariant three'
+    ])
+    expect(generateSpy.mock.calls.map(([input]) => input.n)).toEqual([2, 2, 2])
+    const activeProject = useCanvasStore.getState().activeProject!
+    const resultNodes = activeProject.nodes.filter((node) => node.type === 'result')
+    expect(resultNodes).toHaveLength(6)
+    expect(resultNodes.filter((node) => node.metadata.status === 'succeeded')).toHaveLength(5)
+    const failedNode = resultNodes.find((node) => node.metadata.status === 'failed')
+    expect(failedNode).toMatchObject({
+      type: 'result',
+      title: '批量 2 · #2 失败',
+      metadata: {
+        status: 'failed',
+        errorMessage: 'variant two second image failed',
+        historyItemId: secondFailure.id,
+        runId: secondRun.id,
+        requestIndex: 1,
+        batchRootId: generateNode.id,
+        batchIndex: 1,
+        promptVariant: 'variant two'
+      }
+    })
+    expect(activeProject.nodes.find((node) => node.id === generateNode.id)).toMatchObject({
+      metadata: {
+        status: 'failed',
+        errorMessage: '批量生成部分失败：5 成功，1 失败'
+      }
+    })
+    expect(notify).toHaveBeenLastCalledWith('Canvas 批量生成完成：5 成功，1 失败')
   })
 
   it('rejects canvas workflow runs that exceed the request budget before generating', async () => {

@@ -54,6 +54,9 @@ export type CanvasNodeMetadata = {
   n?: number
   runId?: string
   requestIndex?: number
+  batchRootId?: string
+  batchIndex?: number
+  promptVariant?: string
   errorMessage?: string
   referenceImageId?: string
   historyItemId?: string

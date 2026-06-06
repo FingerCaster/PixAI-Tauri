@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link2, Loader2, Maximize2, Move, Trash2, WandSparkles } from 'lucide-react'
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
+import { Brush, Eye, Link2, Loader2, Maximize2, Move, PanelTop, Play, RefreshCw, Trash2, WandSparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import type { CanvasConnection, CanvasNodeData, CanvasNodeMetadata, CanvasPoint, CanvasViewport, GenerationPreviewState } from '../../shared/types'
+import { imageSourceForDisplay } from '../../lib/platform'
+import { canvasConnectionKindForNodes } from '../../services/canvas-projects'
+import { summarizeCanvasGenerationInput } from '../../services/canvas-workflow'
+import type { CanvasConnection, CanvasConnectionKind, CanvasNodeData, CanvasNodeMetadata, CanvasNodeType, CanvasPoint, CanvasProject, CanvasViewport, GenerationPreviewState } from '../../shared/types'
 import { CanvasBatchNodeBody } from './CanvasBatchNodeBody'
 import { CanvasConfigNodeBody } from './CanvasConfigNodeBody'
 import { CanvasGenerateNodeBody } from './CanvasGenerateNodeBody'
@@ -21,14 +24,39 @@ type CanvasNodeLayerProps = {
   onNodeMetadataChange: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => void | Promise<void>
   onNodeDelete: (nodeId: string) => void | Promise<void>
   onConnectionAdd: (fromNodeId: string, toNodeId: string) => void | Promise<void>
+  onConnectionCreate: (input: CanvasConnectedNodeCreateInput) => CanvasNodeData | null | Promise<CanvasNodeData | null>
   onConnectionDelete: (connectionId: string) => void | Promise<void>
   onTextNodeEnrich: (nodeId: string) => void | Promise<void>
+  onTextNodeGenerate: (nodeId: string) => void | Promise<void>
   onGenerateNodeRun: (nodeId: string) => void | Promise<void>
   generationPreviews?: GenerationPreviewState
   promptEnriching?: boolean
 }
 
+export type CanvasNodeLayerHandle = {
+  handleCanvasBlankPointerDown: (input: CanvasBlankPointerDownInput) => boolean
+}
+
 type SelectedCanvasItem = { kind: 'node' | 'connection'; id: string } | null
+type CanvasConnectedNodeCreateInput = {
+  sourceNodeId: string
+  type: CanvasNodeType
+  position: CanvasPoint
+}
+type CanvasBlankPointerDownInput = {
+  position: CanvasPoint
+  screenPosition: CanvasPoint
+}
+type PendingConnectionCreateMenu = {
+  sourceNodeId: string
+  position: CanvasPoint
+}
+type ConnectionCreateOption = {
+  type: CanvasNodeType
+  label: string
+  description: string
+  icon: React.ReactNode
+}
 type DragState = {
   nodeId: string
   clientX: number
@@ -39,15 +67,14 @@ type DragState = {
 
 const NODE_HEADER_HEIGHT = 36
 const NODE_HEADER_PADDING_X = 8
-const NODE_HEADER_BUTTON_SIZE = 28
-const NODE_HEADER_BUTTON_GAP = 4
 const IMAGE_NODE_DISPLAY_WIDTH = 320
 const IMAGE_NODE_DISPLAY_HEIGHT = 260
 const IMAGE_NODE_MAX_DISPLAY_WIDTH = 440
 const IMAGE_NODE_MAX_DISPLAY_HEIGHT = 360
+const GENERATE_NODE_MIN_DISPLAY_HEIGHT = 340
 const NODE_TITLE_MAX_VISIBLE_LENGTH = 28
 
-export function CanvasNodeLayer({
+export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayerProps>(function CanvasNodeLayer({
   viewport,
   nodes,
   connections,
@@ -56,22 +83,36 @@ export function CanvasNodeLayer({
   onNodeMetadataChange,
   onNodeDelete,
   onConnectionAdd,
+  onConnectionCreate,
   onConnectionDelete,
   onTextNodeEnrich,
+  onTextNodeGenerate,
   onGenerateNodeRun,
   generationPreviews = {},
   promptEnriching = false
-}: CanvasNodeLayerProps) {
+}, ref) {
   const [draftNodes, setDraftNodes] = useState(nodes)
   const [selectedItem, setSelectedItem] = useState<SelectedCanvasItem>(null)
   const [connectionSourceId, setConnectionSourceId] = useState<string | null>(null)
+  const [pendingConnectionCreate, setPendingConnectionCreate] = useState<PendingConnectionCreateMenu | null>(null)
   const [preview, setPreview] = useState<{ node: CanvasNodeData; source: string } | null>(null)
   const [maskEditor, setMaskEditor] = useState<{ node: CanvasNodeData; source: string } | null>(null)
   const [expandedTextNodeId, setExpandedTextNodeId] = useState<string | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const dirtyContentNodeIdsRef = useRef<Set<string>>(new Set())
   const displayNodes = useMemo(() => draftNodes.map(normalizeNodeForRender), [draftNodes])
+  const generationInputSummaryByNodeId = useMemo(() => {
+    const project = renderCanvasProject(displayNodes, connections, viewport)
+    return new Map(
+      displayNodes
+        .filter((node) => node.type === 'generate')
+        .map((node) => [node.id, summarizeCanvasGenerationInput(project, node.id)])
+    )
+  }, [connections, displayNodes, viewport])
   const nodeById = useMemo(() => new Map(displayNodes.map((node) => [node.id, node])), [displayNodes])
+  const connectionSourceNode = connectionSourceId ? nodeById.get(connectionSourceId) || null : null
+  const pendingConnectionSourceNode = pendingConnectionCreate ? nodeById.get(pendingConnectionCreate.sourceNodeId) || null : null
+  const pendingConnectionOptions = pendingConnectionSourceNode ? connectionCreateOptionsForSource(pendingConnectionSourceNode) : []
   const selectedConnection = selectedItem?.kind === 'connection' ? connections.find((connection) => connection.id === selectedItem.id) : null
   const selectedNodeId = selectedItem?.kind === 'node' ? selectedItem.id : null
   const selectedConnectionMidpoint = selectedConnection ? connectionMidpoint(selectedConnection, nodeById) : null
@@ -82,6 +123,38 @@ export function CanvasNodeLayer({
   useEffect(() => {
     setDraftNodes((current) => mergeIncomingNodesWithDirtyContent(nodes, current, dirtyContentNodeIdsRef.current))
   }, [nodes])
+
+  useEffect(() => {
+    if (connectionSourceId && !nodeById.has(connectionSourceId)) setConnectionSourceId(null)
+    if (pendingConnectionCreate && !nodeById.has(pendingConnectionCreate.sourceNodeId)) setPendingConnectionCreate(null)
+  }, [connectionSourceId, nodeById, pendingConnectionCreate])
+
+  useImperativeHandle(ref, () => ({
+    handleCanvasBlankPointerDown: (input) => {
+      if (!connectionSourceId) {
+        if (pendingConnectionCreate) setPendingConnectionCreate(null)
+        return false
+      }
+      const sourceNode = nodeById.get(connectionSourceId)
+      if (!sourceNode) {
+        setConnectionSourceId(null)
+        setPendingConnectionCreate(null)
+        return false
+      }
+      const options = connectionCreateOptionsForSource(sourceNode)
+      if (options.length === 0) {
+        setConnectionSourceId(null)
+        setPendingConnectionCreate(null)
+        return false
+      }
+      setPendingConnectionCreate({
+        sourceNodeId: sourceNode.id,
+        position: input.position
+      })
+      setSelectedItem({ kind: 'node', id: sourceNode.id })
+      return true
+    }
+  }), [connectionSourceId, nodeById, pendingConnectionCreate])
 
   const selectNode = (nodeId: string) => setSelectedItem({ kind: 'node', id: nodeId })
   const updateDraftNode = (nodeId: string, patch: Partial<CanvasNodeData>) => {
@@ -98,7 +171,7 @@ export function CanvasNodeLayer({
     setDraftNodes((current) => current.map((node) => (
       node.id === nodeId ? { ...node, metadata: { ...node.metadata, content } } : node
     )))
-    void onNodeContentChange(nodeId, content)
+    return onNodeContentChange(nodeId, content)
   }
   const updateDraftNodeMetadata = (node: CanvasNodeData, patch: Partial<CanvasNodeMetadata>) => {
     updateDraftNode(node.id, { metadata: { ...node.metadata, ...patch } })
@@ -109,23 +182,71 @@ export function CanvasNodeLayer({
   }
   const closeExpandedTextNode = () => {
     if (expandedTextNode) {
-      commitDraftNodeContent(expandedTextNode.id, expandedTextNode.metadata.content)
+      void commitDraftNodeContent(expandedTextNode.id, expandedTextNode.metadata.content)
     }
     setExpandedTextNodeId(null)
   }
-  const startConnection = (nodeId: string) => {
+  const deleteCanvasNode = (node: CanvasNodeData) => {
+    void onNodeDelete(node.id)
+    setSelectedItem(null)
+    if (connectionSourceId === node.id) setConnectionSourceId(null)
+    if (pendingConnectionCreate?.sourceNodeId === node.id) setPendingConnectionCreate(null)
+  }
+  const openNodePreview = (node: CanvasNodeData) => {
+    void resolveNodeImageSource(node).then((source) => {
+      if (source) setPreview({ node, source })
+    })
+  }
+  const openNodeMaskEditor = (node: CanvasNodeData) => {
+    void resolveNodeImageSource(node).then((source) => {
+      if (source) setMaskEditor({ node, source })
+    })
+  }
+  const generateFromTextNode = (node: CanvasNodeData) => {
+    if (node.type !== 'text' || !node.metadata.content.trim()) return
+    void Promise.resolve(commitDraftNodeContent(node.id, node.metadata.content))
+      .then(() => onTextNodeGenerate(node.id))
+    selectNode(node.id)
+  }
+  const runGenerateNode = (node: CanvasNodeData) => {
+    if (node.type !== 'generate' || node.metadata.status === 'running') return
+    void onGenerateNodeRun(node.id)
+    selectNode(node.id)
+  }
+  const startConnection = (node: CanvasNodeData) => {
     if (!connectionSourceId) {
-      setConnectionSourceId(nodeId)
-      selectNode(nodeId)
+      if (!sourcePortLabel(node)) return
+      setConnectionSourceId(node.id)
+      setPendingConnectionCreate(null)
+      selectNode(node.id)
       return
     }
-    if (connectionSourceId === nodeId) {
+    if (connectionSourceId === node.id) {
       setConnectionSourceId(null)
+      setPendingConnectionCreate(null)
       return
     }
-    void onConnectionAdd(connectionSourceId, nodeId)
+    if (!connectionSourceNode || !targetPortLabel(connectionSourceNode, node)) return
+    void onConnectionAdd(connectionSourceId, node.id)
     setConnectionSourceId(null)
-    selectNode(nodeId)
+    setPendingConnectionCreate(null)
+    selectNode(node.id)
+  }
+  const createConnectedNode = (type: CanvasNodeType) => {
+    if (!pendingConnectionCreate) return
+    const input = {
+      sourceNodeId: pendingConnectionCreate.sourceNodeId,
+      type,
+      position: pendingConnectionCreate.position
+    }
+    void Promise.resolve(onConnectionCreate(input)).then((node) => {
+      if (node) selectNode(node.id)
+    })
+    setPendingConnectionCreate(null)
+    setConnectionSourceId(null)
+  }
+  const closeConnectionCreateMenu = () => {
+    setPendingConnectionCreate(null)
   }
 
   return (
@@ -142,6 +263,9 @@ export function CanvasNodeLayer({
           const toNode = nodeById.get(connection.toNodeId)
           if (!fromNode || !toNode) return null
           const path = connectionPath(fromNode, toNode, selectedNodeId)
+          const midpoint = connectionMidpoint(connection, nodeById)
+          const label = connectionKindLabel(connection.kind)
+          const labelWidth = label.length * 14 + 14
           const selected = selectedItem?.kind === 'connection' && selectedItem.id === connection.id
           return (
             <g key={connection.id}>
@@ -161,6 +285,28 @@ export function CanvasNodeLayer({
                   setSelectedItem({ kind: 'connection', id: connection.id })
                 }}
               />
+              {midpoint ? (
+                <g pointerEvents="none" transform={`translate(${midpoint.x} ${midpoint.y})`}>
+                  <rect
+                    x={-labelWidth / 2}
+                    y={-10}
+                    width={labelWidth}
+                    height={20}
+                    rx={5}
+                    fill="var(--background)"
+                    stroke="currentColor"
+                    strokeOpacity={selected ? 0.7 : 0.38}
+                  />
+                  <text
+                    x="0"
+                    y="4"
+                    textAnchor="middle"
+                    className="fill-current text-[11px] font-medium"
+                  >
+                    {label}
+                  </text>
+                </g>
+              ) : null}
             </g>
           )
         })}
@@ -168,20 +314,21 @@ export function CanvasNodeLayer({
       {displayNodes.map((node) => {
         const selected = selectedItem?.kind === 'node' && selectedItem.id === node.id
         const connecting = connectionSourceId === node.id
+        const sourceLabel = sourcePortLabel(node)
+        const targetLabel = connectionSourceNode && !connecting ? targetPortLabel(connectionSourceNode, node) : null
         const displayTitle = displayNodeTitle(node)
         return (
           <div
             key={node.id}
             className={cn(
-              'absolute grid grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm',
-              selected ? 'border-primary shadow-md ring-2 ring-primary/18' : 'border-border'
+              'group/canvas-node absolute overflow-visible',
+              selected ? 'z-20' : 'z-10'
             )}
             style={{
               left: node.position.x,
               top: node.position.y,
               width: node.width,
-              height: node.height,
-              zIndex: selected ? 20 : 10
+              height: node.height
             }}
             data-canvas-node-id={node.id}
             data-canvas-node-type={node.type}
@@ -190,6 +337,24 @@ export function CanvasNodeLayer({
               selectNode(node.id)
             }}
           >
+            <CanvasNodeActionToolbar
+              node={node}
+              visible={selected || connecting}
+              sourceLabel={sourceLabel}
+              connecting={connecting}
+              onStartConnection={() => startConnection(node)}
+              onPreview={() => openNodePreview(node)}
+              onMaskEdit={() => openNodeMaskEditor(node)}
+              onRunGenerate={() => runGenerateNode(node)}
+              onGenerateFromText={() => generateFromTextNode(node)}
+              onDelete={() => deleteCanvasNode(node)}
+            />
+            <div
+              className={cn(
+                'grid h-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm',
+                selected ? 'border-primary shadow-md ring-2 ring-primary/18' : 'border-border'
+              )}
+            >
             <div
               className="flex h-9 items-center gap-1 border-b border-border bg-muted/55 px-2 text-xs"
               onPointerDown={(event) => {
@@ -228,37 +393,42 @@ export function CanvasNodeLayer({
               }}
             >
               <Move size={14} className="shrink-0 text-muted-foreground" />
+              {targetLabel ? (
+                <Button
+                  type="button"
+                  className="h-7 shrink-0 border-primary/45 bg-primary/8 px-2 text-[11px]"
+                  variant="outline"
+                  size="sm"
+                  title={`连接为${targetLabel}`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    startConnection(node)
+                  }}
+                >
+                  <Link2 size={13} />
+                  {targetLabel}
+                </Button>
+              ) : null}
               <span className="min-w-0 flex-1 truncate font-medium" title={node.title}>{displayTitle}</span>
               <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  type="button"
-                  className="border-border bg-background/80"
-                  variant={connecting ? 'secondary' : 'outline'}
-                  size="icon-sm"
-                  title={connectionSourceId ? '完成连线' : '开始连线'}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    startConnection(node.id)
-                  }}
-                >
-                  <Link2 />
-                </Button>
-                <Button
-                  type="button"
-                  className="border-border bg-background/80 text-muted-foreground hover:text-destructive"
-                  variant="outline"
-                  size="icon-sm"
-                  title="删除节点"
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    void onNodeDelete(node.id)
-                    setSelectedItem(null)
-                  }}
-                >
-                  <Trash2 />
-                </Button>
+                {sourceLabel && (!connectionSourceNode || connecting) ? (
+                  <Button
+                    type="button"
+                    className="h-7 border-border bg-background/80 px-2 text-[11px]"
+                    variant={connecting ? 'secondary' : 'outline'}
+                    size="sm"
+                    title={connecting ? '取消连线' : `从${sourceLabel}端口连线`}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      startConnection(node)
+                    }}
+                  >
+                    <Link2 size={13} />
+                    {sourceLabel}
+                  </Button>
+                ) : null}
               </div>
             </div>
             {node.type === 'image' ? (
@@ -271,6 +441,7 @@ export function CanvasNodeLayer({
             ) : node.type === 'generate' ? (
               <CanvasGenerateNodeBody
                 node={node}
+                inputSummary={generationInputSummaryByNodeId.get(node.id)}
                 preview={previewForNode(node, generationPreviews)}
                 onPromptDraftChange={(content) => updateDraftNodeContent(node.id, content)}
                 onPromptCommit={(content) => commitDraftNodeContent(node.id, content)}
@@ -307,7 +478,7 @@ export function CanvasNodeLayer({
                   onPointerDown={(event) => event.stopPropagation()}
                   onWheel={(event) => event.stopPropagation()}
                   onChange={(event) => updateDraftNodeContent(node.id, event.target.value)}
-                  onBlur={(event) => commitDraftNodeContent(node.id, event.target.value)}
+                  onBlur={(event) => void commitDraftNodeContent(node.id, event.target.value)}
                 />
                 <div className="flex min-h-9 items-center justify-between border-t border-border bg-background/55 px-2 py-1">
                   <Button
@@ -344,6 +515,7 @@ export function CanvasNodeLayer({
                 </div>
               </div>
             )}
+            </div>
           </div>
         )
       })}
@@ -408,8 +580,272 @@ export function CanvasNodeLayer({
           </Button>
         </div>
       ) : null}
+      {pendingConnectionCreate && pendingConnectionSourceNode && pendingConnectionOptions.length > 0 ? (
+        <ConnectionCreateMenu
+          pending={pendingConnectionCreate}
+          viewport={viewport}
+          sourceNode={pendingConnectionSourceNode}
+          options={pendingConnectionOptions}
+          onCreate={createConnectedNode}
+          onClose={closeConnectionCreateMenu}
+        />
+      ) : null}
     </div>
   )
+})
+
+function ConnectionCreateMenu({
+  pending,
+  viewport,
+  sourceNode,
+  options,
+  onCreate,
+  onClose
+}: {
+  pending: PendingConnectionCreateMenu
+  viewport: CanvasViewport
+  sourceNode: CanvasNodeData
+  options: ConnectionCreateOption[]
+  onCreate: (type: CanvasNodeType) => void
+  onClose: () => void
+}) {
+  return (
+    <div
+      className="absolute z-40 w-52 rounded-lg border border-border bg-background/95 p-1.5 text-card-foreground shadow-lg backdrop-blur"
+      data-canvas-connection-create-menu="true"
+      style={{
+        left: pending.position.x,
+        top: pending.position.y,
+        transform: `scale(${1 / viewport.k})`,
+        transformOrigin: '0 0'
+      }}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div className="px-2 pb-1.5 pt-1 text-[11px] font-medium text-muted-foreground">
+        从{sourcePortLabel(sourceNode)}连接
+      </div>
+      <div className="grid gap-1">
+        {options.map((option) => (
+          <Button
+            key={option.type}
+            type="button"
+            variant="ghost"
+            className="h-auto justify-start gap-2 px-2 py-2 text-left"
+            title={`创建${option.label}`}
+            onClick={() => onCreate(option.type)}
+          >
+            <span className="grid size-7 shrink-0 place-items-center rounded-md border border-border bg-muted/45">
+              {option.icon}
+            </span>
+            <span className="grid min-w-0 gap-0.5">
+              <span className="text-xs font-medium leading-4">{option.label}</span>
+              <span className="text-[11px] leading-4 text-muted-foreground">{option.description}</span>
+            </span>
+          </Button>
+        ))}
+      </div>
+      <div className="mt-1 border-t border-border pt-1">
+        <Button
+          type="button"
+          variant="ghost"
+          className="h-7 w-full justify-start px-2 text-[11px] text-muted-foreground"
+          onClick={onClose}
+        >
+          取消
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function connectionCreateOptionsForSource(sourceNode: CanvasNodeData): ConnectionCreateOption[] {
+  if (sourceNode.type === 'generate') {
+    return [
+      {
+        type: 'result',
+        label: '结果节点',
+        description: '接收本次生成图片',
+        icon: <PanelTop size={14} />
+      }
+    ]
+  }
+  if (sourceNode.type === 'text') {
+    return [
+      {
+        type: 'generate',
+        label: '生成节点',
+        description: '连接为提示词输入',
+        icon: <WandSparkles size={14} />
+      }
+    ]
+  }
+  if (sourceNode.type === 'image' || sourceNode.type === 'result') {
+    return [
+      {
+        type: 'generate',
+        label: '生成节点',
+        description: '连接为参考图输入',
+        icon: <WandSparkles size={14} />
+      }
+    ]
+  }
+  if (sourceNode.type === 'config') {
+    return [
+      {
+        type: 'generate',
+        label: '生成节点',
+        description: '连接为参数输入',
+        icon: <WandSparkles size={14} />
+      }
+    ]
+  }
+  if (sourceNode.type === 'batch') {
+    return [
+      {
+        type: 'generate',
+        label: '生成节点',
+        description: '连接为批量输入',
+        icon: <WandSparkles size={14} />
+      }
+    ]
+  }
+  return []
+}
+
+function CanvasNodeActionToolbar({
+  node,
+  visible,
+  sourceLabel,
+  connecting,
+  onStartConnection,
+  onPreview,
+  onMaskEdit,
+  onRunGenerate,
+  onGenerateFromText,
+  onDelete
+}: {
+  node: CanvasNodeData
+  visible: boolean
+  sourceLabel: string | null
+  connecting: boolean
+  onStartConnection: () => void
+  onPreview: () => void
+  onMaskEdit: () => void
+  onRunGenerate: () => void
+  onGenerateFromText: () => void
+  onDelete: () => void
+}) {
+  const hasImageSource = (node.type === 'image' || node.type === 'result') && Boolean(node.metadata.content)
+  const canGenerateFromText = node.type === 'text' && Boolean(node.metadata.content.trim())
+  const running = node.type === 'generate' && node.metadata.status === 'running'
+  const retry = node.type === 'generate' && (node.metadata.status === 'failed' || node.metadata.status === 'succeeded')
+
+  return (
+    <div
+      className={cn(
+        'absolute right-0 top-0 z-30 flex max-w-[calc(100%-1rem)] -translate-y-[calc(100%+0.25rem)] items-center gap-1 rounded-lg border border-border bg-background/92 p-1 shadow-md backdrop-blur transition-opacity',
+        visible
+          ? 'pointer-events-auto opacity-100'
+          : 'pointer-events-none opacity-0 group-hover/canvas-node:pointer-events-auto group-hover/canvas-node:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100'
+      )}
+      data-canvas-node-action-toolbar="true"
+      onPointerDown={(event) => event.stopPropagation()}
+    >
+      {node.type === 'text' ? (
+        <ToolbarButton
+          label="生成"
+          title="从文本生成"
+          icon={<WandSparkles size={14} />}
+          disabled={!canGenerateFromText}
+          onClick={onGenerateFromText}
+        />
+      ) : null}
+      {hasImageSource ? (
+        <>
+          <ToolbarButton
+            label="预览"
+            title="预览图片"
+            icon={<Eye size={14} />}
+            onClick={onPreview}
+          />
+          <ToolbarButton
+            label={node.metadata.maskDataUrl ? 'Mask' : 'Mask'}
+            title={node.metadata.maskDataUrl ? '编辑 mask' : '添加 mask'}
+            icon={<Brush size={14} />}
+            onClick={onMaskEdit}
+          />
+        </>
+      ) : null}
+      {node.type === 'generate' ? (
+        <ToolbarButton
+          label={retry ? '重试' : '运行'}
+          title={retry ? '重试生成' : '运行生成'}
+          icon={running ? <Loader2 size={14} className="animate-spin" /> : retry ? <RefreshCw size={14} /> : <Play size={14} />}
+          disabled={running}
+          onClick={onRunGenerate}
+        />
+      ) : null}
+      {sourceLabel ? (
+        <ToolbarButton
+          label={connecting ? '取消' : '连接'}
+          title={connecting ? '取消节点连线' : `从${sourceLabel}连接下游`}
+          icon={<Link2 size={14} />}
+          onClick={onStartConnection}
+        />
+      ) : null}
+      <ToolbarButton
+        label="删除"
+        title="删除节点"
+        icon={<Trash2 size={14} />}
+        danger
+        onClick={onDelete}
+      />
+    </div>
+  )
+}
+
+function ToolbarButton({
+  label,
+  title,
+  icon,
+  disabled = false,
+  danger = false,
+  onClick
+}: {
+  label: string
+  title: string
+  icon: React.ReactNode
+  disabled?: boolean
+  danger?: boolean
+  onClick: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className={cn(
+        'h-7 shrink-0 px-2 text-[11px]',
+        danger ? 'text-muted-foreground hover:text-destructive' : ''
+      )}
+      title={title}
+      disabled={disabled}
+      onPointerDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation()
+        onClick()
+      }}
+    >
+      {icon}
+      {label}
+    </Button>
+  )
+}
+
+async function resolveNodeImageSource(node: CanvasNodeData): Promise<string | null> {
+  if (node.type !== 'image' && node.type !== 'result') return null
+  return imageSourceForDisplay(node.metadata.content, node.metadata.storagePath)
 }
 
 function previewForNode(node: CanvasNodeData, previews: GenerationPreviewState) {
@@ -442,10 +878,27 @@ function mergeIncomingNodesWithDirtyContent(
 }
 
 function normalizeNodeForRender(node: CanvasNodeData): CanvasNodeData {
+  if (node.type === 'generate' && node.height < GENERATE_NODE_MIN_DISPLAY_HEIGHT) {
+    return { ...node, height: GENERATE_NODE_MIN_DISPLAY_HEIGHT }
+  }
   if (!isImageDisplayNode(node)) return node
   const { width, height } = imageNodeDisplayDimensions(node)
   if (width === node.width && height === node.height) return node
   return { ...node, width, height }
+}
+
+function renderCanvasProject(nodes: CanvasNodeData[], connections: CanvasConnection[], viewport: CanvasViewport): CanvasProject {
+  return {
+    id: 'render-canvas-project',
+    title: 'Render Canvas Project',
+    conversationId: 'render-canvas-conversation',
+    schemaVersion: 1,
+    nodes,
+    connections,
+    viewport,
+    createdAt: '',
+    updatedAt: ''
+  }
 }
 
 function isImageDisplayNode(node: CanvasNodeData): boolean {
@@ -498,14 +951,32 @@ function imageNodeDisplayDimensions(node: CanvasNodeData): { width: number; heig
 }
 
 function connectionAnchor(node: CanvasNodeData, side: 'source' | 'target'): CanvasPoint {
-  const buttonClusterWidth = NODE_HEADER_BUTTON_SIZE * 2 + NODE_HEADER_BUTTON_GAP
-  const x = side === 'source'
-    ? node.position.x + node.width - NODE_HEADER_PADDING_X - buttonClusterWidth / 2
-    : node.position.x + NODE_HEADER_PADDING_X
   return {
-    x,
+    x: side === 'source' ? node.position.x + node.width - NODE_HEADER_PADDING_X : node.position.x + NODE_HEADER_PADDING_X,
     y: node.position.y + NODE_HEADER_HEIGHT / 2
   }
+}
+
+function sourcePortLabel(node: CanvasNodeData): string | null {
+  if (node.type === 'text') return '提示词'
+  if (node.type === 'image' || node.type === 'result') return '参考图'
+  if (node.type === 'config') return '参数'
+  if (node.type === 'batch') return '批量'
+  if (node.type === 'generate') return '结果'
+  return null
+}
+
+function targetPortLabel(fromNode: CanvasNodeData, toNode: CanvasNodeData): string | null {
+  const kind = canvasConnectionKindForNodes(fromNode, toNode)
+  return kind ? connectionKindLabel(kind) : null
+}
+
+function connectionKindLabel(kind: CanvasConnectionKind): string {
+  if (kind === 'prompt') return '提示词'
+  if (kind === 'reference-image') return '参考图'
+  if (kind === 'config') return '参数'
+  if (kind === 'batch') return '批量'
+  return '结果'
 }
 
 function connectionPath(fromNode: CanvasNodeData, toNode: CanvasNodeData, _selectedNodeId: string | null): string {

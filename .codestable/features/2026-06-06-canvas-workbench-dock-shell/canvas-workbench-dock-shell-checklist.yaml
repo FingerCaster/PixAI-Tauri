@@ -1,0 +1,45 @@
+feature: 2026-06-06-canvas-workbench-dock-shell
+created: 2026-06-06
+
+steps:
+  - action: "静态界面骨架：提取 CanvasProjectCommandBar 和 CanvasWorkbenchDock 私有组件，替换顶部 header"
+    exit_signal: "CanvasWorkspace 编译通过，dock 按钮可见且没有视频/音频入口"
+    status: done
+  - action: "命令接线：dock / command bar 接入既有 add/import/export/run/reset/guide 函数"
+    exit_signal: "现有导入导出、运行、重置、引导入口仍调用原 action"
+    status: done
+  - action: "空状态 polish：优化无 active project 和空节点 copy"
+    exit_signal: "空项目可新建，空节点提示生图链路"
+    status: done
+  - action: "测试与浏览器 smoke：补组件测试并验证 Canvas 页面 UI"
+    exit_signal: "定向 vitest、tsc 和浏览器 smoke 通过"
+    status: done
+
+checks:
+  - item: "CanvasWorkspace 使用画布优先布局和底部浮动 dock"
+    source: 验收场景
+    status: passed
+  - item: "dock 中有文本、图片、生成、配置、批量、结果、运行、重置、导入、导出、引导入口"
+    source: 验收场景
+    status: passed
+  - item: "dock 中不出现视频或音频入口"
+    source: 范围守护
+    status: passed
+  - item: "文本/生成/配置/批量/结果按钮仍调用既有新增节点 action"
+    source: 编排骨架
+    status: passed
+  - item: "图片按钮仍触发 image/* file input"
+    source: 编排骨架
+    status: passed
+  - item: "运行、导入、导出、重置、引导仍复用现有函数"
+    source: 编排骨架
+    status: passed
+  - item: "无 active project 时仍能新建 Canvas 项目"
+    source: 验收场景
+    status: passed
+  - item: "active project 无节点时显示生图链路空状态"
+    source: 验收场景
+    status: passed
+  - item: "不修改 ImageService、Provider、history、reference、Tauri API 或数据库结构"
+    source: 范围守护
+    status: passed

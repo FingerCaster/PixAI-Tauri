@@ -1,0 +1,57 @@
+feature: 2026-06-06-workspace-canvas-shell-split
+created: 2026-06-06
+
+steps:
+  - action: "微重构（拆文件）：提取共享 top navigation 与 Workspace/Canvas/Shared shell 骨架"
+    exit_signal: "App 能按 view 渲染三类 shell，且结构拆分后 TypeScript 编译通过"
+    status: done
+  - action: "Workspace 行为迁移：普通会话侧栏、参数栏按钮和 WorkspaceConfigPanel 移入 WorkspaceShell"
+    exit_signal: "工作台下参数栏可显隐，普通会话新建/删除/切换仍可用"
+    status: done
+  - action: "Canvas 行为迁移：Canvas 项目侧栏移入 CanvasShell，并移除参数栏入口"
+    exit_signal: "Canvas 下没有参数栏按钮，项目新建/删除/切换仍可用且不跳回工作台"
+    status: done
+  - action: "Shared 页面收口：Gallery / Prompt Library 使用 SharedLibraryShell"
+    exit_signal: "图库和提示词库没有普通会话侧栏或 Canvas 项目侧栏，但仍有导航和全局设置入口"
+    status: done
+  - action: "状态语义修正与测试：toggleSettings 去掉导航副作用，补 shell 分流测试"
+    exit_signal: "定向 vitest 与 tsc --noEmit 通过，测试覆盖 Canvas 参数栏按钮不存在和图库无模式侧栏"
+    status: done
+
+checks:
+  - item: "WorkspaceShell / CanvasShell / SharedLibraryShell 三类外壳按 view 分流"
+    source: 名词契约
+    status: passed
+  - item: "toggleSettings 只切换 Workspace 参数栏显隐，不改变 view"
+    source: 名词契约
+    status: passed
+  - item: "App 按 workspace/canvas/gallery/prompts 渲染对应 shell"
+    source: 编排骨架
+    status: passed
+  - item: "CanvasShell 不导入或渲染 WorkspaceConfigPanel"
+    source: 流程级约束
+    status: passed
+  - item: "SharedLibraryShell 不渲染普通会话侧栏或 Canvas 项目侧栏"
+    source: 流程级约束
+    status: passed
+  - item: "src/App.tsx 页面外壳选择从单一 MainLayout 改为三类 shell"
+    source: 挂载点
+    status: passed
+  - item: "src/components/layout/ 新增 Workspace / Canvas / Shared shell 组件"
+    source: 挂载点
+    status: passed
+  - item: "不重写 Canvas 节点系统、workflow run、生成桥、history/gallery 来源协议"
+    source: 范围守护
+    status: passed
+  - item: "不新增 Canvas inspector / 节点属性面板具体功能"
+    source: 范围守护
+    status: passed
+  - item: "启动后进入工作台时有普通会话侧栏和参数栏按钮"
+    source: 验收场景
+    status: passed
+  - item: "Canvas 下没有参数栏按钮，操作不会跳回工作台"
+    source: 验收场景
+    status: passed
+  - item: "图库和提示词库使用共享外壳，不显示模式专属侧栏"
+    source: 验收场景
+    status: passed

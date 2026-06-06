@@ -1,5 +1,4 @@
 import { CircleHelp } from 'lucide-react'
-import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/utils'
 
 export function SettingsToggleRow({
@@ -17,6 +16,8 @@ export function SettingsToggleRow({
     <button
       className="toggle-row flex min-h-11 w-full items-center justify-between gap-4 rounded-lg border border-border bg-card px-3 py-2 text-left transition-colors hover:bg-muted/60"
       type="button"
+      role="switch"
+      aria-checked={checked}
       onClick={onChange}
     >
       <span className="field-label-with-help flex min-w-0 items-center gap-2">
@@ -31,11 +32,21 @@ export function SettingsToggleRow({
           </span>
         ) : null}
       </span>
-      <Switch
-        checked={checked}
-        aria-label={label}
-        className={cn('pointer-events-none shrink-0', checked ? '' : 'off')}
-      />
+      <span
+        aria-hidden="true"
+        className={cn(
+          'relative inline-flex h-[18.4px] w-8 shrink-0 items-center rounded-full border border-transparent transition-all',
+          checked ? 'bg-primary' : 'off bg-input dark:bg-input/80'
+        )}
+      >
+        <span
+          className={cn(
+            'block size-4 rounded-full bg-background transition-transform dark:data-[checked=true]:bg-primary-foreground dark:data-[checked=false]:bg-foreground',
+            checked ? 'translate-x-[calc(100%-2px)]' : 'translate-x-0'
+          )}
+          data-checked={checked}
+        />
+      </span>
     </button>
   )
 }

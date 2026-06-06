@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Minus, Move, Plus, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DEFAULT_CANVAS_VIEWPORT, clampCanvasZoom, normalizeViewport } from '../../services/canvas-projects'
-import type { CanvasConnection, CanvasNodeData, CanvasNodeMetadata, CanvasPoint, CanvasViewport as CanvasViewportState, GenerationPreviewState } from '../../shared/types'
-import { CanvasNodeLayer } from './CanvasNodeLayer'
+import type { CanvasConnection, CanvasNodeData, CanvasNodeMetadata, CanvasNodeType, CanvasPoint, CanvasViewport as CanvasViewportState, GenerationPreviewState } from '../../shared/types'
+import { CanvasNodeLayer, type CanvasNodeLayerHandle } from './CanvasNodeLayer'
 
 type CanvasViewportProps = {
   viewport: CanvasViewportState
@@ -16,11 +16,21 @@ type CanvasViewportProps = {
   onNodeMetadataChange?: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => void | Promise<void>
   onNodeDelete?: (nodeId: string) => void | Promise<void>
   onConnectionAdd?: (fromNodeId: string, toNodeId: string) => void | Promise<void>
+  onConnectionCreate?: (input: CanvasConnectedNodeCreateInput) => CanvasNodeData | null | Promise<CanvasNodeData | null>
   onConnectionDelete?: (connectionId: string) => void | Promise<void>
   onTextNodeEnrich?: (nodeId: string) => void | Promise<void>
+  onTextNodeGenerate?: (nodeId: string) => void | Promise<void>
   onGenerateNodeRun?: (nodeId: string) => void | Promise<void>
   generationPreviews?: GenerationPreviewState
   promptEnriching?: boolean
+  emptyTitle?: string
+  emptyDescription?: string
+}
+
+type CanvasConnectedNodeCreateInput = {
+  sourceNodeId: string
+  type: CanvasNodeType
+  position: CanvasPoint
 }
 
 type DragState = {
@@ -42,15 +52,20 @@ export function CanvasViewport({
   onNodeMetadataChange = noopAsync,
   onNodeDelete = noopAsync,
   onConnectionAdd = noopAsync,
+  onConnectionCreate = () => null,
   onConnectionDelete = noopAsync,
   onTextNodeEnrich = noopAsync,
+  onTextNodeGenerate = noopAsync,
   onGenerateNodeRun = noopAsync,
   generationPreviews = {},
-  promptEnriching = false
+  promptEnriching = false,
+  emptyTitle = 'Canvas',
+  emptyDescription
 }: CanvasViewportProps) {
   const [draftViewport, setDraftViewport] = useState(() => normalizeViewport(viewport))
   const latestViewportRef = useRef(draftViewport)
   const dragRef = useRef<DragState | null>(null)
+  const nodeLayerRef = useRef<CanvasNodeLayerHandle | null>(null)
 
   useEffect(() => {
     const next = normalizeViewport(viewport)
@@ -92,6 +107,21 @@ export function CanvasViewport({
         }}
         onPointerDown={(event) => {
           if (event.button !== 0 || loading) return
+          const viewportForPointer = latestViewportRef.current
+          const rect = event.currentTarget.getBoundingClientRect()
+          const screenPosition = {
+            x: Math.round(event.clientX - rect.left),
+            y: Math.round(event.clientY - rect.top)
+          }
+          const position = {
+            x: Math.round((screenPosition.x - viewportForPointer.x) / viewportForPointer.k),
+            y: Math.round((screenPosition.y - viewportForPointer.y) / viewportForPointer.k)
+          }
+          if (nodeLayerRef.current?.handleCanvasBlankPointerDown({ position, screenPosition })) {
+            event.stopPropagation()
+            event.preventDefault()
+            return
+          }
           event.currentTarget.setPointerCapture(event.pointerId)
           dragRef.current = {
             clientX: event.clientX,
@@ -127,15 +157,17 @@ export function CanvasViewport({
       >
         {nodes.length === 0 ? (
           <div
-            className="absolute left-1/2 top-1/2 grid min-h-24 w-64 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-lg border border-dashed border-border bg-background/80 px-4 text-center text-sm font-medium text-muted-foreground shadow-sm backdrop-blur"
+            className="absolute left-1/2 top-1/2 grid min-h-28 w-72 -translate-x-1/2 -translate-y-1/2 place-items-center gap-2 rounded-xl border border-dashed border-border bg-background/82 px-5 py-4 text-center shadow-sm backdrop-blur"
             style={{
               transform: `translate(calc(-50% + ${draftViewport.x}px), calc(-50% + ${draftViewport.y}px)) scale(${draftViewport.k})`
             }}
           >
-            Canvas
+            <div className="text-sm font-semibold text-foreground">{emptyTitle}</div>
+            {emptyDescription ? <div className="text-xs leading-5 text-muted-foreground">{emptyDescription}</div> : null}
           </div>
         ) : (
           <CanvasNodeLayer
+            ref={nodeLayerRef}
             viewport={draftViewport}
             nodes={nodes}
             connections={connections}
@@ -144,8 +176,10 @@ export function CanvasViewport({
             onNodeMetadataChange={onNodeMetadataChange}
             onNodeDelete={onNodeDelete}
             onConnectionAdd={onConnectionAdd}
+            onConnectionCreate={onConnectionCreate}
             onConnectionDelete={onConnectionDelete}
             onTextNodeEnrich={onTextNodeEnrich}
+            onTextNodeGenerate={onTextNodeGenerate}
             onGenerateNodeRun={onGenerateNodeRun}
             generationPreviews={generationPreviews}
             promptEnriching={promptEnriching}

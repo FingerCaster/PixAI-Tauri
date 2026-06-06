@@ -264,49 +264,269 @@ describe('useCanvasStore', () => {
       metadata: { mimeType: 'image/png', fileSizeBytes: 2 }
     })
 
-    await useCanvasStore.getState().addConnection(textNode.id, imageNode.id)
-    await useCanvasStore.getState().addConnection(textNode.id, imageNode.id)
+    await useCanvasStore.getState().addGenerateNode()
+    const generateNode = useCanvasStore.getState().activeProject!.nodes[2]
+    expect(generateNode).toMatchObject({
+      type: 'generate',
+      title: '生成节点',
+      metadata: { status: 'idle' }
+    })
+
+    await useCanvasStore.getState().addConnection(textNode.id, generateNode.id)
+    await useCanvasStore.getState().addConnection(textNode.id, generateNode.id)
     expect(useCanvasStore.getState().activeProject!.connections).toHaveLength(1)
     expect(useCanvasStore.getState().activeProject!.connections[0]).toMatchObject({
       fromNodeId: textNode.id,
-      toNodeId: imageNode.id,
+      toNodeId: generateNode.id,
       kind: 'prompt'
     })
 
     await useCanvasStore.getState().deleteNode(textNode.id)
-    expect(useCanvasStore.getState().activeProject!.nodes.map((node) => node.id)).toEqual([imageNode.id])
+    expect(useCanvasStore.getState().activeProject!.nodes.map((node) => node.id)).toEqual([imageNode.id, generateNode.id])
     expect(useCanvasStore.getState().activeProject!.connections).toEqual([])
   })
 
-  it('ignores canvas connections that would create cycles', async () => {
-    const firstNode = {
-      id: 'node-cycle-first',
+  it('creates a connected generate node from a non-empty text node', async () => {
+    const textNode = {
+      id: 'node-generate-from-text',
       type: 'text' as const,
       title: '文本节点',
       position: { x: 20, y: 24 },
       width: 220,
       height: 140,
-      metadata: { content: 'first' }
+      metadata: { content: 'cinematic portrait' }
     }
-    const secondNode = {
-      id: 'node-cycle-second',
+    const emptyTextNode = {
+      ...textNode,
+      id: 'node-empty-text',
+      position: { x: 20, y: 224 },
+      metadata: { content: '   ' }
+    }
+    const project = canvasProject({ nodes: [textNode, emptyTextNode] })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 2 }]
+    })
+    const update = vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:10:00.000Z'
+    }))
+
+    await expect(useCanvasStore.getState().createGenerateNodeFromText(emptyTextNode.id)).resolves.toBeNull()
+    expect(update).not.toHaveBeenCalled()
+
+    const generateNodeId = await useCanvasStore.getState().createGenerateNodeFromText(textNode.id)
+
+    const activeProject = useCanvasStore.getState().activeProject!
+    const generateNode = activeProject.nodes.find((node) => node.id === generateNodeId)
+    expect(generateNode).toMatchObject({
+      type: 'generate',
+      title: '生成节点',
+      position: { x: 312, y: 24 },
+      metadata: { content: '', status: 'idle' }
+    })
+    expect(activeProject.connections).toEqual([
+      expect.objectContaining({
+        fromNodeId: textNode.id,
+        toNodeId: generateNodeId,
+        kind: 'prompt'
+      })
+    ])
+    expect(update).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates connected downstream nodes and persists their inferred connection kind', async () => {
+    const textNode = {
+      id: 'node-connected-text',
       type: 'text' as const,
       title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'prompt' }
+    }
+    const imageNode = {
+      id: 'node-connected-image',
+      type: 'image' as const,
+      title: '图片节点',
+      position: { x: 20, y: 224 },
+      width: 320,
+      height: 260,
+      metadata: {
+        content: 'data:image/png;base64,AA==',
+        mimeType: 'image/png',
+        fileSizeBytes: 2
+      }
+    }
+    const resultNode = {
+      id: 'node-connected-result',
+      type: 'result' as const,
+      title: '结果节点',
+      position: { x: 20, y: 524 },
+      width: 320,
+      height: 260,
+      metadata: {
+        content: 'data:image/png;base64,cmVzdWx0',
+        status: 'succeeded' as const,
+        mimeType: 'image/png',
+        fileSizeBytes: 6
+      }
+    }
+    const configNode = {
+      id: 'node-connected-config',
+      type: 'config' as const,
+      title: '配置节点',
+      position: { x: 20, y: 824 },
+      width: 260,
+      height: 250,
+      metadata: { content: '', ratio: '16:9' as const, quality: 'high' as const, n: 2 }
+    }
+    const batchNode = {
+      id: 'node-connected-batch',
+      type: 'batch' as const,
+      title: '批量节点',
+      position: { x: 20, y: 1124 },
+      width: 260,
+      height: 220,
+      metadata: { content: 'first\nsecond' }
+    }
+    const generateNode = {
+      id: 'node-connected-generate',
+      type: 'generate' as const,
+      title: '生成节点',
+      position: { x: 20, y: 1424 },
+      width: 300,
+      height: 260,
+      metadata: { content: '', status: 'idle' as const }
+    }
+    const project = canvasProject({
+      nodes: [textNode, imageNode, resultNode, configNode, batchNode, generateNode]
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:20:00.000Z'
+    }))
+
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: textNode.id,
+      type: 'generate',
+      position: { x: 440.4, y: 24.6 }
+    })).resolves.toMatchObject({ type: 'generate', position: { x: 440, y: 25 } })
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: imageNode.id,
+      type: 'generate',
+      position: { x: 440, y: 224 }
+    })).resolves.toMatchObject({ type: 'generate' })
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: resultNode.id,
+      type: 'generate',
+      position: { x: 440, y: 524 }
+    })).resolves.toMatchObject({ type: 'generate' })
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: configNode.id,
+      type: 'generate',
+      position: { x: 440, y: 824 }
+    })).resolves.toMatchObject({ type: 'generate' })
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: batchNode.id,
+      type: 'generate',
+      position: { x: 440, y: 1124 }
+    })).resolves.toMatchObject({ type: 'generate' })
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: generateNode.id,
+      type: 'result',
+      position: { x: 440, y: 1424 }
+    })).resolves.toMatchObject({ type: 'result', metadata: { status: 'idle' } })
+
+    expect(useCanvasStore.getState().activeProject!.connections.map((connection) => connection.kind)).toEqual([
+      'prompt',
+      'reference-image',
+      'reference-image',
+      'config',
+      'batch',
+      'result'
+    ])
+  })
+
+  it('does not persist invalid connected node targets', async () => {
+    const textNode = {
+      id: 'node-invalid-connected-text',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'prompt' }
+    }
+    const project = canvasProject({ nodes: [textNode] })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 1 }]
+    })
+    const update = vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:21:00.000Z'
+    }))
+
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: textNode.id,
+      type: 'result',
+      position: { x: 320, y: 24 }
+    })).resolves.toBeNull()
+    await expect(useCanvasStore.getState().addConnectedNode({
+      sourceNodeId: 'missing-source',
+      type: 'generate',
+      position: { x: 320, y: 24 }
+    })).resolves.toBeNull()
+
+    expect(update).not.toHaveBeenCalled()
+    expect(useCanvasStore.getState().activeProject).toEqual(project)
+  })
+
+  it('ignores canvas connections that would create cycles', async () => {
+    const textNode = {
+      id: 'node-cycle-text',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'prompt' }
+    }
+    const generateNode = {
+      id: 'node-cycle-generate',
+      type: 'generate' as const,
+      title: '生成节点',
       position: { x: 280, y: 24 },
-      width: 220,
-      height: 140,
-      metadata: { content: 'second' }
+      width: 300,
+      height: 260,
+      metadata: { content: '', status: 'idle' as const }
     }
-    const thirdNode = {
-      id: 'node-cycle-third',
-      type: 'text' as const,
-      title: '文本节点',
-      position: { x: 540, y: 24 },
-      width: 220,
-      height: 140,
-      metadata: { content: 'third' }
+    const resultNode = {
+      id: 'node-cycle-result',
+      type: 'result' as const,
+      title: '结果节点',
+      position: { x: 640, y: 24 },
+      width: 320,
+      height: 260,
+      metadata: {
+        content: 'data:image/png;base64,AA==',
+        status: 'succeeded' as const,
+        mimeType: 'image/png',
+        fileSizeBytes: 2
+      }
     }
-    const project = canvasProject({ nodes: [firstNode, secondNode, thirdNode] })
+    const project = canvasProject({ nodes: [textNode, generateNode, resultNode] })
     useCanvasStore.setState({
       activeProjectId: project.id,
       activeProject: project,
@@ -318,14 +538,14 @@ describe('useCanvasStore', () => {
       updatedAt: '2026-06-05T00:02:30.000Z'
     }))
 
-    await useCanvasStore.getState().addConnection(firstNode.id, secondNode.id)
-    await useCanvasStore.getState().addConnection(secondNode.id, thirdNode.id)
-    await useCanvasStore.getState().addConnection(thirdNode.id, firstNode.id)
-    await useCanvasStore.getState().addConnection(secondNode.id, firstNode.id)
+    await useCanvasStore.getState().addConnection(textNode.id, generateNode.id)
+    await useCanvasStore.getState().addConnection(generateNode.id, resultNode.id)
+    await useCanvasStore.getState().addConnection(resultNode.id, generateNode.id)
+    await useCanvasStore.getState().addConnection(generateNode.id, textNode.id)
 
     expect(useCanvasStore.getState().activeProject!.connections).toEqual([
-      expect.objectContaining({ fromNodeId: firstNode.id, toNodeId: secondNode.id, kind: 'prompt' }),
-      expect.objectContaining({ fromNodeId: secondNode.id, toNodeId: thirdNode.id, kind: 'prompt' })
+      expect.objectContaining({ fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }),
+      expect.objectContaining({ fromNodeId: generateNode.id, toNodeId: resultNode.id, kind: 'result' })
     ])
   })
 
@@ -405,7 +625,7 @@ describe('useCanvasStore', () => {
     })
   })
 
-  it('adds generate nodes, updates state, and creates generated result image nodes', async () => {
+  it('adds generate nodes, updates state, and creates generated result nodes', async () => {
     const project = canvasProject()
     useCanvasStore.setState({
       activeProjectId: project.id,
@@ -450,11 +670,12 @@ describe('useCanvasStore', () => {
       }
     })
     expect(nodes[1]).toMatchObject({
-      type: 'image',
+      type: 'result',
       title: 'history-result',
       width: 320,
       height: 260,
       metadata: {
+        status: 'succeeded',
         historyItemId: 'history-result',
         content: 'data:image/png;base64,cmVzdWx0'
       }
@@ -530,6 +751,106 @@ describe('useCanvasStore', () => {
         historyItemId: 'history-result',
         mimeType: 'image/png'
       }
+    })
+  })
+
+  it('appends connected result nodes for multiple generated images without overwriting existing results', async () => {
+    const generateNode = {
+      id: 'node-multi-result-generate',
+      type: 'generate' as const,
+      title: '生成节点',
+      position: { x: 80, y: 120 },
+      width: 300,
+      height: 260,
+      metadata: { content: 'prompt', status: 'idle' as const }
+    }
+    const resultNode = {
+      id: 'node-multi-result-target',
+      type: 'result' as const,
+      title: '结果节点',
+      position: { x: 444, y: 120 },
+      width: 320,
+      height: 260,
+      metadata: { content: '', status: 'idle' as const }
+    }
+    const project = canvasProject({
+      nodes: [generateNode, resultNode],
+      connections: [
+        { id: 'connection-multi-result', fromNodeId: generateNode.id, toNodeId: resultNode.id, kind: 'result' }
+      ]
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T01:00:00.000Z'
+    }))
+
+    await useCanvasStore.getState().recordGeneratedResult(generateNode.id, {
+      name: 'history-first.png',
+      dataUrl: 'data:image/png;base64,Zmlyc3Q=',
+      mimeType: 'image/png',
+      fileSizeBytes: 5,
+      historyItemId: 'history-first',
+      requestIndex: 0
+    })
+    await useCanvasStore.getState().recordGeneratedResult(generateNode.id, {
+      name: 'history-second.png',
+      dataUrl: 'data:image/png;base64,c2Vjb25k',
+      mimeType: 'image/png',
+      fileSizeBytes: 6,
+      historyItemId: 'history-second',
+      requestIndex: 1,
+      batchRootId: generateNode.id,
+      batchIndex: 0,
+      promptVariant: 'variant one'
+    })
+    await useCanvasStore.getState().recordGeneratedResult(generateNode.id, {
+      name: 'history-second.png',
+      dataUrl: 'data:image/png;base64,c2Vjb25k',
+      mimeType: 'image/png',
+      fileSizeBytes: 6,
+      historyItemId: 'history-second',
+      requestIndex: 1,
+      batchRootId: generateNode.id,
+      batchIndex: 0,
+      promptVariant: 'variant one'
+    })
+
+    const activeProject = useCanvasStore.getState().activeProject!
+    const resultNodes = activeProject.nodes.filter((node) => node.type === 'result')
+    expect(resultNodes).toHaveLength(2)
+    expect(resultNodes[0]).toMatchObject({
+      id: resultNode.id,
+      title: '生成结果 #1',
+      metadata: {
+        content: 'data:image/png;base64,Zmlyc3Q=',
+        status: 'succeeded',
+        historyItemId: 'history-first',
+        requestIndex: 0
+      }
+    })
+    expect(resultNodes[1]).toMatchObject({
+      type: 'result',
+      title: '批量 1 · #2',
+      position: { x: 444, y: 400 },
+      metadata: {
+        content: 'data:image/png;base64,c2Vjb25k',
+        status: 'succeeded',
+        historyItemId: 'history-second',
+        requestIndex: 1,
+        batchRootId: generateNode.id,
+        batchIndex: 0,
+        promptVariant: 'variant one'
+      }
+    })
+    expect(activeProject.connections.filter((connection) => connection.kind === 'result')).toHaveLength(2)
+    expect(activeProject.nodes.find((node) => node.id === generateNode.id)).toMatchObject({
+      metadata: { status: 'succeeded', historyItemId: 'history-second', requestIndex: 1 }
     })
   })
 })
