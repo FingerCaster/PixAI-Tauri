@@ -286,6 +286,49 @@ describe('useCanvasStore', () => {
     expect(useCanvasStore.getState().activeProject!.connections).toEqual([])
   })
 
+  it('places automatically created nodes in the first free horizontal slot', async () => {
+    const project = canvasProject({
+      nodes: [
+        {
+          id: 'node-layout-left',
+          type: 'text',
+          title: '文本节点',
+          position: { x: 96, y: 96 },
+          width: 220,
+          height: 140,
+          metadata: { content: 'occupied left' }
+        },
+        {
+          id: 'node-layout-middle',
+          type: 'generate',
+          title: '生成节点',
+          position: { x: 460, y: 96 },
+          width: 300,
+          height: 340,
+          metadata: { content: '', status: 'idle' }
+        }
+      ]
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-07T00:10:00.000Z'
+    }))
+
+    await useCanvasStore.getState().addTextNode()
+
+    const createdNode = useCanvasStore.getState().activeProject!.nodes.at(-1)
+    expect(createdNode).toMatchObject({
+      type: 'text',
+      position: { x: 948, y: 96 }
+    })
+  })
+
   it('creates a connected generate node from a non-empty text node', async () => {
     const textNode = {
       id: 'node-generate-from-text',

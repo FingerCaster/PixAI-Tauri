@@ -92,6 +92,12 @@ type CanvasSet = (partial: Partial<CanvasStoreState>) => void
 const IMAGE_NODE_WIDTH = 320
 const IMAGE_NODE_HEIGHT = 260
 const GENERATE_NODE_HEIGHT = 340
+const AUTO_NODE_ORIGIN_OFFSET = 96
+const AUTO_NODE_GAP_X = 64
+const AUTO_NODE_GAP_Y = 64
+const AUTO_NODE_COLLISION_PADDING = 24
+const AUTO_NODE_MAX_COLUMNS = 12
+const AUTO_NODE_MAX_ROWS = 40
 
 export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   ...initialCanvasStoreState,
@@ -268,7 +274,7 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   createNode: async (input) => {
     let createdNode: CanvasNodeData | null = null
     const persisted = await persistActiveProject(set, get, (project) => {
-      const node = createBlankCanvasNodeAt(input.type, nextNodePosition(project))
+      const node = createBlankCanvasNodeAt(input.type, nextNodePosition(project, canvasNodeSizeForType(input.type)))
       if (!node || node.type === 'image') return project
       createdNode = {
         ...node,
@@ -589,19 +595,20 @@ async function persistActiveProject(
 }
 
 function createTextNode(project: CanvasProject): CanvasNodeData {
+  const size = canvasNodeSizeForType('text')
   return {
     id: createId('canvas-node'),
     type: 'text',
     title: '文本节点',
-    position: nextNodePosition(project),
-    width: 220,
-    height: 140,
+    position: nextNodePosition(project, size),
+    width: size.width,
+    height: size.height,
     metadata: { content: '新文本' }
   }
 }
 
 function createImageNode(project: CanvasProject, input: CanvasImageNodeInput): CanvasNodeData {
-  return createImageNodeAt(input, nextNodePosition(project))
+  return createImageNodeAt(input, nextNodePosition(project, canvasNodeSizeForType('image')))
 }
 
 function createImageNodeAt(input: CanvasImageNodeInput, position: CanvasPoint): CanvasNodeData {
@@ -650,7 +657,7 @@ function createFailedResultNodeAt(input: CanvasFailedResultInput, position: Canv
 }
 
 function createGenerateNode(project: CanvasProject): CanvasNodeData {
-  return createGenerateNodeAt(nextNodePosition(project))
+  return createGenerateNodeAt(nextNodePosition(project, canvasNodeSizeForType('generate')))
 }
 
 function createGenerateNodeAt(position: CanvasPoint): CanvasNodeData {
@@ -669,13 +676,14 @@ function createGenerateNodeAt(position: CanvasPoint): CanvasNodeData {
 }
 
 function createConfigNode(project: CanvasProject): CanvasNodeData {
+  const size = canvasNodeSizeForType('config')
   return {
     id: createId('canvas-node'),
     type: 'config',
     title: '配置节点',
-    position: nextNodePosition(project),
-    width: 260,
-    height: 250,
+    position: nextNodePosition(project, size),
+    width: size.width,
+    height: size.height,
     metadata: {
       content: ''
     }
@@ -683,13 +691,14 @@ function createConfigNode(project: CanvasProject): CanvasNodeData {
 }
 
 function createBatchNode(project: CanvasProject): CanvasNodeData {
+  const size = canvasNodeSizeForType('batch')
   return {
     id: createId('canvas-node'),
     type: 'batch',
     title: '批量节点',
-    position: nextNodePosition(project),
-    width: 260,
-    height: 220,
+    position: nextNodePosition(project, size),
+    width: size.width,
+    height: size.height,
     metadata: {
       content: ''
     }
@@ -697,7 +706,7 @@ function createBatchNode(project: CanvasProject): CanvasNodeData {
 }
 
 function createResultNode(project: CanvasProject): CanvasNodeData {
-  return createResultNodeAt(nextNodePosition(project))
+  return createResultNodeAt(nextNodePosition(project, canvasNodeSizeForType('result')))
 }
 
 function createResultNodeAt(position: CanvasPoint): CanvasNodeData {
@@ -820,12 +829,28 @@ function isCanvasImageSource(value: string): boolean {
     || value.startsWith('\\\\')
 }
 
-function nextNodePosition(project: CanvasProject): CanvasPoint {
-  const index = project.nodes.length
+function nextNodePosition(project: CanvasProject, size: { width: number; height: number }): CanvasPoint {
   const zoom = project.viewport.k || 1
+  const origin = {
+    x: Math.round(-project.viewport.x / zoom + AUTO_NODE_ORIGIN_OFFSET),
+    y: Math.round(-project.viewport.y / zoom + AUTO_NODE_ORIGIN_OFFSET)
+  }
+  const step = {
+    x: size.width + AUTO_NODE_GAP_X,
+    y: size.height + AUTO_NODE_GAP_Y
+  }
+  for (let row = 0; row < AUTO_NODE_MAX_ROWS; row += 1) {
+    for (let column = 0; column < AUTO_NODE_MAX_COLUMNS; column += 1) {
+      const position = {
+        x: origin.x + column * step.x,
+        y: origin.y + row * step.y
+      }
+      if (!project.nodes.some((node) => canvasRectsOverlap(position, size, node))) return position
+    }
+  }
   return {
-    x: Math.round(-project.viewport.x / zoom + 96 + (index % 3) * 360),
-    y: Math.round(-project.viewport.y / zoom + 96 + Math.floor(index / 3) * 280)
+    x: origin.x,
+    y: origin.y + AUTO_NODE_MAX_ROWS * step.y
   }
 }
 
@@ -842,6 +867,27 @@ function normalizePoint(position: CanvasPoint): CanvasPoint {
     x: Number.isFinite(position.x) ? Math.round(position.x) : 0,
     y: Number.isFinite(position.y) ? Math.round(position.y) : 0
   }
+}
+
+function canvasNodeSizeForType(type: CanvasNodeType): { width: number; height: number } {
+  if (type === 'generate') return { width: 300, height: GENERATE_NODE_HEIGHT }
+  if (type === 'image' || type === 'result') return { width: IMAGE_NODE_WIDTH, height: IMAGE_NODE_HEIGHT }
+  if (type === 'config') return { width: 260, height: 250 }
+  if (type === 'batch') return { width: 260, height: 220 }
+  return { width: 220, height: 140 }
+}
+
+function canvasRectsOverlap(
+  position: CanvasPoint,
+  size: { width: number; height: number },
+  node: CanvasNodeData
+): boolean {
+  return (
+    position.x < node.position.x + node.width + AUTO_NODE_COLLISION_PADDING &&
+    position.x + size.width + AUTO_NODE_COLLISION_PADDING > node.position.x &&
+    position.y < node.position.y + node.height + AUTO_NODE_COLLISION_PADDING &&
+    position.y + size.height + AUTO_NODE_COLLISION_PADDING > node.position.y
+  )
 }
 
 function imageNodeTitle(input: CanvasImageNodeInput): string {

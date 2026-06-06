@@ -229,6 +229,37 @@ describe('CanvasWorkspace', () => {
     await unmountWorkspace(root, host)
   })
 
+  it('deletes the selected canvas node with the Delete key without deleting while editing text', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const textNode = canvasNode({ id: 'keyboard-delete-text', type: 'text', content: 'editable prompt' })
+    const generateNode = canvasNode({ id: 'keyboard-delete-generate', type: 'generate', x: 340 })
+    const project = canvasProject({
+      nodes: [textNode, generateNode],
+      connections: [
+        { id: 'keyboard-delete-connection', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }
+      ]
+    })
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project)
+
+    await act(async () => {
+      nodeElement(textNode.id)?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    })
+    const textEditor = nodeElement(textNode.id)?.querySelector<HTMLTextAreaElement>('textarea')
+    await act(async () => {
+      textEditor?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+    })
+    expect(useCanvasStore.getState().activeProject?.nodes.map((node) => node.id)).toEqual([textNode.id, generateNode.id])
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+      await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes.map((node) => node.id)).toEqual([generateNode.id]))
+    })
+    expect(useCanvasStore.getState().activeProject?.connections).toEqual([])
+    expect(nodeElement(textNode.id)).toBeNull()
+
+    await unmountWorkspace(root, host)
+  })
+
   it('creates individual canvas node types from assistant commands', async () => {
     const currentConversation = { ...conversation(), referenceImages: [] }
     const project = canvasProject()

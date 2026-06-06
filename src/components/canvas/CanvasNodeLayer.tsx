@@ -125,9 +125,10 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
   }, [nodes])
 
   useEffect(() => {
+    if (selectedItem?.kind === 'node' && !nodeById.has(selectedItem.id)) setSelectedItem(null)
     if (connectionSourceId && !nodeById.has(connectionSourceId)) setConnectionSourceId(null)
     if (pendingConnectionCreate && !nodeById.has(pendingConnectionCreate.sourceNodeId)) setPendingConnectionCreate(null)
-  }, [connectionSourceId, nodeById, pendingConnectionCreate])
+  }, [connectionSourceId, nodeById, pendingConnectionCreate, selectedItem])
 
   useImperativeHandle(ref, () => ({
     handleCanvasBlankPointerDown: (input) => {
@@ -192,6 +193,18 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
     if (connectionSourceId === node.id) setConnectionSourceId(null)
     if (pendingConnectionCreate?.sourceNodeId === node.id) setPendingConnectionCreate(null)
   }
+  useEffect(() => {
+    if (selectedItem?.kind !== 'node') return
+    const selectedNode = nodeById.get(selectedItem.id)
+    if (!selectedNode) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Delete' || isTextEditingTarget(event.target)) return
+      event.preventDefault()
+      deleteCanvasNode(selectedNode)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [connectionSourceId, nodeById, onNodeDelete, pendingConnectionCreate, selectedItem])
   const openNodePreview = (node: CanvasNodeData) => {
     void resolveNodeImageSource(node).then((source) => {
       if (source) setPreview({ node, source })
@@ -885,6 +898,12 @@ function normalizeNodeForRender(node: CanvasNodeData): CanvasNodeData {
   const { width, height } = imageNodeDisplayDimensions(node)
   if (width === node.width && height === node.height) return node
   return { ...node, width, height }
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false
+  if (target.isContentEditable) return true
+  return target.closest('input, textarea, select, [contenteditable="true"]') !== null
 }
 
 function renderCanvasProject(nodes: CanvasNodeData[], connections: CanvasConnection[], viewport: CanvasViewport): CanvasProject {
