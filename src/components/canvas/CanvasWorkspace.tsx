@@ -128,7 +128,7 @@ export function CanvasWorkspace() {
 
   return (
     <section className="canvas-workspace relative flex h-full min-h-0 overflow-hidden bg-background">
-      <div className="relative min-w-0 flex-1">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <CanvasViewport
           viewport={activeProject?.viewport || { x: 0, y: 0, k: 1 }}
           nodes={activeProject?.nodes || []}

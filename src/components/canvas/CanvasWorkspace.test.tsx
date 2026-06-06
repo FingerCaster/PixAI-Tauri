@@ -214,6 +214,21 @@ describe('CanvasWorkspace', () => {
     await unmountWorkspace(root, host)
   })
 
+  it('keeps the viewport inside a flex column so canvas nodes are not clipped by a zero-height surface', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const textNode = canvasNode({ id: 'visible-layout-text', type: 'text', content: 'visible prompt' })
+    const project = canvasProject({ nodes: [textNode], viewport: { x: 792, y: 394, k: 0.7 } })
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project)
+
+    const viewport = document.querySelector<HTMLElement>('.canvas-viewport')
+    expect(viewport?.parentElement?.className).toContain('flex')
+    expect(viewport?.parentElement?.className).toContain('flex-col')
+    expect(viewport?.parentElement?.className).toContain('min-h-0')
+    expect(nodeElement(textNode.id)?.textContent).toContain('visible prompt')
+
+    await unmountWorkspace(root, host)
+  })
+
   it('creates individual canvas node types from assistant commands', async () => {
     const currentConversation = { ...conversation(), referenceImages: [] }
     const project = canvasProject()
