@@ -36,6 +36,12 @@ export type CanvasConnectedNodeInput = {
   position: CanvasPoint
 }
 
+export type CanvasNodeCreateInput = {
+  type: CanvasNodeType
+  content?: string
+  metadata?: Partial<CanvasNodeMetadata>
+}
+
 export type CanvasStoreState = {
   projects: CanvasProjectSummary[]
   activeProjectId: string | null
@@ -57,6 +63,7 @@ export type CanvasStoreState = {
   addConfigNode: () => Promise<void>
   addBatchNode: () => Promise<void>
   addResultNode: () => Promise<void>
+  createNode: (input: CanvasNodeCreateInput) => Promise<CanvasNodeData | null>
   createGenerateNodeFromText: (textNodeId: string) => Promise<string | null>
   addConnectedNode: (input: CanvasConnectedNodeInput) => Promise<CanvasNodeData | null>
   updateNodeContent: (nodeId: string, content: string) => Promise<void>
@@ -257,6 +264,27 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       ...project,
       nodes: [...project.nodes, createResultNode(project)]
     }))
+  },
+  createNode: async (input) => {
+    let createdNode: CanvasNodeData | null = null
+    const persisted = await persistActiveProject(set, get, (project) => {
+      const node = createBlankCanvasNodeAt(input.type, nextNodePosition(project))
+      if (!node || node.type === 'image') return project
+      createdNode = {
+        ...node,
+        metadata: {
+          ...node.metadata,
+          ...(input.content !== undefined ? { content: input.content } : {}),
+          ...(input.metadata || {})
+        }
+      }
+      return {
+        ...project,
+        nodes: [...project.nodes, createdNode]
+      }
+    })
+    if (!persisted || !createdNode) return null
+    return get().activeProject?.nodes.find((node) => node.id === createdNode?.id) || createdNode
   },
   createGenerateNodeFromText: async (textNodeId) => {
     let generatedNodeId: string | null = null

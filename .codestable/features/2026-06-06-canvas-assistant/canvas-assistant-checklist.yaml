@@ -1,0 +1,48 @@
+feature: 2026-06-06-canvas-assistant
+created: 2026-06-06
+
+steps:
+  - action: "调度契约：实现 canvas-assistant 纯解析服务和单测"
+    exit_signal: "常见创建、链路、连接、修改、运行命令可解析，未知命令返回 hints"
+    status: done
+  - action: "Store 原子能力：新增 createNode() 并复用已有节点创建逻辑"
+    exit_signal: "store test 能拿到新增节点 id，并能设置初始内容"
+    status: done
+  - action: "UI 和执行编排：新增右侧 CanvasAssistantPanel 并接入 CanvasWorkspace"
+    exit_signal: "组件测试能通过助手创建链路、修改提示词、连接节点并运行"
+    status: pending
+  - action: "验证与落档：跑 typecheck、定向 vitest、全量 vitest，更新架构和验收报告"
+    exit_signal: "测试通过，架构与 acceptance 文档完成"
+    status: pending
+
+checks:
+  - item: "右侧助手面板在 active Canvas project 中可见，显示输入框、发送按钮和示例命令"
+    source: 验收场景
+    status: pending
+  - item: "输入创建文本节点会新增 text node 并写入指定内容"
+    source: 验收场景
+    status: pending
+  - item: "输入创建文本节点然后生成会新增 text + generate 并建立 prompt connection"
+    source: 验收场景
+    status: pending
+  - item: "输入创建文本节点然后生成并运行会调用 generateCanvasNode()"
+    source: 验收场景
+    status: pending
+  - item: "输入修改最新文本为指定内容会更新最新 text node"
+    source: 验收场景
+    status: pending
+  - item: "输入连接第1个文本到第1个生成会建立合法 prompt connection"
+    source: 验收场景
+    status: pending
+  - item: "输入运行最新生成会调用当前最新 generate node"
+    source: 验收场景
+    status: pending
+  - item: "输入运行工作流会调用 runCanvasWorkflow()"
+    source: 验收场景
+    status: pending
+  - item: "未识别命令不会写入 Canvas project，会返回可执行示例"
+    source: 边界场景
+    status: pending
+  - item: "不出现视频/音频入口，不调用 Provider/prompt API，不持久化助手对话"
+    source: 范围守护
+    status: pending

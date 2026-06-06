@@ -8,6 +8,7 @@ import { DownloadCanceledError, downloadTextFile, readTextFile, storeDataUrlFile
 import { pixaiApi } from '../../services/app-api'
 import { useAppStore } from '../../store/app-store'
 import { useCanvasStore } from '../../store/canvas-store'
+import { CanvasAssistantPanel } from './CanvasAssistantPanel'
 import { CanvasViewport } from './CanvasViewport'
 
 const CANVAS_GUIDE_DISMISSED_KEY = 'pixai-canvas-guide-dismissed-v1'
@@ -30,6 +31,7 @@ export function CanvasWorkspace() {
   const addTextNode = useCanvasStore((state) => state.addTextNode)
   const addConnection = useCanvasStore((state) => state.addConnection)
   const addConnectedNode = useCanvasStore((state) => state.addConnectedNode)
+  const createNode = useCanvasStore((state) => state.createNode)
   const createGenerateNodeFromText = useCanvasStore((state) => state.createGenerateNodeFromText)
   const deleteConnection = useCanvasStore((state) => state.deleteConnection)
   const deleteNode = useCanvasStore((state) => state.deleteNode)
@@ -126,50 +128,63 @@ export function CanvasWorkspace() {
 
   return (
     <section className="canvas-workspace relative flex h-full min-h-0 overflow-hidden bg-background">
-      <CanvasViewport
-        viewport={activeProject?.viewport || { x: 0, y: 0, k: 1 }}
+      <div className="relative min-w-0 flex-1">
+        <CanvasViewport
+          viewport={activeProject?.viewport || { x: 0, y: 0, k: 1 }}
+          nodes={activeProject?.nodes || []}
+          connections={activeProject?.connections || []}
+          loading={loading || !activeProject}
+          onViewportCommit={(viewport) => updateViewport(viewport)}
+          onNodeMove={(nodeId, position) => moveNode(nodeId, position)}
+          onNodeContentChange={(nodeId, content) => updateNodeContent(nodeId, content)}
+          onNodeMetadataChange={(nodeId, patch) => updateNodeMetadata(nodeId, patch)}
+          onNodeDelete={(nodeId) => deleteNode(nodeId)}
+          onConnectionAdd={(fromNodeId, toNodeId) => addConnection(fromNodeId, toNodeId)}
+          onConnectionCreate={(input) => addConnectedNode(input)}
+          onConnectionDelete={(connectionId) => deleteConnection(connectionId)}
+          onTextNodeEnrich={(nodeId) => enrichCanvasTextNode(nodeId)}
+          onTextNodeGenerate={(nodeId) => generateFromTextNode(nodeId)}
+          onGenerateNodeRun={(nodeId) => generateCanvasNode(nodeId)}
+          generationPreviews={generationPreviews}
+          promptEnriching={promptEnriching}
+          emptyTitle="从这里开始生图"
+          emptyDescription="先添加文本或图片，再放入生成节点；连接后点击生成节点运行。"
+        />
+        <CanvasProjectCommandBar
+          title={activeProject?.title || 'Canvas 项目'}
+          nodeCount={nodeCount}
+          projectCount={projects.length || 1}
+          errorMessage={errorMessage}
+          disabled={!activeProject || loading}
+          onOpenGuide={() => setGuideOpen(true)}
+          onExport={() => void exportCanvasProject()}
+          onImport={() => projectInputRef.current?.click()}
+        />
+        <CanvasWorkbenchDock
+          disabled={!activeProject || loading}
+          onAddText={() => void addTextNode()}
+          onAddImage={() => imageInputRef.current?.click()}
+          onAddGenerate={() => void addGenerateNode()}
+          onAddConfig={() => void addConfigNode()}
+          onAddBatch={() => void addBatchNode()}
+          onAddResult={() => void addResultNode()}
+          onRunWorkflow={() => void runCanvasWorkflow()}
+          onResetViewport={() => void resetViewport()}
+          onImport={() => projectInputRef.current?.click()}
+          onExport={() => void exportCanvasProject()}
+          onOpenGuide={() => setGuideOpen(true)}
+        />
+      </div>
+      <CanvasAssistantPanel
         nodes={activeProject?.nodes || []}
         connections={activeProject?.connections || []}
-        loading={loading || !activeProject}
-        onViewportCommit={(viewport) => updateViewport(viewport)}
-        onNodeMove={(nodeId, position) => moveNode(nodeId, position)}
-        onNodeContentChange={(nodeId, content) => updateNodeContent(nodeId, content)}
-        onNodeMetadataChange={(nodeId, patch) => updateNodeMetadata(nodeId, patch)}
-        onNodeDelete={(nodeId) => deleteNode(nodeId)}
-        onConnectionAdd={(fromNodeId, toNodeId) => addConnection(fromNodeId, toNodeId)}
-        onConnectionCreate={(input) => addConnectedNode(input)}
-        onConnectionDelete={(connectionId) => deleteConnection(connectionId)}
-        onTextNodeEnrich={(nodeId) => enrichCanvasTextNode(nodeId)}
-        onTextNodeGenerate={(nodeId) => generateFromTextNode(nodeId)}
+        disabled={!activeProject || loading}
+        onCreateNode={(input) => createNode(input)}
+        onAddConnection={(fromNodeId, toNodeId) => addConnection(fromNodeId, toNodeId)}
+        onUpdateNodeContent={(nodeId, content) => updateNodeContent(nodeId, content)}
         onGenerateNodeRun={(nodeId) => generateCanvasNode(nodeId)}
-        generationPreviews={generationPreviews}
-        promptEnriching={promptEnriching}
-        emptyTitle="从这里开始生图"
-        emptyDescription="先添加文本或图片，再放入生成节点；连接后点击生成节点运行。"
-      />
-      <CanvasProjectCommandBar
-        title={activeProject?.title || 'Canvas 项目'}
-        nodeCount={nodeCount}
-        projectCount={projects.length || 1}
-        errorMessage={errorMessage}
-        disabled={!activeProject || loading}
-        onOpenGuide={() => setGuideOpen(true)}
-        onExport={() => void exportCanvasProject()}
-        onImport={() => projectInputRef.current?.click()}
-      />
-      <CanvasWorkbenchDock
-        disabled={!activeProject || loading}
-        onAddText={() => void addTextNode()}
-        onAddImage={() => imageInputRef.current?.click()}
-        onAddGenerate={() => void addGenerateNode()}
-        onAddConfig={() => void addConfigNode()}
-        onAddBatch={() => void addBatchNode()}
-        onAddResult={() => void addResultNode()}
-        onRunWorkflow={() => void runCanvasWorkflow()}
-        onResetViewport={() => void resetViewport()}
-        onImport={() => projectInputRef.current?.click()}
-        onExport={() => void exportCanvasProject()}
-        onOpenGuide={() => setGuideOpen(true)}
+        onRunWorkflow={() => runCanvasWorkflow()}
+        onNotify={notify}
       />
       <input
         ref={imageInputRef}

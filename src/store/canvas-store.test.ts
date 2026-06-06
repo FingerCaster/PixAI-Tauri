@@ -625,6 +625,48 @@ describe('useCanvasStore', () => {
     })
   })
 
+  it('creates assistant-addressable canvas nodes and returns the persisted node', async () => {
+    const project = canvasProject()
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 0 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T02:00:00.000Z'
+    }))
+
+    const textNode = await useCanvasStore.getState().createNode({
+      type: 'text',
+      content: 'assistant prompt'
+    })
+    const generateNode = await useCanvasStore.getState().createNode({
+      type: 'generate',
+      content: 'local generate prompt'
+    })
+    const imageNode = await useCanvasStore.getState().createNode({
+      type: 'image',
+      content: 'data:image/png;base64,AA=='
+    })
+
+    expect(textNode).toMatchObject({
+      type: 'text',
+      metadata: { content: 'assistant prompt' }
+    })
+    expect(generateNode).toMatchObject({
+      type: 'generate',
+      metadata: { content: 'local generate prompt', status: 'idle' }
+    })
+    expect(imageNode).toBeNull()
+    expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(2)
+    expect(useCanvasStore.getState().projects[0]).toMatchObject({
+      nodeCount: 2,
+      updatedAt: '2026-06-06T02:00:00.000Z'
+    })
+  })
+
   it('adds generate nodes, updates state, and creates generated result nodes', async () => {
     const project = canvasProject()
     useCanvasStore.setState({
