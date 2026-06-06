@@ -55,14 +55,14 @@ export function parseCanvasAssistantCommand(input: string): CanvasAssistantPlan 
     return plan([connect], '准备连接两个节点。')
   }
 
-  const runNode = parseRunNodeCommand(message)
-  if (runNode) {
-    return plan([runNode], '准备运行生成节点。')
-  }
-
   const createNode = parseCreateNodeCommand(message)
   if (createNode) {
     return plan([createNode], `准备创建${nodeTypeLabel(createNode.nodeType)}。`)
+  }
+
+  const runNode = parseRunNodeCommand(message)
+  if (runNode) {
+    return plan([runNode], '准备运行生成节点。')
   }
 
   return unknownPlan()

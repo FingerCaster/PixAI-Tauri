@@ -24,12 +24,37 @@ describe('canvas assistant command parser', () => {
         }
       ]
     })
+    expect(parseCanvasAssistantCommand('创建生成节点：局部生成提示词')).toMatchObject({
+      actions: [
+        {
+          type: 'create-node',
+          nodeType: 'generate',
+          content: '局部生成提示词'
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('创建配置节点')).toMatchObject({
+      actions: [
+        {
+          type: 'create-node',
+          nodeType: 'config'
+        }
+      ]
+    })
     expect(parseCanvasAssistantCommand('新增批量节点：红色\n蓝色')).toMatchObject({
       actions: [
         {
           type: 'create-node',
           nodeType: 'batch',
           content: '红色 蓝色'
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('创建结果节点')).toMatchObject({
+      actions: [
+        {
+          type: 'create-node',
+          nodeType: 'result'
         }
       ]
     })

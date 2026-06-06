@@ -4,8 +4,9 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Textarea } from '@/components/ui/textarea'
+import { canvasConnectionKindForNodes, wouldCreateCanvasConnectionCycle } from '../../services/canvas-projects'
 import { parseCanvasAssistantCommand, type CanvasAssistantAction, type CanvasAssistantNodeRef } from '../../services/canvas-assistant'
-import type { CanvasConnection, CanvasNodeData, CanvasNodeMetadata, CanvasNodeType } from '../../shared/types'
+import type { CanvasConnection, CanvasConnectionKind, CanvasNodeData, CanvasNodeMetadata, CanvasNodeType } from '../../shared/types'
 
 type CanvasAssistantPanelProps = {
   nodes: CanvasNodeData[]
@@ -231,8 +232,9 @@ async function executeAssistantAction(
     const generateNode = await context.onCreateNode({ type: 'generate' })
     if (!generateNode) throw new Error('无法创建生成节点。')
     rememberNode(state, generateNode)
+    const kind = assertConnectable(state, textNode, generateNode)
     await context.onAddConnection(textNode.id, generateNode.id)
-    state.connections.push({ id: `assistant-${textNode.id}-${generateNode.id}`, fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' })
+    rememberConnection(state, textNode.id, generateNode.id, kind)
     if (action.run) await context.onGenerateNodeRun(generateNode.id)
     return action.run
       ? `已创建文本节点和生成节点，已连接并运行生成。`
@@ -242,8 +244,9 @@ async function executeAssistantAction(
     const fromNode = resolveNodeRef(action.fromRef, state.nodes)
     const toNode = resolveNodeRef(action.toRef, state.nodes)
     if (!fromNode || !toNode) throw new Error('没有找到要连接的节点。')
+    const kind = assertConnectable(state, fromNode, toNode)
     await context.onAddConnection(fromNode.id, toNode.id)
-    state.connections.push({ id: `assistant-${fromNode.id}-${toNode.id}`, fromNodeId: fromNode.id, toNodeId: toNode.id, kind: 'prompt' })
+    rememberConnection(state, fromNode.id, toNode.id, kind)
     return `已连接${nodeTypeLabel(fromNode.type)}到${nodeTypeLabel(toNode.type)}。`
   }
   if (action.type === 'set-prompt') {
@@ -270,6 +273,24 @@ function rememberNode(state: ExecutionState, node: CanvasNodeData): void {
   state.nodes.push(node)
   state.lastCreatedNode = node
   if (node.type === 'generate') state.lastGenerateNode = node
+}
+
+function assertConnectable(state: ExecutionState, fromNode: CanvasNodeData, toNode: CanvasNodeData): CanvasConnectionKind {
+  if (fromNode.id === toNode.id) throw new Error('不能连接同一个节点。')
+  const kind = canvasConnectionKindForNodes(fromNode, toNode)
+  if (!kind) throw new Error('这两个节点不能建立有效连接。')
+  const exists = state.connections.some(
+    (connection) => connection.fromNodeId === fromNode.id && connection.toNodeId === toNode.id && connection.kind === kind
+  )
+  if (exists) throw new Error('这条连接已经存在。')
+  if (wouldCreateCanvasConnectionCycle(state.connections, fromNode.id, toNode.id)) {
+    throw new Error('这条连接会形成环路，已取消。')
+  }
+  return kind
+}
+
+function rememberConnection(state: ExecutionState, fromNodeId: string, toNodeId: string, kind: CanvasConnectionKind): void {
+  state.connections.push({ id: `assistant-${fromNodeId}-${toNodeId}`, fromNodeId, toNodeId, kind })
 }
 
 function replaceNode(state: ExecutionState, nextNode: CanvasNodeData): void {

@@ -1,9 +1,10 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as platformModule from '../../lib/platform'
 import { pixaiApi } from '../../services/app-api'
-import type { CanvasProject, Conversation } from '../../shared/types'
+import type { CanvasNodeData, CanvasProject, Conversation } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 import { resetCanvasStoreForTests, useCanvasStore } from '../../store/canvas-store'
 import { CanvasWorkspace } from './CanvasWorkspace'
@@ -65,6 +66,10 @@ describe('CanvasWorkspace', () => {
     resetCanvasStoreForTests()
     useAppStore.setState({ activeConversationId: null })
     window.localStorage.setItem('pixai-canvas-guide-dismissed-v1', '1')
+  })
+
+  afterEach(() => {
+    document.body.replaceChildren()
   })
 
   it('shows an empty canvas-project state without creating anything automatically', async () => {
@@ -192,6 +197,198 @@ describe('CanvasWorkspace', () => {
       root.unmount()
     })
     host.remove()
+  })
+
+  it('renders the canvas assistant panel as a right-side canvas control', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const project = canvasProject()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project)
+
+    expect(document.querySelector<HTMLElement>('aside.canvas-assistant-panel')?.textContent).toContain('画布助手')
+    expect(assistantTextarea()?.placeholder).toContain('创建文本节点')
+    expect(findButtonByText('发送给画布助手')).toBeTruthy()
+    expect(document.body.textContent).toContain('创建文本节点：赛博城市夜景，然后生成')
+    expect(document.body.textContent).not.toContain('视频')
+    expect(document.body.textContent).not.toContain('音频')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('creates individual canvas node types from assistant commands', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const project = canvasProject()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project)
+
+    await submitAssistantCommand('创建文本节点：单独提示词')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(1))
+    await submitAssistantCommand('创建生成节点：局部生成提示词')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(2))
+    await submitAssistantCommand('创建配置节点')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(3))
+    await submitAssistantCommand('新增批量节点：红色\n蓝色')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(4))
+    await submitAssistantCommand('创建结果节点')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(5))
+
+    const nodes = useCanvasStore.getState().activeProject!.nodes
+    expect(nodes.map((node) => node.type)).toEqual(['text', 'generate', 'config', 'batch', 'result'])
+    expect(nodes[0]).toMatchObject({ type: 'text', metadata: { content: '单独提示词' } })
+    expect(nodes[1]).toMatchObject({ type: 'generate', metadata: { content: '局部生成提示词', status: 'idle' } })
+    expect(nodes[3]).toMatchObject({ type: 'batch', metadata: { content: '红色 蓝色' } })
+    expect(document.body.textContent).toContain('已创建结果节点。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('creates a text-to-generate chain from a canvas assistant command', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const project = canvasProject()
+    const notify = vi.fn()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project, { notify })
+
+    await submitAssistantCommand('创建文本节点：赛博城市夜景，然后生成')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(2))
+
+    const activeProject = useCanvasStore.getState().activeProject!
+    const textNode = activeProject.nodes.find((node) => node.type === 'text')
+    const generateNode = activeProject.nodes.find((node) => node.type === 'generate')
+    expect(textNode).toMatchObject({
+      type: 'text',
+      metadata: { content: '赛博城市夜景' }
+    })
+    expect(generateNode).toMatchObject({
+      type: 'generate',
+      metadata: { status: 'idle' }
+    })
+    expect(activeProject.connections).toEqual([
+      expect.objectContaining({
+        fromNodeId: textNode?.id,
+        toNodeId: generateNode?.id,
+        kind: 'prompt'
+      })
+    ])
+    expect(document.body.textContent).toContain('已创建文本节点和生成节点，并建立提示词连接。')
+    expect(notify).toHaveBeenCalledWith('已创建文本节点和生成节点，并建立提示词连接。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('runs the generated node when the assistant chain command asks to run', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const project = canvasProject()
+    const generateCanvasNode = vi.fn()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project, { generateCanvasNode })
+
+    await submitAssistantCommand('创建文本节点：电影感猫咪肖像，然后生成并运行')
+    await vi.waitFor(() => expect(generateCanvasNode).toHaveBeenCalledTimes(1))
+
+    const generateNode = useCanvasStore.getState().activeProject?.nodes.find((node) => node.type === 'generate')
+    expect(generateCanvasNode).toHaveBeenCalledWith(generateNode?.id)
+    expect(document.body.textContent).toContain('已创建文本节点和生成节点，已连接并运行生成。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('updates the latest text node from a canvas assistant command', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const firstTextNode = canvasNode({ id: 'assistant-text-old', type: 'text', content: '旧提示词' })
+    const latestTextNode = canvasNode({ id: 'assistant-text-latest', type: 'text', content: '待更新提示词', x: 300 })
+    const project = canvasProject({ nodes: [firstTextNode, latestTextNode] })
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project)
+
+    await submitAssistantCommand('修改最新文本为：柔和棚拍猫咪')
+    await vi.waitFor(() => {
+      const node = useCanvasStore.getState().activeProject?.nodes.find((item) => item.id === latestTextNode.id)
+      expect(node?.metadata.content).toBe('柔和棚拍猫咪')
+    })
+
+    expect(useCanvasStore.getState().activeProject?.nodes.find((node) => node.id === firstTextNode.id)?.metadata.content).toBe('旧提示词')
+    expect(document.body.textContent).toContain('已修改文本节点内容。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('connects existing nodes from a canvas assistant command', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const textNode = canvasNode({ id: 'assistant-connect-text', type: 'text', content: '连接提示词' })
+    const generateNode = canvasNode({ id: 'assistant-connect-generate', type: 'generate', x: 320 })
+    const project = canvasProject({ nodes: [textNode, generateNode] })
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project)
+
+    await submitAssistantCommand('连接第1个文本到第1个生成')
+    await vi.waitFor(() => expect(useCanvasStore.getState().activeProject?.connections).toHaveLength(1))
+
+    expect(useCanvasStore.getState().activeProject?.connections[0]).toMatchObject({
+      fromNodeId: textNode.id,
+      toNodeId: generateNode.id,
+      kind: 'prompt'
+    })
+    expect(document.body.textContent).toContain('已连接文本节点到生成节点。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('explains invalid assistant connections without persisting them', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const firstTextNode = canvasNode({ id: 'assistant-invalid-first-text', type: 'text', content: 'first' })
+    const secondTextNode = canvasNode({ id: 'assistant-invalid-second-text', type: 'text', content: 'second', x: 260 })
+    const project = canvasProject({ nodes: [firstTextNode, secondTextNode] })
+    const update = mockCanvasPersistence()
+    const notify = vi.fn()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project, {
+      notify,
+      skipPersistenceMock: true
+    })
+
+    await submitAssistantCommand('连接第1个文本到第2个文本')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('这两个节点不能建立有效连接。'))
+
+    expect(update).not.toHaveBeenCalled()
+    expect(useCanvasStore.getState().activeProject?.connections).toEqual([])
+    expect(notify).toHaveBeenCalledWith('这两个节点不能建立有效连接。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('runs the latest generate node and the workflow from assistant commands', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const firstGenerateNode = canvasNode({ id: 'assistant-run-first-generate', type: 'generate' })
+    const latestGenerateNode = canvasNode({ id: 'assistant-run-latest-generate', type: 'generate', x: 340 })
+    const project = canvasProject({ nodes: [firstGenerateNode, latestGenerateNode] })
+    const generateCanvasNode = vi.fn()
+    const runCanvasWorkflow = vi.fn()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project, {
+      generateCanvasNode,
+      runCanvasWorkflow
+    })
+
+    await submitAssistantCommand('运行最新生成')
+    await vi.waitFor(() => expect(generateCanvasNode).toHaveBeenCalledWith(latestGenerateNode.id))
+
+    await submitAssistantCommand('运行工作流')
+    await vi.waitFor(() => expect(runCanvasWorkflow).toHaveBeenCalledTimes(1))
+
+    expect(generateCanvasNode).not.toHaveBeenCalledWith(firstGenerateNode.id)
+    expect(document.body.textContent).toContain('已运行生成节点。')
+    expect(document.body.textContent).toContain('已运行 Canvas workflow。')
+
+    await unmountWorkspace(root, host)
+  })
+
+  it('does not mutate the canvas project when the assistant command is unknown', async () => {
+    const currentConversation = { ...conversation(), referenceImages: [] }
+    const project = canvasProject()
+    const update = mockCanvasPersistence()
+    const { root, host } = await renderWorkspaceWithProject(currentConversation, project, { skipPersistenceMock: true })
+
+    await submitAssistantCommand('帮我随便弄一下')
+    await vi.waitFor(() => expect(document.body.textContent).toContain('我还不能确定要执行哪些画布操作。'))
+
+    expect(update).not.toHaveBeenCalled()
+    expect(useCanvasStore.getState().activeProject?.nodes).toHaveLength(0)
+    expect(document.body.textContent).toContain('试试：创建文本节点：赛博城市夜景')
+
+    await unmountWorkspace(root, host)
   })
 
   it('generates from a text node through the node action toolbar', async () => {
@@ -668,6 +865,124 @@ describe('CanvasWorkspace', () => {
 
 function findButtonByText(text: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text))
+}
+
+type WorkspaceRenderOptions = {
+  notify?: ReturnType<typeof vi.fn>
+  generateCanvasNode?: ReturnType<typeof vi.fn>
+  runCanvasWorkflow?: ReturnType<typeof vi.fn>
+  skipPersistenceMock?: boolean
+}
+
+async function renderWorkspaceWithProject(
+  currentConversation: Conversation,
+  project: CanvasProject,
+  options: WorkspaceRenderOptions = {}
+): Promise<{ root: Root; host: HTMLDivElement }> {
+  useAppStore.setState({
+    activeConversationId: currentConversation.id,
+    conversations: [currentConversation],
+    notify: options.notify || vi.fn(),
+    generateCanvasNode: options.generateCanvasNode || vi.fn(),
+    runCanvasWorkflow: options.runCanvasWorkflow || vi.fn()
+  })
+  useCanvasStore.setState({
+    activeProjectId: project.id,
+    activeProject: project,
+    projects: [{
+      id: project.id,
+      title: project.title,
+      conversationId: project.conversationId,
+      updatedAt: project.updatedAt,
+      nodeCount: project.nodes.length
+    }]
+  })
+  if (!options.skipPersistenceMock) mockCanvasPersistence()
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  await act(async () => {
+    root.render(<CanvasWorkspace />)
+  })
+  return { root, host }
+}
+
+function mockCanvasPersistence() {
+  return vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+    ...useCanvasStore.getState().activeProject!,
+    ...input,
+    updatedAt: '2026-06-06T02:30:00.000Z'
+  }))
+}
+
+async function unmountWorkspace(root: Root, host: HTMLElement): Promise<void> {
+  await act(async () => {
+    root.unmount()
+  })
+  host.remove()
+}
+
+function assistantTextarea(): HTMLTextAreaElement | null {
+  return document.querySelector<HTMLTextAreaElement>('aside.canvas-assistant-panel textarea')
+}
+
+async function submitAssistantCommand(command: string): Promise<void> {
+  await waitForAssistantIdle()
+  const input = assistantTextarea()
+  if (!input) throw new Error('Canvas assistant textarea was not found.')
+  await act(async () => {
+    setNativeTextareaValue(input, command)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+  await act(async () => {
+    findButtonByText('发送给画布助手')?.click()
+  })
+  await waitForAssistantIdle()
+}
+
+function setNativeTextareaValue(input: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+  setter?.call(input, value)
+}
+
+async function waitForAssistantIdle(): Promise<void> {
+  await vi.waitFor(() => {
+    expect(assistantTextarea()?.disabled).toBe(false)
+  })
+}
+
+function canvasNode(input: {
+  id: string
+  type: CanvasNodeData['type']
+  content?: string
+  x?: number
+  y?: number
+  metadata?: Partial<CanvasNodeData['metadata']>
+}): CanvasNodeData {
+  const width = input.type === 'generate' ? 300 : input.type === 'image' || input.type === 'result' ? 320 : 220
+  const height = input.type === 'generate' ? 340 : input.type === 'image' || input.type === 'result' ? 260 : 140
+  return {
+    id: input.id,
+    type: input.type,
+    title: nodeTitle(input.type),
+    position: { x: input.x || 0, y: input.y || 0 },
+    width,
+    height,
+    metadata: {
+      content: input.content || '',
+      ...(input.type === 'generate' || input.type === 'result' ? { status: 'idle' as const } : {}),
+      ...(input.metadata || {})
+    }
+  }
+}
+
+function nodeTitle(type: CanvasNodeData['type']): string {
+  if (type === 'text') return '文本节点'
+  if (type === 'generate') return '生成节点'
+  if (type === 'config') return '配置节点'
+  if (type === 'batch') return '批量节点'
+  if (type === 'result') return '结果节点'
+  return '图片节点'
 }
 
 function findButtonByTitle(title: string): HTMLButtonElement | undefined {
