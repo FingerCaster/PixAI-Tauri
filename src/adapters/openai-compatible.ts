@@ -257,7 +257,9 @@ async function requestImageGeneration(endpoint: string, profile: ProviderRuntime
 
 async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Promise<Response> {
   const { input } = request
-  const logBody = buildImageEditLogBody(profile, request)
+  const referenceImages = orderReferenceImagesForMask(request.referenceImages)
+  const maskReference = findMaskedReference(referenceImages)
+  const logBody = buildImageEditLogBody(profile, request, referenceImages, maskReference)
   const form = new FormData()
   form.set('model', input.model || profile.defaultImageModel)
   form.set('prompt', input.prompt.trim())
@@ -273,8 +275,11 @@ async function requestImageEdit(endpoint: string, profile: ProviderRuntimeProfil
   if (input.inputFidelity && supportsImageInputFidelity(input.model || profile.defaultImageModel)) {
     form.set('input_fidelity', input.inputFidelity)
   }
-  for (const reference of request.referenceImages) {
+  for (const reference of referenceImages) {
     form.append('image[]', dataUrlToBlob(reference.dataUrl, reference.mimeType), reference.name)
+  }
+  if (maskReference?.maskDataUrl) {
+    form.set('mask', dataUrlToBlob(maskReference.maskDataUrl, 'image/png'), maskFileName(maskReference.name))
   }
   const requestInit: RequestInit = {
     method: 'POST',
@@ -312,14 +317,16 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
   const failOnEmptyImages = request.input.conversationId !== 'connection-test'
   const endpoint = buildResponsesEndpoint(profile.baseUrl)
   const input = request.input
-  const hasReferences = request.referenceImages.length > 0
+  const referenceImages = orderReferenceImagesForMask(request.referenceImages)
+  const maskReference = findMaskedReference(referenceImages)
+  const hasReferences = referenceImages.length > 0
   const imageModel = input.model || profile.defaultImageModel
   const inputFidelity = hasReferences && supportsImageInputFidelity(imageModel)
     ? input.inputFidelity || 'high'
     : undefined
   const body = {
     model: profile.defaultPromptModel,
-    input: buildResponsesImageInput(input.prompt, request.referenceImages),
+    input: buildResponsesImageInput(input.prompt, referenceImages),
     stream: true,
     tool_choice: { type: 'image_generation' },
     tools: [
@@ -330,6 +337,7 @@ async function requestResponsesImageGeneration(profile: ProviderRuntimeProfile, 
         size: input.size || getDefaultImageSize(input.ratio),
         quality: input.quality,
         ...(inputFidelity ? { input_fidelity: inputFidelity } : {}),
+        ...(maskReference?.maskDataUrl ? { input_image_mask: { image_url: maskReference.maskDataUrl } } : {}),
         ...(input.outputFormat ? { output_format: input.outputFormat } : {}),
         ...(input.outputCompression != null ? { output_compression: input.outputCompression } : {}),
         ...(input.background ? { background: input.background } : {}),
@@ -807,7 +815,12 @@ function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {
   return new Blob([bytes], { type: match[1] || fallbackMimeType })
 }
 
-function buildImageEditLogBody(profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Record<string, unknown> {
+function buildImageEditLogBody(
+  profile: ProviderRuntimeProfile,
+  request: ImageGenerationRequest,
+  referenceImages = orderReferenceImagesForMask(request.referenceImages),
+  maskReference = findMaskedReference(referenceImages)
+): Record<string, unknown> {
   const { input } = request
   return {
     model: input.model || profile.defaultImageModel,
@@ -822,12 +835,42 @@ function buildImageEditLogBody(profile: ProviderRuntimeProfile, request: ImageGe
     ...(input.stream ? { stream: 'true' } : {}),
     ...(input.stream && input.partialImages ? { partial_images: String(input.partialImages) } : {}),
     ...(input.inputFidelity && supportsImageInputFidelity(input.model || profile.defaultImageModel) ? { input_fidelity: input.inputFidelity } : {}),
-    'image[]': request.referenceImages.map((reference) => ({
+    'image[]': referenceImages.map((reference) => ({
       filename: reference.name,
       mimeType: reference.mimeType,
       dataUrl: summarizeDataUrl(reference.dataUrl)
-    }))
+    })),
+    ...(maskReference?.maskDataUrl ? {
+      mask: {
+        filename: maskFileName(maskReference.name),
+        mimeType: 'image/png',
+        dataUrl: summarizeDataUrl(maskReference.maskDataUrl)
+      }
+    } : {})
   }
+}
+
+function orderReferenceImagesForMask(referenceImages: ImageGenerationRequest['referenceImages']): ImageGenerationRequest['referenceImages'] {
+  const maskedIndex = referenceImages.findIndex((reference) => isMaskDataUrl(reference.maskDataUrl))
+  if (maskedIndex <= 0) return referenceImages
+  return [
+    referenceImages[maskedIndex],
+    ...referenceImages.slice(0, maskedIndex),
+    ...referenceImages.slice(maskedIndex + 1)
+  ]
+}
+
+function findMaskedReference(referenceImages: ImageGenerationRequest['referenceImages']) {
+  return referenceImages.find((reference) => isMaskDataUrl(reference.maskDataUrl))
+}
+
+function isMaskDataUrl(value: string | undefined): value is string {
+  return Boolean(value?.startsWith('data:image/'))
+}
+
+function maskFileName(referenceName: string): string {
+  const base = referenceName.trim().replace(/\.[^.]+$/, '') || 'reference'
+  return `${base}-mask.png`
 }
 
 function recordImageGenerationCallLog(

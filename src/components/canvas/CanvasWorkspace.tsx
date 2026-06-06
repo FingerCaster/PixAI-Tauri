@@ -9,7 +9,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu'
-import { DownloadCanceledError, downloadTextFile, readTextFile } from '../../lib/platform'
+import { DownloadCanceledError, downloadTextFile, readTextFile, storeDataUrlFile } from '../../lib/platform'
 import { pixaiApi } from '../../services/app-api'
 import { useAppStore } from '../../store/app-store'
 import { useCanvasStore } from '../../store/canvas-store'
@@ -199,12 +199,15 @@ export function CanvasWorkspace() {
               event.currentTarget.value = ''
               if (!file) return
               void readImageFile(file)
-                .then(async (dataUrl) => {
+                .then(async (image) => {
                   await addImageNode({
                     name: file.name,
-                    dataUrl,
-                    mimeType: file.type || 'image/png',
-                    fileSizeBytes: file.size
+                    dataUrl: image.dataUrl,
+                    mimeType: image.mimeType,
+                    fileSizeBytes: image.fileSizeBytes,
+                    storagePath: image.storagePath,
+                    naturalWidth: image.naturalWidth,
+                    naturalHeight: image.naturalHeight
                   })
                   notify('图片已加入 Canvas')
                 })
@@ -303,14 +306,137 @@ function canvasProjectFilename(title: string): string {
   return `${stem || 'canvas-project'}.json`
 }
 
-function readImageFile(file: File): Promise<string> {
-  if (!file.type.startsWith('image/')) return Promise.reject(new Error('请选择图片文件。'))
+type LocalCanvasImageFile = {
+  dataUrl: string
+  mimeType: string
+  fileSizeBytes: number
+  storagePath: string | null
+  naturalWidth?: number
+  naturalHeight?: number
+}
+
+async function readImageFile(file: File): Promise<LocalCanvasImageFile> {
+  if (!file.type.startsWith('image/')) throw new Error('请选择图片文件。')
+  const [dataUrl, buffer] = await Promise.all([
+    readFileAsDataUrl(file),
+    readFileAsArrayBuffer(file).catch(() => null)
+  ])
+  const stored = await storeDataUrlFile('references', file.name || 'canvas-image.png', dataUrl)
+  const naturalSize = buffer ? parseImageNaturalSize(buffer) : null
+  return {
+    dataUrl: stored.dataUrl,
+    mimeType: file.type || stored.mimeType || 'image/png',
+    fileSizeBytes: stored.fileSizeBytes || file.size,
+    storagePath: stored.path || null,
+    ...(naturalSize || {})
+  }
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result || ''))
     reader.onerror = () => reject(reader.error || new Error('无法读取图片文件。'))
     reader.readAsDataURL(file)
   })
+}
+
+function readFileAsArrayBuffer(file: File): Promise<ArrayBuffer> {
+  if (typeof file.arrayBuffer === 'function') return file.arrayBuffer()
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error || new Error('无法读取图片文件。'))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
+function parseImageNaturalSize(buffer: ArrayBuffer): { naturalWidth: number; naturalHeight: number } | null {
+  const bytes = new Uint8Array(buffer)
+  return parsePngNaturalSize(bytes) || parseJpegNaturalSize(bytes) || parseWebpNaturalSize(bytes)
+}
+
+function parsePngNaturalSize(bytes: Uint8Array): { naturalWidth: number; naturalHeight: number } | null {
+  if (bytes.length < 24) return null
+  const isPng = bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47
+    && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a
+  if (!isPng) return null
+  const naturalWidth = readUint32BE(bytes, 16)
+  const naturalHeight = readUint32BE(bytes, 20)
+  return naturalWidth > 0 && naturalHeight > 0 ? { naturalWidth, naturalHeight } : null
+}
+
+function parseJpegNaturalSize(bytes: Uint8Array): { naturalWidth: number; naturalHeight: number } | null {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return null
+  let offset = 2
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1
+      continue
+    }
+    while (bytes[offset] === 0xff) offset += 1
+    const marker = bytes[offset]
+    offset += 1
+    if (marker === 0xd9 || marker === 0xda) break
+    if (offset + 2 > bytes.length) break
+    const length = readUint16BE(bytes, offset)
+    if (length < 2 || offset + length > bytes.length) break
+    if (isJpegStartOfFrame(marker) && offset + 7 < bytes.length) {
+      const naturalHeight = readUint16BE(bytes, offset + 3)
+      const naturalWidth = readUint16BE(bytes, offset + 5)
+      return naturalWidth > 0 && naturalHeight > 0 ? { naturalWidth, naturalHeight } : null
+    }
+    offset += length
+  }
+  return null
+}
+
+function parseWebpNaturalSize(bytes: Uint8Array): { naturalWidth: number; naturalHeight: number } | null {
+  if (bytes.length < 30 || textAt(bytes, 0, 4) !== 'RIFF' || textAt(bytes, 8, 4) !== 'WEBP') return null
+  const chunk = textAt(bytes, 12, 4)
+  if (chunk === 'VP8X') {
+    const naturalWidth = readUint24LE(bytes, 24) + 1
+    const naturalHeight = readUint24LE(bytes, 27) + 1
+    return naturalWidth > 0 && naturalHeight > 0 ? { naturalWidth, naturalHeight } : null
+  }
+  if (chunk === 'VP8L' && bytes[20] === 0x2f) {
+    const naturalWidth = 1 + bytes[21] + ((bytes[22] & 0x3f) << 8)
+    const naturalHeight = 1 + ((bytes[22] & 0xc0) >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10)
+    return naturalWidth > 0 && naturalHeight > 0 ? { naturalWidth, naturalHeight } : null
+  }
+  if (chunk === 'VP8 ' && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+    const naturalWidth = readUint16LE(bytes, 26) & 0x3fff
+    const naturalHeight = readUint16LE(bytes, 28) & 0x3fff
+    return naturalWidth > 0 && naturalHeight > 0 ? { naturalWidth, naturalHeight } : null
+  }
+  return null
+}
+
+function isJpegStartOfFrame(marker: number): boolean {
+  return marker === 0xc0 || marker === 0xc1 || marker === 0xc2 || marker === 0xc3
+    || marker === 0xc5 || marker === 0xc6 || marker === 0xc7
+    || marker === 0xc9 || marker === 0xca || marker === 0xcb
+    || marker === 0xcd || marker === 0xce || marker === 0xcf
+}
+
+function readUint16BE(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] << 8) + bytes[offset + 1]
+}
+
+function readUint16LE(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] + (bytes[offset + 1] << 8)
+}
+
+function readUint24LE(bytes: Uint8Array, offset: number): number {
+  return bytes[offset] + (bytes[offset + 1] << 8) + (bytes[offset + 2] << 16)
+}
+
+function readUint32BE(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] << 24) >>> 0) + (bytes[offset + 1] << 16) + (bytes[offset + 2] << 8) + bytes[offset + 3]
+}
+
+function textAt(bytes: Uint8Array, offset: number, length: number): string {
+  return String.fromCharCode(...bytes.slice(offset, offset + length))
 }
 
 function isCanvasGuideDismissed(): boolean {

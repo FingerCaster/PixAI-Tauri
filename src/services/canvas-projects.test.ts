@@ -164,13 +164,16 @@ describe('CanvasProjectService', () => {
         historyItemId: 'history-1',
         storagePath: 'browser-memory/references/ref.png',
         mimeType: 'image/png',
-        fileSizeBytes: 2
+        fileSizeBytes: 2,
+        maskDataUrl: 'data:image/png;base64,TUFTSw==',
+        maskUpdatedAt: '2026-06-06T10:00:00.000Z'
       }
     }
     const connections: CanvasConnection[] = [
       { id: 'connection-ok', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' },
       { id: 'connection-duplicate', fromNodeId: textNode.id, toNodeId: imageNode.id, kind: 'prompt' },
       { id: 'connection-self', fromNodeId: textNode.id, toNodeId: textNode.id, kind: 'prompt' },
+      { id: 'connection-cycle', fromNodeId: imageNode.id, toNodeId: textNode.id, kind: 'reference-image' },
       { id: 'connection-missing', fromNodeId: textNode.id, toNodeId: 'missing', kind: 'prompt' }
     ]
 
@@ -194,7 +197,9 @@ describe('CanvasProjectService', () => {
       content: 'browser-memory/references/ref.png',
       referenceImageId: 'reference-1',
       historyItemId: 'history-1',
-      storagePath: 'browser-memory/references/ref.png'
+      storagePath: 'browser-memory/references/ref.png',
+      maskDataUrl: 'data:image/png;base64,TUFTSw==',
+      maskUpdatedAt: '2026-06-06T10:00:00.000Z'
     })
     await expect(service.get(created.id)).resolves.toMatchObject({
       nodes: expect.arrayContaining([expect.objectContaining({ id: textNode.id }), expect.objectContaining({ id: imageNode.id })]),
@@ -367,7 +372,7 @@ describe('CanvasProjectService', () => {
     })
     expect(imported.nodes[2].metadata.runId).toBeUndefined()
     expect(imported.nodes[2].metadata.historyItemId).toBeUndefined()
-    expect(imported.connections.map((connection) => connection.kind)).toEqual(['config', 'batch', 'reference-image'])
+    expect(imported.connections.map((connection) => connection.kind)).toEqual(['config', 'batch'])
   })
 
   it('recovers invalid persisted canvas state without leaking into app data', async () => {

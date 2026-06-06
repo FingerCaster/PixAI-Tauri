@@ -15,7 +15,7 @@ export type ProviderRuntimeProfile = ProviderProfile & {
 
 export type ImageGenerationRequest = {
   input: GenerateImageInput
-  referenceImages: Array<{ name: string; mimeType: string; dataUrl: string }>
+  referenceImages: Array<{ name: string; mimeType: string; dataUrl: string; maskDataUrl?: string }>
   signal?: AbortSignal
   onCallLog?: (log: ImageGenerationCallLog) => void
   onPartialImage?: (partial: {

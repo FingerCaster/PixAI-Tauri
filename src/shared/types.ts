@@ -62,6 +62,8 @@ export type CanvasNodeMetadata = {
   fileSizeBytes?: number
   naturalWidth?: number
   naturalHeight?: number
+  maskDataUrl?: string
+  maskUpdatedAt?: string
 }
 
 export type CanvasNodeData = {
@@ -271,6 +273,7 @@ export type GenerateImageInput = {
   partialImages?: number
   inputFidelity?: ImageInputFidelity
   referenceImageIds?: string[]
+  referenceImageMasks?: Record<string, string>
   maxRetries?: number
   generationTimeoutSeconds?: number
   origin?: GenerationOrigin

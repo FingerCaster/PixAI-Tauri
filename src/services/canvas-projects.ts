@@ -177,10 +177,39 @@ export function normalizeCanvasConnections(input: CanvasConnection[], nodes: Can
     if (!connection) continue
     const key = `${connection.fromNodeId}:${connection.toNodeId}:${connection.kind}`
     if (seen.has(key)) continue
+    if (wouldCreateCanvasConnectionCycle(connections, connection.fromNodeId, connection.toNodeId)) continue
     seen.add(key)
     connections.push(connection)
   }
   return connections
+}
+
+export function wouldCreateCanvasConnectionCycle(
+  connections: Array<Pick<CanvasConnection, 'fromNodeId' | 'toNodeId'>>,
+  fromNodeId: string,
+  toNodeId: string
+): boolean {
+  if (fromNodeId === toNodeId) return true
+  const targetsBySource = new Map<string, string[]>()
+  for (const connection of connections) {
+    const targets = targetsBySource.get(connection.fromNodeId)
+    if (targets) {
+      targets.push(connection.toNodeId)
+    } else {
+      targetsBySource.set(connection.fromNodeId, [connection.toNodeId])
+    }
+  }
+  const visited = new Set<string>()
+  const stack = [toNodeId]
+  while (stack.length > 0) {
+    const currentNodeId = stack.pop()!
+    if (currentNodeId === fromNodeId) return true
+    if (visited.has(currentNodeId)) continue
+    visited.add(currentNodeId)
+    const targets = targetsBySource.get(currentNodeId)
+    if (targets) stack.push(...targets)
+  }
+  return false
 }
 
 function normalizeCanvasData(input: unknown): PersistedCanvasData {
@@ -351,7 +380,9 @@ function normalizeCanvasNodeMetadata(type: CanvasNodeType, input: Record<string,
     ...(stringValue(input.mimeType) ? { mimeType: stringValue(input.mimeType) } : {}),
     ...(numberValue(input.fileSizeBytes, 0) > 0 ? { fileSizeBytes: Math.round(numberValue(input.fileSizeBytes, 0)) } : {}),
     ...(numberValue(input.naturalWidth, 0) > 0 ? { naturalWidth: Math.round(numberValue(input.naturalWidth, 0)) } : {}),
-    ...(numberValue(input.naturalHeight, 0) > 0 ? { naturalHeight: Math.round(numberValue(input.naturalHeight, 0)) } : {})
+    ...(numberValue(input.naturalHeight, 0) > 0 ? { naturalHeight: Math.round(numberValue(input.naturalHeight, 0)) } : {}),
+    ...(isCanvasMaskSource(stringValue(input.maskDataUrl)) ? { maskDataUrl: stringValue(input.maskDataUrl) } : {}),
+    ...(isCanvasMaskSource(stringValue(input.maskDataUrl)) && stringValue(input.maskUpdatedAt) ? { maskUpdatedAt: stringValue(input.maskUpdatedAt) } : {})
   }
 }
 
@@ -391,6 +422,10 @@ function isCanvasImageSource(value: string): boolean {
     || value.startsWith('browser-memory/')
     || /^[a-z]:[\\/]/i.test(value)
     || value.startsWith('\\\\')
+}
+
+function isCanvasMaskSource(value: string): boolean {
+  return value.startsWith('data:image/')
 }
 
 function normalizePoint(input: Record<string, unknown>) {

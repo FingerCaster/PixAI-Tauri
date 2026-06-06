@@ -259,6 +259,8 @@ describe('useCanvasStore', () => {
     expect(imageNode).toMatchObject({
       type: 'image',
       title: 'sample',
+      width: 320,
+      height: 260,
       metadata: { mimeType: 'image/png', fileSizeBytes: 2 }
     })
 
@@ -274,6 +276,57 @@ describe('useCanvasStore', () => {
     await useCanvasStore.getState().deleteNode(textNode.id)
     expect(useCanvasStore.getState().activeProject!.nodes.map((node) => node.id)).toEqual([imageNode.id])
     expect(useCanvasStore.getState().activeProject!.connections).toEqual([])
+  })
+
+  it('ignores canvas connections that would create cycles', async () => {
+    const firstNode = {
+      id: 'node-cycle-first',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'first' }
+    }
+    const secondNode = {
+      id: 'node-cycle-second',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 280, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'second' }
+    }
+    const thirdNode = {
+      id: 'node-cycle-third',
+      type: 'text' as const,
+      title: '文本节点',
+      position: { x: 540, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'third' }
+    }
+    const project = canvasProject({ nodes: [firstNode, secondNode, thirdNode] })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: 3 }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-05T00:02:30.000Z'
+    }))
+
+    await useCanvasStore.getState().addConnection(firstNode.id, secondNode.id)
+    await useCanvasStore.getState().addConnection(secondNode.id, thirdNode.id)
+    await useCanvasStore.getState().addConnection(thirdNode.id, firstNode.id)
+    await useCanvasStore.getState().addConnection(secondNode.id, firstNode.id)
+
+    expect(useCanvasStore.getState().activeProject!.connections).toEqual([
+      expect.objectContaining({ fromNodeId: firstNode.id, toNodeId: secondNode.id, kind: 'prompt' }),
+      expect.objectContaining({ fromNodeId: secondNode.id, toNodeId: thirdNode.id, kind: 'prompt' })
+    ])
   })
 
   it('ignores invalid image payloads and rolls back failed project updates', async () => {
@@ -340,6 +393,9 @@ describe('useCanvasStore', () => {
     expect(useCanvasStore.getState().activeProject!.nodes).toHaveLength(1)
     expect(useCanvasStore.getState().activeProject!.nodes[0]).toMatchObject({
       type: 'image',
+      title: 'ref',
+      width: 320,
+      height: 260,
       metadata: {
         content: 'browser-memory/references/ref.png',
         referenceImageId: 'reference-store-test',
@@ -395,6 +451,9 @@ describe('useCanvasStore', () => {
     })
     expect(nodes[1]).toMatchObject({
       type: 'image',
+      title: 'history-result',
+      width: 320,
+      height: 260,
       metadata: {
         historyItemId: 'history-result',
         content: 'data:image/png;base64,cmVzdWx0'

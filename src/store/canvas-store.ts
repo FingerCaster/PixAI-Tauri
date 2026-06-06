@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { createId } from '../lib/ids'
-import { DEFAULT_CANVAS_VIEWPORT } from '../services/canvas-projects'
+import { DEFAULT_CANVAS_VIEWPORT, wouldCreateCanvasConnectionCycle } from '../services/canvas-projects'
 import { pixaiApi } from '../services/app-api'
 import type { CanvasConnectionKind, CanvasNodeData, CanvasNodeMetadata, CanvasPoint, CanvasProject, CanvasProjectSummary, CanvasViewport } from '../shared/types'
 
@@ -59,6 +59,8 @@ const initialCanvasStoreState = {
 
 let defaultProjectRequest: { conversationId: string; promise: Promise<CanvasProject | null> } | null = null
 type CanvasSet = (partial: Partial<CanvasStoreState>) => void
+const IMAGE_NODE_WIDTH = 320
+const IMAGE_NODE_HEIGHT = 260
 
 export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   ...initialCanvasStoreState,
@@ -288,6 +290,7 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
         (connection) => connection.fromNodeId === fromNodeId && connection.toNodeId === toNodeId && connection.kind === kind
       )
       if (exists) return project
+      if (wouldCreateCanvasConnectionCycle(project.connections, fromNodeId, toNodeId)) return project
       return {
         ...project,
         connections: [...project.connections, { id: createId('canvas-connection'), fromNodeId, toNodeId, kind }]
@@ -326,7 +329,9 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
               mimeType: input.mimeType,
               fileSizeBytes: input.fileSizeBytes,
               ...(input.naturalWidth ? { naturalWidth: input.naturalWidth } : {}),
-              ...(input.naturalHeight ? { naturalHeight: input.naturalHeight } : {})
+              ...(input.naturalHeight ? { naturalHeight: input.naturalHeight } : {}),
+              maskDataUrl: '',
+              maskUpdatedAt: ''
             }
           }
         }
@@ -463,10 +468,10 @@ function createImageNodeAt(input: CanvasImageNodeInput, position: CanvasPoint): 
   return {
     id: createId('canvas-node'),
     type: 'image',
-    title: imageNodeTitle(input.name),
+    title: imageNodeTitle(input),
     position,
-    width: 240,
-    height: 180,
+    width: IMAGE_NODE_WIDTH,
+    height: IMAGE_NODE_HEIGHT,
     metadata: {
       content: input.dataUrl,
       ...(input.referenceImageId ? { referenceImageId: input.referenceImageId } : {}),
@@ -529,8 +534,8 @@ function createResultNode(project: CanvasProject): CanvasNodeData {
     type: 'result',
     title: '结果节点',
     position: nextNodePosition(project),
-    width: 260,
-    height: 220,
+    width: IMAGE_NODE_WIDTH,
+    height: IMAGE_NODE_HEIGHT,
     metadata: {
       content: '',
       status: 'idle'
@@ -570,8 +575,8 @@ function nextNodePosition(project: CanvasProject): CanvasPoint {
   const index = project.nodes.length
   const zoom = project.viewport.k || 1
   return {
-    x: Math.round(-project.viewport.x / zoom + 96 + (index % 3) * 280),
-    y: Math.round(-project.viewport.y / zoom + 96 + Math.floor(index / 3) * 220)
+    x: Math.round(-project.viewport.x / zoom + 96 + (index % 3) * 360),
+    y: Math.round(-project.viewport.y / zoom + 96 + Math.floor(index / 3) * 280)
   }
 }
 
@@ -579,7 +584,7 @@ function nextResultNodePosition(sourceNode: CanvasNodeData, project?: CanvasProj
   const resultIndex = project?.connections.filter((connection) => connection.fromNodeId === sourceNode.id && connection.kind === 'result').length || 0
   return {
     x: sourceNode.position.x + sourceNode.width + 64,
-    y: sourceNode.position.y + resultIndex * 220
+    y: sourceNode.position.y + resultIndex * 280
   }
 }
 
@@ -590,8 +595,8 @@ function normalizePoint(position: CanvasPoint): CanvasPoint {
   }
 }
 
-function imageNodeTitle(name: string): string {
-  const title = name.trim().replace(/\.[^.]+$/, '').slice(0, 80)
+function imageNodeTitle(input: CanvasImageNodeInput): string {
+  const title = input.name.trim().replace(/\.[^.]+$/, '')
   return title || '图片节点'
 }
 

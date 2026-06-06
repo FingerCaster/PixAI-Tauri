@@ -245,6 +245,44 @@ describe('openAiCompatibleAdapter', () => {
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/edits', expect.objectContaining({ method: 'POST' }))
   })
 
+  it('sends image edit masks through the multipart edit endpoint', async () => {
+    const maskDataUrl = `data:image/png;base64,${'m'.repeat(120)}`
+    const callLogs: ImageGenerationCallLog[] = []
+
+    await openAiCompatibleAdapter.generateImage(profile, {
+      input: {
+        conversationId: 'c1',
+        prompt: 'masked edit',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1,
+        referenceImageIds: ['r1']
+      },
+      referenceImages: [{
+        name: 'ref.png',
+        mimeType: 'image/png',
+        dataUrl: `data:image/png;base64,${'a'.repeat(120)}`,
+        maskDataUrl
+      }],
+      onCallLog: (log) => {
+        callLogs.push(log)
+      }
+    })
+
+    const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/images/edits', expect.objectContaining({ method: 'POST' }))
+    expect(body.get('mask')).toBeInstanceOf(Blob)
+    expect(body.getAll('image[]')).toHaveLength(1)
+    expect(callLogs[0].request.body).toMatchObject({
+      mask: {
+        filename: 'ref-mask.png',
+        mimeType: 'image/png',
+        dataUrl: '[data-url:image/png;base64:120]'
+      }
+    })
+  })
+
   it('emits image edit partial previews without interrupting final edit results', async () => {
     const partials: string[] = []
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
@@ -461,6 +499,7 @@ describe('openAiCompatibleAdapter', () => {
 
   it('routes responses image-to-image requests through streaming responses with input images', async () => {
     const referenceDataUrl = `data:image/png;base64,${'c'.repeat(120)}`
+    const maskDataUrl = `data:image/png;base64,${'d'.repeat(120)}`
     const callLogs: ImageGenerationCallLog[] = []
     vi.mocked(fetch).mockResolvedValueOnce(new Response(
       [
@@ -487,7 +526,7 @@ describe('openAiCompatibleAdapter', () => {
         inputFidelity: 'low',
         referenceImageIds: ['r1']
       },
-      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl }],
+      referenceImages: [{ name: 'ref.png', mimeType: 'image/png', dataUrl: referenceDataUrl, maskDataUrl }],
       onCallLog: (log) => {
         callLogs.push(log)
       }
@@ -504,6 +543,9 @@ describe('openAiCompatibleAdapter', () => {
       size: '1024x1024',
       quality: 'high',
       input_fidelity: 'low',
+      input_image_mask: {
+        image_url: maskDataUrl
+      },
       partial_images: 1
     })
     expect(body.input).toEqual([

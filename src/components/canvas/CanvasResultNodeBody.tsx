@@ -4,10 +4,13 @@ import { CanvasImageNodeBody } from './CanvasImageNodeBody'
 
 type CanvasResultNodeBodyProps = {
   node: CanvasNodeData
+  displayTitle: string
   onPreview: (node: CanvasNodeData, source: string) => void
+  onMaskEdit?: (node: CanvasNodeData, source: string) => void
+  onImageNaturalSize?: (node: CanvasNodeData, size: { naturalWidth: number; naturalHeight: number }) => void
 }
 
-export function CanvasResultNodeBody({ node, onPreview }: CanvasResultNodeBodyProps) {
+export function CanvasResultNodeBody({ node, displayTitle, onPreview, onMaskEdit, onImageNaturalSize }: CanvasResultNodeBodyProps) {
   const status = node.metadata.status || 'idle'
   const hasImage = Boolean(node.metadata.content)
 
@@ -18,12 +21,18 @@ export function CanvasResultNodeBody({ node, onPreview }: CanvasResultNodeBodyPr
           {statusLabel(status)}
         </Badge>
         {node.metadata.historyItemId ? (
-          <span className="min-w-0 truncate text-xs text-muted-foreground">{node.metadata.historyItemId}</span>
+          <span className="min-w-0 truncate text-xs text-muted-foreground" title={node.title}>{displayTitle}</span>
         ) : null}
       </div>
       <div className="min-h-0">
         {hasImage ? (
-          <CanvasImageNodeBody node={node} emptyLabel="结果图片不可用" onPreview={onPreview} />
+          <CanvasImageNodeBody
+            node={node}
+            emptyLabel="结果图片不可用"
+            onPreview={onPreview}
+            onMaskEdit={onMaskEdit}
+            onNaturalSize={onImageNaturalSize}
+          />
         ) : (
           <div className="grid h-full min-h-24 place-items-center bg-muted/25 p-2">
             <div className="grid h-full min-h-24 w-full place-items-center rounded-md border border-dashed border-border text-xs text-muted-foreground">

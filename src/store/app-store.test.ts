@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { openAiCompatibleAdapter } from '../adapters/openai-compatible'
+import * as platformModule from '../lib/platform'
 import { __getSentNotificationsForTests, __setNotificationPermissionForTests, getProfileSecret } from '../lib/platform'
 import { pixaiApi } from '../services/app-api'
 import type { CanvasConnection, CanvasNodeData, CanvasProject, GenerateImageResult, GenerationRun, ImageHistoryItem } from '../shared/types'
@@ -875,6 +876,165 @@ describe('useAppStore', () => {
       expect.anything()
     )
     expect(useCanvasStore.getState().activeProject?.nodes.find((node) => node.id === imageNode.id)?.metadata.referenceImageId).toBe(importedReference.id)
+  })
+
+  it('imports storage-backed canvas image nodes before canvas generation', async () => {
+    await useAppStore.getState().load()
+    const conversation = { ...useAppStore.getState().conversations[0], referenceImages: [] }
+    const storedDataUrl = 'data:image/png;base64,c3RvcmVk'
+    const storedPath = 'C:\\PixAI\\references\\stored-local.png'
+    const imageNode = canvasNode({
+      id: 'node-storage-image',
+      type: 'image',
+      content: storedPath,
+      metadata: {
+        storagePath: storedPath,
+        mimeType: 'image/png',
+        fileSizeBytes: 6
+      }
+    })
+    const generateNode = canvasNode({ id: 'node-storage-generate', type: 'generate', content: 'use storage image' })
+    const project = canvasProjectForAppStore(conversation.id, [imageNode, generateNode], [
+      { id: 'connection-storage-reference', fromNodeId: imageNode.id, toNodeId: generateNode.id, kind: 'reference-image' }
+    ])
+    const importedReference = {
+      id: 'reference-storage-canvas',
+      name: '图片节点.png',
+      mimeType: 'image/png',
+      dataUrl: storedDataUrl,
+      fileSizeBytes: 6,
+      storagePath: storedPath,
+      createdAt: '2026-06-05T00:00:00.000Z'
+    }
+    const item = succeededHistoryItem({
+      id: 'history-storage-canvas-result',
+      conversationId: conversation.id,
+      runId: 'run-storage-canvas-result',
+      prompt: 'use storage image',
+      dataUrl: 'data:image/png;base64,cmVzdWx0',
+      fileSizeBytes: 6
+    })
+    const run = generationRunForAppStore({
+      id: 'run-storage-canvas-result',
+      conversationId: conversation.id,
+      prompt: item.prompt,
+      referenceImages: [importedReference],
+      items: [item]
+    })
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      history: [],
+      runsByConversation: {}
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    const readLocalImageDataUrl = vi.spyOn(platformModule, 'readLocalImageDataUrl').mockResolvedValue(storedDataUrl)
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-05T00:08:30.000Z'
+    }))
+    const importSpy = vi.spyOn(pixaiApi.reference, 'importPayloads').mockResolvedValue([importedReference])
+    const generateSpy = vi.spyOn(pixaiApi.image, 'generate').mockResolvedValue({ run, items: [item] })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([run])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([item])
+
+    await useAppStore.getState().generateCanvasNode(generateNode.id)
+
+    expect(readLocalImageDataUrl).toHaveBeenCalledWith(storedPath)
+    expect(importSpy).toHaveBeenCalledWith(conversation.id, [
+      expect.objectContaining({
+        dataUrl: storedDataUrl,
+        mimeType: 'image/png',
+        storagePath: storedPath
+      })
+    ])
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ referenceImageIds: [importedReference.id] }),
+      expect.anything()
+    )
+    expect(useCanvasStore.getState().activeProject?.nodes.find((node) => node.id === imageNode.id)?.metadata.referenceImageId).toBe(importedReference.id)
+  })
+
+  it('passes canvas image masks with connected reference images', async () => {
+    await useAppStore.getState().load()
+    const maskDataUrl = 'data:image/png;base64,TUFTSw=='
+    const referenceImage = {
+      id: 'reference-mask-canvas',
+      name: 'masked-ref.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,cmVm',
+      fileSizeBytes: 3,
+      storagePath: null,
+      createdAt: '2026-06-06T00:00:00.000Z'
+    }
+    const conversation = { ...useAppStore.getState().conversations[0], referenceImages: [referenceImage] }
+    const imageNode = canvasNode({
+      id: 'node-masked-image',
+      type: 'image',
+      content: referenceImage.dataUrl,
+      metadata: {
+        referenceImageId: referenceImage.id,
+        mimeType: 'image/png',
+        fileSizeBytes: 3,
+        maskDataUrl,
+        maskUpdatedAt: '2026-06-06T00:00:00.000Z'
+      }
+    })
+    const generateNode = canvasNode({ id: 'node-mask-generate', type: 'generate', content: 'edit masked area' })
+    const project = canvasProjectForAppStore(conversation.id, [imageNode, generateNode], [
+      { id: 'connection-mask-reference', fromNodeId: imageNode.id, toNodeId: generateNode.id, kind: 'reference-image' }
+    ])
+    const item = succeededHistoryItem({
+      id: 'history-mask-result',
+      conversationId: conversation.id,
+      runId: 'run-mask-result',
+      prompt: 'edit masked area',
+      dataUrl: 'data:image/png;base64,cmVzdWx0',
+      fileSizeBytes: 6
+    })
+    const run = generationRunForAppStore({
+      id: 'run-mask-result',
+      conversationId: conversation.id,
+      prompt: item.prompt,
+      referenceImages: [referenceImage],
+      items: [item]
+    })
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      history: [],
+      runsByConversation: {}
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T00:01:00.000Z'
+    }))
+    const generateSpy = vi.spyOn(pixaiApi.image, 'generate').mockResolvedValue({ run, items: [item] })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([run])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([item])
+
+    await useAppStore.getState().generateCanvasNode(generateNode.id)
+
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        referenceImageIds: [referenceImage.id],
+        referenceImageMasks: {
+          [referenceImage.id]: maskDataUrl
+        }
+      }),
+      expect.anything()
+    )
   })
 
   it('does not generate canvas nodes without a prompt', async () => {

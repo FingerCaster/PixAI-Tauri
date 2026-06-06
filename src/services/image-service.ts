@@ -134,7 +134,7 @@ export class ImageService {
     const failedCount = count - succeededCount
     const errorMessage = failedCount > 0 && succeededCount === 0 ? (canceledCount === failedCount ? '生成已取消。' : '图片生成失败。') : null
     const errorDetails = errorMessage && keepFailureDetails
-      ? createErrorDetails({ ...input, model }, canceledCount === failedCount ? 'canceled' : 'batch-failed', { succeededCount, failedCount, canceledCount })
+      ? createErrorDetails(toGenerationDiagnosticInput(input, model), canceledCount === failedCount ? 'canceled' : 'batch-failed', { succeededCount, failedCount, canceledCount })
       : null
     const completed = await this.database.updateRun(run.id, {
       status: succeededCount > 0 ? 'succeeded' : 'failed',
@@ -184,7 +184,10 @@ export class ImageService {
     const runtimeProfile = await this.providers.getRuntimeProfile(settings.selectedImageProfileId)
     const adapter = getAdapter(runtimeProfile.type)
     const conversation = await this.database.getConversation(input.conversationId)
-    const references = await hydrateReferencesForRequest((conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id)))
+    const references = withReferenceMasks(
+      await hydrateReferencesForRequest((conversation?.referenceImages || []).filter((reference) => input.referenceImageIds?.includes(reference.id))),
+      input.referenceImageMasks
+    )
     let callLog: ImageGenerationCallLog | null = null
     for (let retryAttempt = 0; retryAttempt <= maxRetries; retryAttempt += 1) {
       const timeout = createTimeoutController(controller.signal, normalizeImageGenerationTimeoutSeconds(input.generationTimeoutSeconds) * 1000)
@@ -218,7 +221,7 @@ export class ImageService {
             ...(nextRun?.retryFailures || {}),
             [requestIndex]: {
               errorMessage: getGenerationErrorMessage(error),
-              errorDetails: createErrorDetails({ ...input, model }, getFailureStage(error, 'retry'), {
+              errorDetails: createErrorDetails(toGenerationDiagnosticInput(input, model), getFailureStage(error, 'retry'), {
                 retryAttempt,
                 requestIndex,
                 error: getFailureDetails(error)
@@ -241,7 +244,7 @@ export class ImageService {
     const errorMessage = getGenerationErrorMessage(error)
     const details = getFailureDetails(error)
     const conversation = await this.database.getConversation(input.conversationId)
-    const errorDetails = conversation?.keepFailureDetails === false ? null : createErrorDetails({ ...input, model }, getFailureStage(error, 'request-failed'), { requestIndex, retryAttempt, details })
+    const errorDetails = conversation?.keepFailureDetails === false ? null : createErrorDetails(toGenerationDiagnosticInput(input, model), getFailureStage(error, 'request-failed'), { requestIndex, retryAttempt, details })
     return this.database.insertHistory({
       id: createId('history'),
       conversationId: input.conversationId,
@@ -338,6 +341,41 @@ async function hydrateReferencesForRequest(references: ReferenceImage[]): Promis
       dataUrl: await readLocalImageDataUrl(reference.storagePath)
     }
   }))
+}
+
+function withReferenceMasks(
+  references: ReferenceImage[],
+  masks: GenerateImageInput['referenceImageMasks']
+): Array<ReferenceImage & { maskDataUrl?: string }> {
+  if (!masks) return references
+  return references.map((reference) => {
+    const maskDataUrl = masks[reference.id]
+    return isReferenceMaskDataUrl(maskDataUrl)
+      ? { ...reference, maskDataUrl }
+      : reference
+  })
+}
+
+function toGenerationDiagnosticInput(input: GenerateImageInput, model: string): Record<string, unknown> {
+  const { referenceImageMasks, ...rest } = input
+  return {
+    ...rest,
+    model,
+    ...(referenceImageMasks ? { referenceImageMasks: summarizeReferenceMasks(referenceImageMasks) } : {})
+  }
+}
+
+function summarizeReferenceMasks(masks: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(masks).map(([referenceImageId, maskDataUrl]) => [
+      referenceImageId,
+      isReferenceMaskDataUrl(maskDataUrl) ? `[data-url:image-mask:${maskDataUrl.length}]` : '[invalid-mask]'
+    ])
+  )
+}
+
+function isReferenceMaskDataUrl(value: string | undefined): value is string {
+  return Boolean(value?.startsWith('data:image/'))
 }
 
 function getGenerationErrorMessage(error: unknown): string {

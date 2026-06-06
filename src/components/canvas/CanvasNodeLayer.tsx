@@ -9,6 +9,7 @@ import { CanvasConfigNodeBody } from './CanvasConfigNodeBody'
 import { CanvasGenerateNodeBody } from './CanvasGenerateNodeBody'
 import { CanvasImageNodeBody } from './CanvasImageNodeBody'
 import { CanvasImagePreviewModal } from './CanvasImagePreviewModal'
+import { CanvasMaskEditorModal } from './CanvasMaskEditorModal'
 import { CanvasResultNodeBody } from './CanvasResultNodeBody'
 
 type CanvasNodeLayerProps = {
@@ -40,6 +41,11 @@ const NODE_HEADER_HEIGHT = 36
 const NODE_HEADER_PADDING_X = 8
 const NODE_HEADER_BUTTON_SIZE = 28
 const NODE_HEADER_BUTTON_GAP = 4
+const IMAGE_NODE_DISPLAY_WIDTH = 320
+const IMAGE_NODE_DISPLAY_HEIGHT = 260
+const IMAGE_NODE_MAX_DISPLAY_WIDTH = 440
+const IMAGE_NODE_MAX_DISPLAY_HEIGHT = 360
+const NODE_TITLE_MAX_VISIBLE_LENGTH = 28
 
 export function CanvasNodeLayer({
   viewport,
@@ -60,30 +66,50 @@ export function CanvasNodeLayer({
   const [selectedItem, setSelectedItem] = useState<SelectedCanvasItem>(null)
   const [connectionSourceId, setConnectionSourceId] = useState<string | null>(null)
   const [preview, setPreview] = useState<{ node: CanvasNodeData; source: string } | null>(null)
+  const [maskEditor, setMaskEditor] = useState<{ node: CanvasNodeData; source: string } | null>(null)
   const [expandedTextNodeId, setExpandedTextNodeId] = useState<string | null>(null)
   const dragRef = useRef<DragState | null>(null)
-  const nodeById = useMemo(() => new Map(draftNodes.map((node) => [node.id, node])), [draftNodes])
+  const dirtyContentNodeIdsRef = useRef<Set<string>>(new Set())
+  const displayNodes = useMemo(() => draftNodes.map(normalizeNodeForRender), [draftNodes])
+  const nodeById = useMemo(() => new Map(displayNodes.map((node) => [node.id, node])), [displayNodes])
   const selectedConnection = selectedItem?.kind === 'connection' ? connections.find((connection) => connection.id === selectedItem.id) : null
   const selectedNodeId = selectedItem?.kind === 'node' ? selectedItem.id : null
-  const selectedConnectionMidpoint = selectedConnection ? connectionMidpoint(selectedConnection, nodeById, selectedNodeId) : null
+  const selectedConnectionMidpoint = selectedConnection ? connectionMidpoint(selectedConnection, nodeById) : null
   const expandedTextNode = expandedTextNodeId
     ? draftNodes.find((node) => node.id === expandedTextNodeId && node.type === 'text') || null
     : null
 
   useEffect(() => {
-    setDraftNodes(nodes)
+    setDraftNodes((current) => mergeIncomingNodesWithDirtyContent(nodes, current, dirtyContentNodeIdsRef.current))
   }, [nodes])
 
   const selectNode = (nodeId: string) => setSelectedItem({ kind: 'node', id: nodeId })
   const updateDraftNode = (nodeId: string, patch: Partial<CanvasNodeData>) => {
     setDraftNodes((current) => current.map((node) => (node.id === nodeId ? { ...node, ...patch } : node)))
   }
+  const updateDraftNodeContent = (nodeId: string, content: string) => {
+    dirtyContentNodeIdsRef.current.add(nodeId)
+    setDraftNodes((current) => current.map((node) => (
+      node.id === nodeId ? { ...node, metadata: { ...node.metadata, content } } : node
+    )))
+  }
+  const commitDraftNodeContent = (nodeId: string, content: string) => {
+    dirtyContentNodeIdsRef.current.delete(nodeId)
+    setDraftNodes((current) => current.map((node) => (
+      node.id === nodeId ? { ...node, metadata: { ...node.metadata, content } } : node
+    )))
+    void onNodeContentChange(nodeId, content)
+  }
   const updateDraftNodeMetadata = (node: CanvasNodeData, patch: Partial<CanvasNodeMetadata>) => {
     updateDraftNode(node.id, { metadata: { ...node.metadata, ...patch } })
   }
+  const updateDraftImageNaturalSize = (node: CanvasNodeData, size: { naturalWidth: number; naturalHeight: number }) => {
+    if (node.metadata.naturalWidth === size.naturalWidth && node.metadata.naturalHeight === size.naturalHeight) return
+    updateDraftNode(node.id, { metadata: { ...node.metadata, ...size } })
+  }
   const closeExpandedTextNode = () => {
     if (expandedTextNode) {
-      void onNodeContentChange(expandedTextNode.id, expandedTextNode.metadata.content)
+      commitDraftNodeContent(expandedTextNode.id, expandedTextNode.metadata.content)
     }
     setExpandedTextNodeId(null)
   }
@@ -139,9 +165,10 @@ export function CanvasNodeLayer({
           )
         })}
       </svg>
-      {draftNodes.map((node) => {
+      {displayNodes.map((node) => {
         const selected = selectedItem?.kind === 'node' && selectedItem.id === node.id
         const connecting = connectionSourceId === node.id
+        const displayTitle = displayNodeTitle(node)
         return (
           <div
             key={node.id}
@@ -197,28 +224,30 @@ export function CanvasNodeLayer({
               }}
               onPointerCancel={() => {
                 dragRef.current = null
-                setDraftNodes(nodes)
+                setDraftNodes((current) => mergeIncomingNodesWithDirtyContent(nodes, current, dirtyContentNodeIdsRef.current))
               }}
             >
               <Move size={14} className="shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate font-medium">{node.title}</span>
-              <Button
-                type="button"
-                variant={connecting ? 'secondary' : 'ghost'}
-                size="icon-sm"
-                title={connectionSourceId ? '完成连线' : '开始连线'}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  startConnection(node.id)
-                }}
-              >
-                <Link2 />
-              </Button>
-              {selected ? (
+              <span className="min-w-0 flex-1 truncate font-medium" title={node.title}>{displayTitle}</span>
+              <div className="flex shrink-0 items-center gap-1">
                 <Button
                   type="button"
-                  variant="ghost"
+                  className="border-border bg-background/80"
+                  variant={connecting ? 'secondary' : 'outline'}
+                  size="icon-sm"
+                  title={connectionSourceId ? '完成连线' : '开始连线'}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    startConnection(node.id)
+                  }}
+                >
+                  <Link2 />
+                </Button>
+                <Button
+                  type="button"
+                  className="border-border bg-background/80 text-muted-foreground hover:text-destructive"
+                  variant="outline"
                   size="icon-sm"
                   title="删除节点"
                   onPointerDown={(event) => event.stopPropagation()}
@@ -230,16 +259,21 @@ export function CanvasNodeLayer({
                 >
                   <Trash2 />
                 </Button>
-              ) : null}
+              </div>
             </div>
             {node.type === 'image' ? (
-              <CanvasImageNodeBody node={node} onPreview={(previewNode, source) => setPreview({ node: previewNode, source })} />
+              <CanvasImageNodeBody
+                node={node}
+                onPreview={(previewNode, source) => setPreview({ node: previewNode, source })}
+                onMaskEdit={(maskNode, source) => setMaskEditor({ node: maskNode, source })}
+                onNaturalSize={updateDraftImageNaturalSize}
+              />
             ) : node.type === 'generate' ? (
               <CanvasGenerateNodeBody
                 node={node}
                 preview={previewForNode(node, generationPreviews)}
-                onPromptDraftChange={(content) => updateDraftNode(node.id, { metadata: { ...node.metadata, content } })}
-                onPromptCommit={(content) => onNodeContentChange(node.id, content)}
+                onPromptDraftChange={(content) => updateDraftNodeContent(node.id, content)}
+                onPromptCommit={(content) => commitDraftNodeContent(node.id, content)}
                 onRun={() => onGenerateNodeRun(node.id)}
               />
             ) : node.type === 'config' ? (
@@ -253,11 +287,17 @@ export function CanvasNodeLayer({
             ) : node.type === 'batch' ? (
               <CanvasBatchNodeBody
                 node={node}
-                onContentDraftChange={(content) => updateDraftNodeMetadata(node, { content })}
-                onContentCommit={(content) => onNodeContentChange(node.id, content)}
+                onContentDraftChange={(content) => updateDraftNodeContent(node.id, content)}
+                onContentCommit={(content) => commitDraftNodeContent(node.id, content)}
               />
             ) : node.type === 'result' ? (
-              <CanvasResultNodeBody node={node} onPreview={(previewNode, source) => setPreview({ node: previewNode, source })} />
+              <CanvasResultNodeBody
+                node={node}
+                displayTitle={displayTitle}
+                onPreview={(previewNode, source) => setPreview({ node: previewNode, source })}
+                onMaskEdit={(maskNode, source) => setMaskEditor({ node: maskNode, source })}
+                onImageNaturalSize={updateDraftImageNaturalSize}
+              />
             ) : (
               <div className="grid h-full min-h-0 grid-rows-[minmax(0,1fr)_auto]">
                 <textarea
@@ -266,8 +306,8 @@ export function CanvasNodeLayer({
                   data-canvas-stop-zoom="true"
                   onPointerDown={(event) => event.stopPropagation()}
                   onWheel={(event) => event.stopPropagation()}
-                  onChange={(event) => updateDraftNode(node.id, { metadata: { ...node.metadata, content: event.target.value } })}
-                  onBlur={(event) => void onNodeContentChange(node.id, event.target.value)}
+                  onChange={(event) => updateDraftNodeContent(node.id, event.target.value)}
+                  onBlur={(event) => commitDraftNodeContent(node.id, event.target.value)}
                 />
                 <div className="flex min-h-9 items-center justify-between border-t border-border bg-background/55 px-2 py-1">
                   <Button
@@ -310,6 +350,23 @@ export function CanvasNodeLayer({
       {preview ? (
         <CanvasImagePreviewModal node={preview.node} source={preview.source} onClose={() => setPreview(null)} />
       ) : null}
+      {maskEditor ? (
+        <CanvasMaskEditorModal
+          node={maskEditor.node}
+          source={maskEditor.source}
+          onClose={() => setMaskEditor(null)}
+          onSave={(maskDataUrl) => {
+            const patch = { maskDataUrl, maskUpdatedAt: new Date().toISOString() }
+            updateDraftNodeMetadata(maskEditor.node, patch)
+            return onNodeMetadataChange(maskEditor.node.id, patch)
+          }}
+          onClear={() => {
+            const patch = { maskDataUrl: '', maskUpdatedAt: '' }
+            updateDraftNodeMetadata(maskEditor.node, patch)
+            return onNodeMetadataChange(maskEditor.node.id, patch)
+          }}
+        />
+      ) : null}
       {expandedTextNode ? (
         <Dialog open onOpenChange={(open) => { if (!open) closeExpandedTextNode() }}>
           <DialogContent className="max-w-3xl" aria-label="Canvas 文本节点编辑器" aria-describedby={undefined}>
@@ -320,7 +377,7 @@ export function CanvasNodeLayer({
               className="min-h-[50vh] w-full resize-none rounded-lg border border-border bg-background p-4 text-sm leading-6 outline-none"
               value={expandedTextNode.metadata.content}
               autoFocus
-              onChange={(event) => updateDraftNode(expandedTextNode.id, { metadata: { ...expandedTextNode.metadata, content: event.target.value } })}
+              onChange={(event) => updateDraftNodeContent(expandedTextNode.id, event.target.value)}
             />
           </DialogContent>
         </Dialog>
@@ -360,23 +417,108 @@ function previewForNode(node: CanvasNodeData, previews: GenerationPreviewState) 
   return previews[node.metadata.runId]?.[node.metadata.requestIndex ?? 0]
 }
 
-function connectionAnchor(node: CanvasNodeData, selectedNodeId: string | null): CanvasPoint {
-  const deleteButtonOffset = selectedNodeId === node.id ? NODE_HEADER_BUTTON_SIZE + NODE_HEADER_BUTTON_GAP : 0
+function mergeIncomingNodesWithDirtyContent(
+  incomingNodes: CanvasNodeData[],
+  currentNodes: CanvasNodeData[],
+  dirtyNodeIds: Set<string>
+): CanvasNodeData[] {
+  const incomingNodeIds = new Set(incomingNodes.map((node) => node.id))
+  const currentNodeById = new Map(currentNodes.map((node) => [node.id, node]))
+  for (const dirtyNodeId of Array.from(dirtyNodeIds)) {
+    if (!incomingNodeIds.has(dirtyNodeId)) dirtyNodeIds.delete(dirtyNodeId)
+  }
+  return incomingNodes.map((node) => {
+    if (!dirtyNodeIds.has(node.id)) return node
+    const draftNode = currentNodeById.get(node.id)
+    if (!draftNode) return node
+    return {
+      ...node,
+      metadata: {
+        ...node.metadata,
+        content: draftNode.metadata.content
+      }
+    }
+  })
+}
+
+function normalizeNodeForRender(node: CanvasNodeData): CanvasNodeData {
+  if (!isImageDisplayNode(node)) return node
+  const { width, height } = imageNodeDisplayDimensions(node)
+  if (width === node.width && height === node.height) return node
+  return { ...node, width, height }
+}
+
+function isImageDisplayNode(node: CanvasNodeData): boolean {
+  return node.type === 'image' || node.type === 'result'
+}
+
+function normalizeDimension(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function displayNodeTitle(node: CanvasNodeData): string {
+  const title = node.title.trim()
+  return compactNodeTitle(title || fallbackNodeTitle(node))
+}
+
+function fallbackNodeTitle(node: CanvasNodeData): string {
+  if (node.type === 'result') return '结果节点'
+  return '图片节点'
+}
+
+function compactNodeTitle(title: string): string {
+  if (title.length <= NODE_TITLE_MAX_VISIBLE_LENGTH) return title
+  const extensionMatch = /\.[a-z0-9]{2,5}$/i.exec(title)
+  const extension = extensionMatch?.[0] || ''
+  const body = extension ? title.slice(0, -extension.length) : title
+  const startLength = /^history[_-]/i.test(body) ? 16 : 15
+  const endLength = Math.max(5, NODE_TITLE_MAX_VISIBLE_LENGTH - startLength - 3 - extension.length)
+  if (body.length <= startLength + endLength + 3) return title
+  return `${body.slice(0, startLength)}...${body.slice(-endLength)}${extension}`
+}
+
+function imageNodeDisplayDimensions(node: CanvasNodeData): { width: number; height: number } {
+  const baseWidth = Math.max(IMAGE_NODE_DISPLAY_WIDTH, normalizeDimension(node.width, IMAGE_NODE_DISPLAY_WIDTH))
+  const baseHeight = Math.max(IMAGE_NODE_DISPLAY_HEIGHT, normalizeDimension(node.height, IMAGE_NODE_DISPLAY_HEIGHT))
+  const naturalWidth = normalizeDimension(node.metadata.naturalWidth || 0, 0)
+  const naturalHeight = normalizeDimension(node.metadata.naturalHeight || 0, 0)
+  if (!naturalWidth || !naturalHeight) return { width: baseWidth, height: baseHeight }
+
+  const aspectRatio = naturalWidth / naturalHeight
+  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) return { width: baseWidth, height: baseHeight }
+
+  let width = baseWidth
+  let height = baseHeight
+  if (aspectRatio > 1.45) {
+    width = clamp(Math.round(baseHeight * aspectRatio), baseWidth, IMAGE_NODE_MAX_DISPLAY_WIDTH)
+  } else if (aspectRatio < 0.72) {
+    height = clamp(Math.round(baseWidth / aspectRatio), baseHeight, IMAGE_NODE_MAX_DISPLAY_HEIGHT)
+  }
+  return { width, height }
+}
+
+function connectionAnchor(node: CanvasNodeData, side: 'source' | 'target'): CanvasPoint {
+  const buttonClusterWidth = NODE_HEADER_BUTTON_SIZE * 2 + NODE_HEADER_BUTTON_GAP
+  const x = side === 'source'
+    ? node.position.x + node.width - NODE_HEADER_PADDING_X - buttonClusterWidth / 2
+    : node.position.x + NODE_HEADER_PADDING_X
   return {
-    x: node.position.x + node.width - NODE_HEADER_PADDING_X - deleteButtonOffset - NODE_HEADER_BUTTON_SIZE / 2,
+    x,
     y: node.position.y + NODE_HEADER_HEIGHT / 2
   }
 }
 
-function connectionPath(fromNode: CanvasNodeData, toNode: CanvasNodeData, selectedNodeId: string | null): string {
-  const from = connectionAnchor(fromNode, selectedNodeId)
-  const to = connectionAnchor(toNode, selectedNodeId)
+function connectionPath(fromNode: CanvasNodeData, toNode: CanvasNodeData, _selectedNodeId: string | null): string {
+  const from = connectionAnchor(fromNode, 'source')
+  const to = connectionAnchor(toNode, 'target')
   const dx = to.x - from.x
   const dy = to.y - from.y
   const verticalBias = Math.abs(dy) > Math.abs(dx) * 0.72
 
   if (verticalBias) {
-    const curveX = Math.max(from.x, to.x) + clamp(Math.abs(dy) * 0.36, 88, 220)
+    const curveX = dx >= 0
+      ? Math.max(from.x, to.x) + clamp(Math.abs(dy) * 0.28, 72, 180)
+      : Math.min(from.x, to.x) - clamp(Math.abs(dy) * 0.28, 72, 180)
     return `M ${from.x} ${from.y} C ${curveX} ${from.y}, ${curveX} ${to.y}, ${to.x} ${to.y}`
   }
 
@@ -385,12 +527,12 @@ function connectionPath(fromNode: CanvasNodeData, toNode: CanvasNodeData, select
   return `M ${from.x} ${from.y} C ${from.x + curveOffset * direction} ${from.y}, ${to.x - curveOffset * direction} ${to.y}, ${to.x} ${to.y}`
 }
 
-function connectionMidpoint(connection: CanvasConnection, nodeById: Map<string, CanvasNodeData>, selectedNodeId: string | null): CanvasPoint | null {
+function connectionMidpoint(connection: CanvasConnection, nodeById: Map<string, CanvasNodeData>): CanvasPoint | null {
   const fromNode = nodeById.get(connection.fromNodeId)
   const toNode = nodeById.get(connection.toNodeId)
   if (!fromNode || !toNode) return null
-  const from = connectionAnchor(fromNode, selectedNodeId)
-  const to = connectionAnchor(toNode, selectedNodeId)
+  const from = connectionAnchor(fromNode, 'source')
+  const to = connectionAnchor(toNode, 'target')
   return {
     x: (from.x + to.x) / 2,
     y: (from.y + to.y) / 2

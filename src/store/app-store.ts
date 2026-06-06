@@ -4,7 +4,7 @@ import { buildCanvasGenerationPlanForNode, buildCanvasWorkflowPlan, MAX_CANVAS_W
 import { ImageGenerationPreflightError } from '../services/image-service'
 import { getBundledAppVersion } from '../shared/app-version'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
-import { imageSourceForDisplay, sendSystemNotification } from '../lib/platform'
+import { imageSourceForDisplay, readLocalImageDataUrl, sendSystemNotification } from '../lib/platform'
 import { formatDuration } from '../lib/time'
 import { useCanvasStore } from './canvas-store'
 import type {
@@ -122,6 +122,11 @@ type AppState = {
   deleteTemplate: (id: string) => Promise<void>
   applyPromptTemplate: (template: PromptTemplate) => Promise<void>
   notify: (message: string | null) => void
+}
+
+type CanvasGenerationReferences = {
+  referenceImageIds: string[]
+  referenceImageMasks?: Record<string, string>
 }
 
 let generationClockTimer: number | null = null
@@ -1231,9 +1236,9 @@ async function runCanvasGenerationPlanItem(
     return false
   }
 
-  let referenceImageIds: string[]
+  let references: CanvasGenerationReferences
   try {
-    referenceImageIds = await resolveCanvasGenerationReferenceIds(project, planItem.nodeId, conversation, set, get)
+    references = await resolveCanvasGenerationReferences(project, planItem.nodeId, conversation, set, get)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Canvas 参考图解析失败'
     await canvasStore.updateGenerateNodeState(planItem.nodeId, { status: 'failed', errorMessage: message })
@@ -1262,7 +1267,8 @@ async function runCanvasGenerationPlanItem(
     inputFidelity: conversation.inputFidelity ?? undefined,
     maxRetries: conversation.maxRetries,
     generationTimeoutSeconds: normalizeImageGenerationTimeoutSeconds(conversation.generationTimeoutSeconds),
-    referenceImageIds,
+    referenceImageIds: references.referenceImageIds,
+    ...(references.referenceImageMasks ? { referenceImageMasks: references.referenceImageMasks } : {}),
     origin: {
       kind: 'canvas',
       canvasProjectId: project.id,
@@ -1386,29 +1392,31 @@ async function runCanvasGenerationPlanItem(
   }
 }
 
-async function resolveCanvasGenerationReferenceIds(
+async function resolveCanvasGenerationReferences(
   project: CanvasProject,
   generateNodeId: string,
   conversation: Conversation,
   set: (partial: Partial<AppState>) => void,
   get: () => AppState
-): Promise<string[]> {
+): Promise<CanvasGenerationReferences> {
   const nodeById = new Map(project.nodes.map((node) => [node.id, node]))
   const imageNodes = project.connections
     .filter((connection) => connection.toNodeId === generateNodeId && connection.kind === 'reference-image')
     .map((connection) => nodeById.get(connection.fromNodeId))
     .filter((node): node is CanvasNodeData => Boolean(node && (node.type === 'image' || node.type === 'result')))
   const referenceImageIds: string[] = []
+  const referenceImageMasks: Record<string, string> = {}
   const payloads: Array<ReferenceImageFilePayload & { storagePath?: string | null; nodeId: string }> = []
   for (const imageNode of imageNodes) {
     const referenceImageId = imageNode.metadata.referenceImageId
     if (referenceImageId && conversation.referenceImages.some((reference) => reference.id === referenceImageId)) {
       referenceImageIds.push(referenceImageId)
+      addCanvasMaskForReference(referenceImageMasks, referenceImageId, imageNode)
       continue
     }
     payloads.push(await canvasImageNodeToReferencePayload(imageNode))
   }
-  if (payloads.length === 0) return uniqueStrings(referenceImageIds)
+  if (payloads.length === 0) return withCanvasReferenceMasks(uniqueStrings(referenceImageIds), referenceImageMasks)
 
   const referenceImages = await pixaiApi.reference.importPayloads(conversation.id, payloads.map(({ nodeId: _nodeId, ...payload }) => payload))
   const imported = referenceImages.slice(-payloads.length)
@@ -1421,13 +1429,34 @@ async function resolveCanvasGenerationReferenceIds(
   for (let index = 0; index < payloads.length; index += 1) {
     const reference = imported[index]
     referenceImageIds.push(reference.id)
+    addCanvasMaskForReference(referenceImageMasks, reference.id, imageNodes.find((node) => node.id === payloads[index].nodeId) || null)
     await useCanvasStore.getState().bindImageNodeReference(payloads[index].nodeId, reference.id)
   }
-  return uniqueStrings(referenceImageIds)
+  return withCanvasReferenceMasks(uniqueStrings(referenceImageIds), referenceImageMasks)
+}
+
+function addCanvasMaskForReference(
+  masks: Record<string, string>,
+  referenceImageId: string,
+  node: CanvasNodeData | null
+): void {
+  if (node?.metadata.maskDataUrl?.startsWith('data:image/')) {
+    masks[referenceImageId] = node.metadata.maskDataUrl
+  }
+}
+
+function withCanvasReferenceMasks(referenceImageIds: string[], masks: Record<string, string>): CanvasGenerationReferences {
+  const scopedMasks = Object.fromEntries(referenceImageIds
+    .filter((id) => masks[id])
+    .map((id) => [id, masks[id]]))
+  return {
+    referenceImageIds,
+    ...(Object.keys(scopedMasks).length > 0 ? { referenceImageMasks: scopedMasks } : {})
+  }
 }
 
 async function canvasImageNodeToReferencePayload(node: CanvasNodeData): Promise<ReferenceImageFilePayload & { storagePath?: string | null; nodeId: string }> {
-  const source = await imageSourceForDisplay(node.metadata.content, node.metadata.storagePath)
+  const source = await canvasImageNodeSourceForReference(node)
   if (!source?.startsWith('data:image/')) {
     throw new Error('Canvas 图片节点需要先转换为可导入参考图。')
   }
@@ -1439,6 +1468,12 @@ async function canvasImageNodeToReferencePayload(node: CanvasNodeData): Promise<
     fileSizeBytes: node.metadata.fileSizeBytes || estimateDataUrlBytes(source) || 0,
     storagePath: node.metadata.storagePath || null
   }
+}
+
+async function canvasImageNodeSourceForReference(node: CanvasNodeData): Promise<string | null> {
+  if (node.metadata.content.startsWith('data:image/')) return node.metadata.content
+  if (node.metadata.storagePath) return readLocalImageDataUrl(node.metadata.storagePath)
+  return imageSourceForDisplay(node.metadata.content, node.metadata.storagePath)
 }
 
 function uniqueStrings(values: string[]): string[] {

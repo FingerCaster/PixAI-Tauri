@@ -79,10 +79,11 @@ describe('CanvasViewport', () => {
 
     expect(document.querySelector('textarea')?.value).toBe('hello canvas')
     expect(document.querySelector('img')?.getAttribute('alt')).toBe('图片节点')
+    expect(document.querySelector<HTMLElement>('[data-canvas-image-frame="true"]')?.className).toContain('h-full')
     expect(document.querySelector('img')?.className).toContain('object-contain')
     expect(document.querySelectorAll('path.cursor-pointer')).toHaveLength(1)
     expect(document.querySelector('path.cursor-pointer')?.getAttribute('stroke')).toBe('currentColor')
-    expect(document.querySelector('path.cursor-pointer')?.getAttribute('d')).toBe('M 218 42 C 326 42, 326 242, 238 242')
+    expect(document.querySelector('path.cursor-pointer')?.getAttribute('d')).toBe('M 202 42 C -44 42, -44 242, 28 242')
     expect(document.querySelector('svg')?.classList.contains('text-primary')).toBe(true)
 
     await act(async () => {
@@ -111,7 +112,12 @@ describe('CanvasViewport', () => {
     await act(async () => {
       findButtonByTitle('查看大图')?.click()
     })
-    expect(document.querySelector<HTMLElement>('[aria-label="Canvas 图片预览"] img')?.getAttribute('src')).toBe('data:image/png;base64,AA==')
+    const imagePreview = document.querySelector<HTMLElement>('[aria-label="Canvas 图片预览"]')
+    expect(imagePreview?.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,AA==')
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="关闭图片预览"]')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
+    })
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas 图片预览"]')).toBeNull()
 
     await act(async () => {
       document.querySelector<HTMLElement>('path.cursor-pointer')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
@@ -128,6 +134,224 @@ describe('CanvasViewport', () => {
       findButtonByTitle('删除节点')?.click()
     })
     expect(onNodeDelete).toHaveBeenCalledWith(textNode.id)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('keeps node actions reachable with long image titles', async () => {
+    const textNode: CanvasNodeData = {
+      id: 'node-long-title-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'prompt' }
+    }
+    const imageNode: CanvasNodeData = {
+      id: 'node-long-title-image',
+      type: 'image',
+      title: 'history_416b7ff0637872ca11f7c1c2a66054ddb10c2ddbdbb9019ab1b316333e5b5c0a',
+      position: { x: 280, y: 24 },
+      width: 240,
+      height: 180,
+      metadata: { content: 'data:image/png;base64,AA==', mimeType: 'image/png', fileSizeBytes: 2 }
+    }
+    const onNodeDelete = vi.fn()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[textNode, imageNode]}
+          onViewportCommit={vi.fn()}
+          onNodeDelete={onNodeDelete}
+        />
+      )
+    })
+
+    expect(findButtonsByTitle('开始连线')).toHaveLength(2)
+    expect(findButtonsByTitle('删除节点')).toHaveLength(2)
+    const imageElement = document.querySelector<HTMLElement>('[data-canvas-node-id="node-long-title-image"]')
+    const imageTitle = imageElement?.querySelector<HTMLElement>('span.truncate')
+    expect(imageElement?.style.width).toBe('320px')
+    expect(imageElement?.style.height).toBe('260px')
+    expect(imageTitle?.className).toContain('truncate')
+    expect(imageTitle?.title).toBe(imageNode.title)
+    expect(imageTitle?.textContent).toContain('...')
+    expect(imageTitle?.textContent).not.toBe(imageNode.title)
+    expect(document.querySelector<HTMLImageElement>('[data-canvas-node-id="node-long-title-image"] img')?.alt).toBe(imageNode.title)
+    expect(document.querySelector<HTMLImageElement>('[data-canvas-node-id="node-long-title-image"] img')?.className).toContain('object-contain')
+    expect(document.querySelector<HTMLElement>('[data-canvas-image-body="true"]')).toBeTruthy()
+
+    await act(async () => {
+      findButtonsByTitle('删除节点')[1]?.click()
+    })
+    expect(onNodeDelete).toHaveBeenCalledWith(imageNode.id)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('renders old persisted result image nodes with readable display size and title', async () => {
+    const resultNode: CanvasNodeData = {
+      id: 'node-old-result',
+      type: 'result',
+      title: 'history_416b7ff0637872ca11f7c1c2a66054ddb10c2ddbdbb9019ab1b316333e5b5c0a',
+      position: { x: 20, y: 24 },
+      width: 260,
+      height: 180,
+      metadata: {
+        content: 'data:image/png;base64,cmVzdWx0',
+        status: 'succeeded',
+        historyItemId: 'history_416b7ff0637872ca11f7c1c2a66054ddb10c2ddbdbb9019ab1b316333e5b5c0a',
+        mimeType: 'image/png',
+        fileSizeBytes: 6
+      }
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[resultNode]}
+          onViewportCommit={vi.fn()}
+        />
+      )
+    })
+
+    const resultElement = document.querySelector<HTMLElement>('[data-canvas-node-id="node-old-result"]')
+    const resultTitle = resultElement?.querySelector<HTMLElement>('span.truncate')
+    expect(resultElement?.style.width).toBe('320px')
+    expect(resultElement?.style.height).toBe('260px')
+    expect(resultTitle?.className).toContain('truncate')
+    expect(resultTitle?.title).toBe(resultNode.title)
+    expect(resultTitle?.textContent).toContain('...')
+    expect(resultTitle?.textContent).not.toBe(resultNode.title)
+    expect(document.querySelector<HTMLImageElement>('[data-canvas-node-id="node-old-result"] img')?.alt).toBe(resultNode.title)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('sizes old persisted image nodes by natural image aspect ratio', async () => {
+    const wideImageNode: CanvasNodeData = {
+      id: 'node-wide-image',
+      type: 'image',
+      title: 'history_wide-image',
+      position: { x: 20, y: 24 },
+      width: 240,
+      height: 180,
+      metadata: {
+        content: 'data:image/png;base64,AA==',
+        mimeType: 'image/png',
+        fileSizeBytes: 2,
+        naturalWidth: 1600,
+        naturalHeight: 400
+      }
+    }
+    const tallImageNode: CanvasNodeData = {
+      id: 'node-tall-image',
+      type: 'image',
+      title: 'history_tall-image',
+      position: { x: 500, y: 24 },
+      width: 240,
+      height: 180,
+      metadata: {
+        content: 'data:image/png;base64,AA==',
+        mimeType: 'image/png',
+        fileSizeBytes: 2,
+        naturalWidth: 512,
+        naturalHeight: 1024
+      }
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[wideImageNode, tallImageNode]}
+          onViewportCommit={vi.fn()}
+        />
+      )
+    })
+
+    expect(document.querySelector<HTMLElement>('[data-canvas-node-id="node-wide-image"]')?.style.width).toBe('440px')
+    expect(document.querySelector<HTMLElement>('[data-canvas-node-id="node-wide-image"]')?.style.height).toBe('260px')
+    expect(document.querySelector<HTMLElement>('[data-canvas-node-id="node-tall-image"]')?.style.width).toBe('320px')
+    expect(document.querySelector<HTMLElement>('[data-canvas-node-id="node-tall-image"]')?.style.height).toBe('360px')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('keeps uncommitted text drafts when canvas nodes rerender', async () => {
+    const textNode: CanvasNodeData = {
+      id: 'node-draft-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'saved prompt' }
+    }
+    const onNodeContentChange = vi.fn()
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[textNode]}
+          onViewportCommit={vi.fn()}
+          onNodeContentChange={onNodeContentChange}
+        />
+      )
+    })
+
+    const textarea = document.querySelector<HTMLTextAreaElement>('textarea')!
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(textarea, 'unsaved draft')
+      textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1.12 }}
+          nodes={[{ ...textNode, metadata: { content: 'saved prompt' } }]}
+          onViewportCommit={vi.fn()}
+          onNodeContentChange={onNodeContentChange}
+        />
+      )
+    })
+
+    expect(document.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('unsaved draft')
+
+    await act(async () => {
+      document.querySelector<HTMLTextAreaElement>('textarea')?.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+    expect(onNodeContentChange).toHaveBeenCalledWith(textNode.id, 'unsaved draft')
 
     await act(async () => {
       root.unmount()
@@ -184,6 +408,46 @@ describe('CanvasViewport', () => {
       Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes('运行'))?.click()
     })
     expect(onGenerateNodeRun).toHaveBeenCalledWith(generateNode.id)
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('opens the canvas mask editor from image nodes', async () => {
+    const imageNode: CanvasNodeData = {
+      id: 'node-mask-image',
+      type: 'image',
+      title: '图片节点',
+      position: { x: 20, y: 24 },
+      width: 240,
+      height: 180,
+      metadata: { content: 'data:image/png;base64,AA==', mimeType: 'image/png', fileSizeBytes: 2 }
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[imageNode]}
+          onViewportCommit={vi.fn()}
+          onNodeMetadataChange={vi.fn()}
+        />
+      )
+    })
+
+    await act(async () => {
+      findButtonByTitle('添加 mask')?.click()
+    })
+
+    expect(document.querySelector<HTMLElement>('[aria-label="Canvas mask 编辑器"]')).toBeTruthy()
+    expect(document.body.textContent).toContain('画笔')
+    expect(document.body.textContent).toContain('保存')
+    expect(findButtonByTitle('添加 mask')?.className).not.toContain('opacity-0')
 
     await act(async () => {
       root.unmount()

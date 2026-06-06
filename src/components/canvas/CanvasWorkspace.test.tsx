@@ -179,6 +179,20 @@ describe('CanvasWorkspace', () => {
       ...input,
       updatedAt: '2026-06-05T00:06:30.000Z'
     }))
+    const pngBytes = pngHeaderBytes(640, 320)
+    const storedPath = 'C:\\PixAI\\references\\local-cat.png'
+    const storeDataUrlFile = vi.spyOn(platformModule, 'storeDataUrlFile').mockResolvedValue({
+      path: storedPath,
+      dataUrl: storedPath,
+      mimeType: 'image/png',
+      fileSizeBytes: pngBytes.length
+    })
+    vi.spyOn(platformModule, 'imageSourceForDisplaySync').mockImplementation((dataUrl, storagePath) => (
+      storagePath ? `tauri-safe://${storagePath.replace(/\\/g, '/')}` : dataUrl
+    ))
+    vi.spyOn(platformModule, 'imageSourceForDisplay').mockImplementation(async (dataUrl, storagePath) => (
+      storagePath ? `tauri-safe://${storagePath.replace(/\\/g, '/')}` : dataUrl
+    ))
     const host = document.createElement('div')
     document.body.appendChild(host)
     const root = createRoot(host)
@@ -188,7 +202,7 @@ describe('CanvasWorkspace', () => {
     })
     const input = document.querySelector<HTMLInputElement>('input[accept="image/*"]')
     Object.defineProperty(input, 'files', {
-      value: [new File(['image-bytes'], 'local-cat.png', { type: 'image/png' })],
+      value: [new File([pngBytes], 'local-cat.png', { type: 'image/png' })],
       configurable: true
     })
     await act(async () => {
@@ -200,9 +214,15 @@ describe('CanvasWorkspace', () => {
       title: 'local-cat',
       metadata: {
         mimeType: 'image/png',
-        fileSizeBytes: 11
+        fileSizeBytes: pngBytes.length,
+        content: storedPath,
+        storagePath: storedPath,
+        naturalWidth: 640,
+        naturalHeight: 320
       }
     })
+    expect(storeDataUrlFile).toHaveBeenCalledWith('references', 'local-cat.png', expect.stringMatching(/^data:image\/png;base64,/))
+    expect(document.querySelector<HTMLElement>('[data-canvas-image-frame="true"]')?.className).toContain('h-full')
     expect(document.querySelector<HTMLImageElement>('img[alt="local-cat"]')?.className).toContain('object-contain')
     expect(notify).toHaveBeenCalledWith('图片已加入 Canvas')
 
@@ -435,4 +455,20 @@ function openDropdownTrigger(trigger: HTMLElement | null): void {
   trigger.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0 }))
   trigger.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, button: 0 }))
   trigger.click()
+}
+
+function pngHeaderBytes(width: number, height: number): Uint8Array {
+  return new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    0x00, 0x00, 0x00, 0x0d,
+    0x49, 0x48, 0x44, 0x52,
+    (width >>> 24) & 0xff,
+    (width >>> 16) & 0xff,
+    (width >>> 8) & 0xff,
+    width & 0xff,
+    (height >>> 24) & 0xff,
+    (height >>> 16) & 0xff,
+    (height >>> 8) & 0xff,
+    height & 0xff
+  ])
 }
