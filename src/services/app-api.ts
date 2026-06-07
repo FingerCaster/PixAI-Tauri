@@ -3,12 +3,15 @@ import { storeDataUrlFile } from '../lib/platform'
 import { AppDatabase } from './app-database'
 import { AppUpdateService } from './app-update'
 import { AppPreferencesStore } from './app-preferences'
+import { CanvasAgentService } from './canvas-agent-service'
+import { CanvasAssistantSessionService } from './canvas-assistant-sessions'
 import { CanvasProjectService } from './canvas-projects'
 import { getPixaiCodexSkillStatus, installPixaiCodexSkill } from './codex-skill-installer'
 import { ImageService, type ImageGenerationOptions } from './image-service'
 import { PromptService } from './prompt-service'
 import { PromptTemplateStore } from './prompt-templates'
 import { ProviderSettingsStore } from './provider-settings'
+import type { CanvasAgentTurnRequest } from '../adapters/types'
 import type {
   ConversationCreateInput,
   ConversationUpdate,
@@ -20,6 +23,7 @@ import type {
   ProviderProfileInput,
   ProviderSettingsUpdate,
   AppPreferencesUpdate,
+  CanvasAssistantMessage,
   CanvasProject,
   CanvasProjectInput,
   CanvasProjectSummary,
@@ -40,11 +44,21 @@ export type CanvasProjectApi = {
   delete(id: string): Promise<void>
 }
 
+export type CanvasAssistantApi = {
+  list(projectId: string, options?: { limit?: number; before?: string | null }): ReturnType<CanvasAssistantSessionService['list']>
+  append(projectId: string, messages: CanvasAssistantMessage[]): ReturnType<CanvasAssistantSessionService['append']>
+  clear(projectId: string): Promise<void>
+  deleteProject(projectId: string): Promise<void>
+  migrateProjectMessages(project: CanvasProject | null): ReturnType<CanvasAssistantSessionService['migrateProjectMessages']>
+}
+
 export function createPixaiApi() {
   const database = new AppDatabase()
   const providers = new ProviderSettingsStore()
   const preferences = new AppPreferencesStore()
   const images = new ImageService(database, providers)
+  const canvasAgent = new CanvasAgentService(providers)
+  const canvasAssistantSessions = new CanvasAssistantSessionService()
   const canvasProjects = new CanvasProjectService()
   const prompts = new PromptService(providers)
   const templates = new PromptTemplateStore()
@@ -57,6 +71,13 @@ export function createPixaiApi() {
     importProject: (input: unknown, conversationId: string) => canvasProjects.importProject(input, conversationId),
     update: (id: string, input: CanvasProjectInput) => canvasProjects.update(id, input),
     delete: (id: string) => canvasProjects.delete(id)
+  }
+  const canvasAssistantApi: CanvasAssistantApi = {
+    list: (projectId, options) => canvasAssistantSessions.list(projectId, options),
+    append: (projectId, messages) => canvasAssistantSessions.append(projectId, messages),
+    clear: (projectId) => canvasAssistantSessions.clear(projectId),
+    deleteProject: (projectId) => canvasAssistantSessions.deleteProject(projectId),
+    migrateProjectMessages: (project) => canvasAssistantSessions.migrateProjectMessages(project)
   }
 
   return {
@@ -82,6 +103,10 @@ export function createPixaiApi() {
       runs: (id: string) => database.listRuns(id)
     },
     canvas: canvasApi,
+    canvasAgent: {
+      runTurn: (request: CanvasAgentTurnRequest) => canvasAgent.runTurn(request)
+    },
+    canvasAssistant: canvasAssistantApi,
     image: {
       generate: (input: GenerateImageInput, options?: ImageGenerationOptions) => images.generate(input, options),
       cancel: (runId: string, requestIndex?: number) => images.cancel(runId, requestIndex)

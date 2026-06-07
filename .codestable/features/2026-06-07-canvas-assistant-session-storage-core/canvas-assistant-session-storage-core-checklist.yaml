@@ -1,0 +1,45 @@
+feature: 2026-06-07-canvas-assistant-session-storage-core
+created: 2026-06-07
+
+steps:
+  - action: "持久化基础：Rust rusqlite 依赖、SQLite 表和 Tauri commands"
+    exit_signal: "Rust helper 单测覆盖 append/list/clear/deleteProject"
+    status: done
+  - action: "前端服务契约：platform 封装、session service、pixaiApi"
+    exit_signal: "service test 覆盖分页、幂等和旧消息迁移"
+    status: done
+  - action: "Store 编排：迁移旧消息、active project 最近页、加载更多、清空、删除清理"
+    exit_signal: "store test 覆盖打开迁移、append、load more、clear、delete cleanup"
+    status: done
+  - action: "UI 接入：panel 改为 append 模式，增加加载更多和清空按钮"
+    exit_signal: "CanvasWorkspace 组件测试覆盖重开恢复、分页加载、清空不删节点"
+    status: done
+  - action: "验证与落档：定向测试、typecheck、全量检查，更新架构/需求/roadmap/acceptance"
+    exit_signal: "所有 checks passed，pnpm check 通过"
+    status: done
+
+checks:
+  - item: "打开带旧 assistantMessages 的 Canvas project 时迁移到独立会话存储，旧字段清空且不重复迁移"
+    source: 验收场景
+    status: passed
+  - item: "发送助手命令后用户消息和助手回执追加到会话存储，重新打开 workspace 后能恢复"
+    source: 验收场景
+    status: passed
+  - item: "消息超过默认页大小时打开只加载最近页，点击加载更多能取回更早消息且顺序正确"
+    source: 验收场景
+    status: passed
+  - item: "清空当前聊天后助手回到欢迎态，当前项目 nodes/connections/viewport 不变"
+    source: 验收场景
+    status: passed
+  - item: "删除 Canvas project 后对应助手会话消息被删除，其他项目消息不受影响"
+    source: 验收场景
+    status: passed
+  - item: "导出 Canvas project JSON 不默认包含聊天历史"
+    source: 验收场景
+    status: passed
+  - item: "未识别命令和非法连接仍会产生助手回执，但不会改变 nodes/connections"
+    source: 回归场景
+    status: passed
+  - item: "不引入云同步、远端 API、Provider/prompt API 或改变 Canvas workflow/history 事实源"
+    source: 范围守护
+    status: passed

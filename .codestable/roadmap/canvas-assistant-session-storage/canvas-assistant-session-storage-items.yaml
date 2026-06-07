@@ -1,0 +1,27 @@
+roadmap: canvas-assistant-session-storage
+created: 2026-06-07
+
+items:
+  - slug: canvas-assistant-session-storage-core
+    description: 建立本地 SQLite 会话表、前端服务 API、旧消息迁移、右侧面板分页加载和清空
+    depends_on: []
+    status: done
+    feature: 2026-06-07-canvas-assistant-session-storage-core
+    minimal_loop: true
+    notes: "最小闭环：助手历史脱离 Canvas project JSON，并支持恢复、清空、分页和项目删除清理"
+
+  - slug: canvas-assistant-session-export-options
+    description: 为 Canvas project 导入导出增加聊天历史选项或完整项目包策略
+    depends_on: [canvas-assistant-session-storage-core]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: null
+
+  - slug: canvas-assistant-session-search
+    description: 在独立会话存储之上增加项目内聊天搜索和筛选
+    depends_on: [canvas-assistant-session-storage-core]
+    status: planned
+    feature: null
+    minimal_loop: false
+    notes: null

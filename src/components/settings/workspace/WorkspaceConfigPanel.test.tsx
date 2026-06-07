@@ -131,6 +131,7 @@ function providerSettings(): ProviderSettings {
         name: 'AIO',
         defaultImageModel: 'gpt-image-2',
         defaultPromptModel: 'gpt-5.4-mini',
+        defaultAgentModel: 'gpt-5.4-mini',
         imageGenerationEndpoint: 'responses-api',
         enabledUsages: ['image']
       }),
@@ -139,12 +140,14 @@ function providerSettings(): ProviderSettings {
         name: 'AIO Prompt',
         defaultImageModel: 'gpt-image-2',
         defaultPromptModel: 'gpt-5.4-mini',
+        defaultAgentModel: 'gpt-5.4-mini',
         imageGenerationEndpoint: 'images-api',
         enabledUsages: ['prompt']
       })
     ],
     selectedImageProfileId: 'image-provider',
-    selectedPromptProfileId: 'prompt-provider'
+    selectedPromptProfileId: 'prompt-provider',
+    selectedAgentProfileId: ''
   }
 }
 
@@ -156,6 +159,7 @@ function providerProfile(overrides: Partial<ProviderProfile>): ProviderProfile {
     baseUrl: 'https://example.com',
     defaultImageModel: 'gpt-image-2',
     defaultPromptModel: 'gpt-5.4-mini',
+    defaultAgentModel: 'gpt-5.4-mini',
     imageGenerationEndpoint: 'images-api',
     enabledUsages: ['image', 'prompt'],
     capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test'],

@@ -19,6 +19,7 @@ const profile: ProviderRuntimeProfile = {
   baseUrl: 'http://127.0.0.1:37123',
   defaultImageModel: 'gpt-image-1',
   defaultPromptModel: 'gpt-5.4-mini',
+  defaultAgentModel: 'gpt-5.4-mini',
   imageGenerationEndpoint: 'images-api',
   enabledUsages: ['image', 'prompt'],
   capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test'],
@@ -50,6 +51,136 @@ describe('openAiCompatibleAdapter', () => {
   it('routes prompt assistant requests to responses endpoint', async () => {
     await expect(openAiCompatibleAdapter.inspirePrompt(profile)).resolves.toBe('ok prompt')
     expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/responses', expect.objectContaining({ method: 'POST' }))
+  })
+
+  it('runs canvas agent turns through chat completions tool calling', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: '我先查看画布。',
+            tool_calls: [{
+              id: 'call-1',
+              type: 'function',
+              function: {
+                name: 'list_canvas_state',
+                arguments: '{"include_connections":true}'
+              }
+            }]
+          }
+        }]
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    ))
+
+    const result = await openAiCompatibleAdapter.runCanvasAgentTurn?.(profile, {
+      messages: [
+        { role: 'system', content: '你是 Canvas Agent。' },
+        { role: 'user', content: '看看当前画布。' }
+      ],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'list_canvas_state',
+          description: '列出画布状态',
+          parameters: { type: 'object', properties: {} }
+        }
+      }]
+    })
+
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
+    expect(fetch).toHaveBeenCalledWith('http://127.0.0.1:37123/v1/chat/completions', expect.objectContaining({ method: 'POST' }))
+    expect(body).toMatchObject({
+      model: 'gpt-5.4-mini',
+      tool_choice: 'auto',
+      messages: [
+        { role: 'system', content: '你是 Canvas Agent。' },
+        { role: 'user', content: '看看当前画布。' }
+      ]
+    })
+    expect(body.tools[0].function.name).toBe('list_canvas_state')
+    expect(result).toMatchObject({
+      content: '我先查看画布。',
+      toolCalls: [{
+        id: 'call-1',
+        name: 'list_canvas_state',
+        arguments: { include_connections: true }
+      }]
+    })
+  })
+
+  it('serializes assistant tool calls and tolerates invalid tool arguments', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              id: 'call-2',
+              type: 'function',
+              function: {
+                name: 'inspect_node',
+                arguments: '{bad json'
+              }
+            }]
+          }
+        }]
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } }
+    ))
+
+    const result = await openAiCompatibleAdapter.runCanvasAgentTurn?.(profile, {
+      messages: [
+        {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{
+            id: 'call-1',
+            name: 'list_canvas_state',
+            arguments: {}
+          }]
+        },
+        {
+          role: 'tool',
+          tool_call_id: 'call-1',
+          name: 'list_canvas_state',
+          content: '{"ok":true}'
+        }
+      ],
+      tools: [{
+        type: 'function',
+        function: {
+          name: 'inspect_node',
+          description: '检查节点',
+          parameters: { type: 'object', properties: { nodeId: { type: 'string' } } }
+        }
+      }]
+    })
+
+    const body = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body || '{}'))
+    expect(body.messages[0]).toMatchObject({
+      role: 'assistant',
+      content: null,
+      tool_calls: [{
+        id: 'call-1',
+        type: 'function',
+        function: {
+          name: 'list_canvas_state',
+          arguments: '{}'
+        }
+      }]
+    })
+    expect(body.messages[1]).toMatchObject({
+      role: 'tool',
+      tool_call_id: 'call-1',
+      name: 'list_canvas_state',
+      content: '{"ok":true}'
+    })
+    expect(result?.toolCalls[0]).toMatchObject({
+      id: 'call-2',
+      name: 'inspect_node',
+      arguments: {}
+    })
   })
 
   it('routes text-to-image requests to image generations endpoint', async () => {

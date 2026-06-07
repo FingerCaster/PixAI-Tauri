@@ -56,6 +56,7 @@ describe('Shell layouts', () => {
             baseUrl: 'https://example.com',
             defaultImageModel: 'gpt-image-1',
             defaultPromptModel: 'gpt-4.1',
+            defaultAgentModel: 'gpt-4.1',
             imageGenerationEndpoint: 'images-api',
             enabledUsages: ['image', 'prompt'],
             capabilities: ['text-to-image', 'prompt-assist', 'connection-test'],
@@ -66,7 +67,8 @@ describe('Shell layouts', () => {
           }
         ],
         selectedImageProfileId: 'default-openai-compatible',
-        selectedPromptProfileId: 'default-openai-compatible'
+        selectedPromptProfileId: 'default-openai-compatible',
+        selectedAgentProfileId: ''
       },
       appUpdate: {
         status: 'available',

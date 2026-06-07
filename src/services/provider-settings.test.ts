@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { getProfileSecret } from '../lib/platform'
-import { DEFAULT_PROMPT_MODEL } from '../shared/image-options'
+import { DEFAULT_AGENT_MODEL, DEFAULT_PROMPT_MODEL } from '../shared/image-options'
 import { ProviderSettingsStore } from './provider-settings'
 
 describe('ProviderSettingsStore', () => {
@@ -11,6 +11,7 @@ describe('ProviderSettingsStore', () => {
     expect(settings.profiles).toHaveLength(0)
     expect(settings.selectedImageProfileId).toBe('')
     expect(settings.selectedPromptProfileId).toBe('')
+    expect(settings.selectedAgentProfileId).toBe('')
   })
 
   it('selects the first created profile for each compatible usage', async () => {
@@ -24,8 +25,10 @@ describe('ProviderSettingsStore', () => {
     expect(profile.type).toBe('openai-compatible')
     expect(profile.baseUrl).toBe('http://127.0.0.1:37123')
     expect(profile.imageGenerationEndpoint).toBe('images-api')
+    expect(profile.defaultAgentModel).toBe(DEFAULT_AGENT_MODEL)
     expect(settings.selectedImageProfileId).toBe(profile.id)
     expect(settings.selectedPromptProfileId).toBe(profile.id)
+    expect(settings.selectedAgentProfileId).toBe(profile.id)
   })
 
   it('stores API keys through the secret boundary instead of profile metadata', async () => {
@@ -104,6 +107,46 @@ describe('ProviderSettingsStore', () => {
     expect(settings.selectedPromptProfileId).toBe(promptProfile?.id)
   })
 
+  it('allows agent selection to differ from image and prompt selections', async () => {
+    const store = new ProviderSettingsStore()
+    const imageSettings = await store.upsertProfile({ name: 'Image only', enabledUsages: ['image'] })
+    const imageProfile = imageSettings.profiles.at(-1)
+    const agentSettings = await store.upsertProfile({
+      name: 'Agent only',
+      enabledUsages: ['agent'],
+      defaultAgentModel: 'gpt-5.4'
+    })
+    const agentProfile = agentSettings.profiles.at(-1)
+
+    const settings = await store.update({
+      selectedImageProfileId: imageProfile?.id,
+      selectedAgentProfileId: agentProfile?.id
+    })
+
+    expect(settings.selectedImageProfileId).toBe(imageProfile?.id)
+    expect(settings.selectedAgentProfileId).toBe(agentProfile?.id)
+    expect(agentProfile?.defaultAgentModel).toBe('gpt-5.4')
+  })
+
+  it('rejects agent selections without native tool calling capabilities', async () => {
+    const store = new ProviderSettingsStore()
+    const agentSettings = await store.upsertProfile({
+      name: 'Agent provider',
+      enabledUsages: ['agent']
+    })
+    const agentProfile = agentSettings.profiles.at(-1)
+    const incompatibleSettings = await store.upsertProfile({
+      name: 'No tools',
+      enabledUsages: ['agent'],
+      capabilities: ['prompt-assist']
+    })
+    const incompatibleProfile = incompatibleSettings.profiles.at(-1)
+
+    const settings = await store.update({ selectedAgentProfileId: incompatibleProfile?.id })
+
+    expect(settings.selectedAgentProfileId).toBe(agentProfile?.id)
+  })
+
   it('rejects incompatible profile selections by falling back to matching usages', async () => {
     const store = new ProviderSettingsStore()
     const imageSettings = await store.upsertProfile({ name: 'Image only', enabledUsages: ['image'] })
@@ -145,5 +188,6 @@ describe('ProviderSettingsStore', () => {
     expect(settings.profiles).toHaveLength(0)
     expect(settings.selectedImageProfileId).toBe('')
     expect(settings.selectedPromptProfileId).toBe('')
+    expect(settings.selectedAgentProfileId).toBe('')
   })
 })

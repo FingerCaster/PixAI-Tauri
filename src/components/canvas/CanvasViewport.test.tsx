@@ -151,6 +151,54 @@ describe('CanvasViewport', () => {
     host.remove()
   })
 
+  it('shows prompt enrich loading only on the active text node', async () => {
+    const firstTextNode: CanvasNodeData = {
+      id: 'node-enrich-first-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 20, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'first prompt' }
+    }
+    const secondTextNode: CanvasNodeData = {
+      id: 'node-enrich-second-text',
+      type: 'text',
+      title: '文本节点',
+      position: { x: 280, y: 24 },
+      width: 220,
+      height: 140,
+      metadata: { content: 'second prompt' }
+    }
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+
+    await act(async () => {
+      root.render(
+        <CanvasViewport
+          viewport={{ x: 0, y: 0, k: 1 }}
+          nodes={[firstTextNode, secondTextNode]}
+          onViewportCommit={vi.fn()}
+          promptEnriching
+          promptEnrichingNodeId={secondTextNode.id}
+        />
+      )
+    })
+
+    const firstButton = nodeElement(firstTextNode.id)?.querySelector<HTMLButtonElement>('button[title="丰富提示词"]')
+    const secondButton = nodeElement(secondTextNode.id)?.querySelector<HTMLButtonElement>('button[title="丰富提示词"]')
+    expect(firstButton?.disabled).toBe(true)
+    expect(secondButton?.disabled).toBe(true)
+    expect(firstButton?.querySelector('svg')?.className.baseVal).not.toContain('animate-spin')
+    expect(secondButton?.querySelector('svg')?.className.baseVal).toContain('animate-spin')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('keeps node actions reachable with long image titles', async () => {
     const textNode: CanvasNodeData = {
       id: 'node-long-title-text',

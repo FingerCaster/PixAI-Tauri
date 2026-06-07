@@ -34,6 +34,13 @@ function App() {
 
   useEffect(() => {
     if (!isTauriRuntime()) return undefined
+    const preventDefaultContextMenu = (event: MouseEvent) => event.preventDefault()
+    window.addEventListener('contextmenu', preventDefaultContextMenu, true)
+    return () => window.removeEventListener('contextmenu', preventDefaultContextMenu, true)
+  }, [])
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return undefined
     let disposed = false
     let unlisten: (() => void) | null = null
     void registerCodexBridgeHandler()

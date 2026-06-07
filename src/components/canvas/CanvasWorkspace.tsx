@@ -9,7 +9,7 @@ import { pixaiApi } from '../../services/app-api'
 import { useAppStore } from '../../store/app-store'
 import { useCanvasStore } from '../../store/canvas-store'
 import { CanvasAssistantPanel } from './CanvasAssistantPanel'
-import { CanvasViewport } from './CanvasViewport'
+import { CanvasViewport, type CanvasViewportHandle } from './CanvasViewport'
 
 const CANVAS_GUIDE_DISMISSED_KEY = 'pixai-canvas-guide-dismissed-v1'
 
@@ -39,16 +39,25 @@ export function CanvasWorkspace() {
   const resetViewport = useCanvasStore((state) => state.resetViewport)
   const updateNodeContent = useCanvasStore((state) => state.updateNodeContent)
   const updateNodeMetadata = useCanvasStore((state) => state.updateNodeMetadata)
+  const assistantMessages = useCanvasStore((state) => state.assistantMessages)
+  const assistantMessagesHasMore = useCanvasStore((state) => state.assistantMessagesHasMore)
+  const assistantMessagesLoading = useCanvasStore((state) => state.assistantMessagesLoading)
+  const appendAssistantMessages = useCanvasStore((state) => state.appendAssistantMessages)
+  const clearAssistantMessages = useCanvasStore((state) => state.clearAssistantMessages)
+  const loadMoreAssistantMessages = useCanvasStore((state) => state.loadMoreAssistantMessages)
   const updateViewport = useCanvasStore((state) => state.updateViewport)
   const generateCanvasNode = useAppStore((state) => state.generateCanvasNode)
   const runCanvasWorkflow = useAppStore((state) => state.runCanvasWorkflow)
   const enrichCanvasTextNode = useAppStore((state) => state.enrichCanvasTextNode)
   const generationPreviews = useAppStore((state) => state.generationPreviews)
   const promptEnriching = useAppStore((state) => state.promptAssistantRunning.enrich)
+  const settings = useAppStore((state) => state.settings)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
+  const viewportRef = useRef<CanvasViewportHandle>(null)
   const [guideOpen, setGuideOpen] = useState(false)
   const [guideAutoChecked, setGuideAutoChecked] = useState(false)
+  const [promptEnrichingNodeId, setPromptEnrichingNodeId] = useState<string | null>(null)
   const nodeCount = activeProject?.nodes.length || 0
 
   useEffect(() => {
@@ -56,6 +65,10 @@ export function CanvasWorkspace() {
     setGuideAutoChecked(true)
     if (!isCanvasGuideDismissed()) setGuideOpen(true)
   }, [activeProject, guideAutoChecked])
+
+  useEffect(() => {
+    if (!promptEnriching) setPromptEnrichingNodeId(null)
+  }, [promptEnriching])
 
   if (!activeProject) {
     return (
@@ -126,10 +139,21 @@ export function CanvasWorkspace() {
     await generateCanvasNode(generateNodeId)
   }
 
+  const enrichTextNode = async (nodeId: string) => {
+    if (promptEnriching) return
+    setPromptEnrichingNodeId(nodeId)
+    try {
+      await enrichCanvasTextNode(nodeId)
+    } finally {
+      setPromptEnrichingNodeId(null)
+    }
+  }
+
   return (
     <section className="canvas-workspace relative flex h-full min-h-0 overflow-hidden bg-background">
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <CanvasViewport
+          ref={viewportRef}
           viewport={activeProject?.viewport || { x: 0, y: 0, k: 1 }}
           nodes={activeProject?.nodes || []}
           connections={activeProject?.connections || []}
@@ -142,11 +166,12 @@ export function CanvasWorkspace() {
           onConnectionAdd={(fromNodeId, toNodeId) => addConnection(fromNodeId, toNodeId)}
           onConnectionCreate={(input) => addConnectedNode(input)}
           onConnectionDelete={(connectionId) => deleteConnection(connectionId)}
-          onTextNodeEnrich={(nodeId) => enrichCanvasTextNode(nodeId)}
+          onTextNodeEnrich={(nodeId) => enrichTextNode(nodeId)}
           onTextNodeGenerate={(nodeId) => generateFromTextNode(nodeId)}
           onGenerateNodeRun={(nodeId) => generateCanvasNode(nodeId)}
           generationPreviews={generationPreviews}
           promptEnriching={promptEnriching}
+          promptEnrichingNodeId={promptEnrichingNodeId}
           emptyTitle="从这里开始生图"
           emptyDescription="先添加文本或图片，再放入生成节点；连接后点击生成节点运行。"
         />
@@ -176,14 +201,27 @@ export function CanvasWorkspace() {
         />
       </div>
       <CanvasAssistantPanel
+        project={activeProject}
         nodes={activeProject?.nodes || []}
         connections={activeProject?.connections || []}
+        messages={assistantMessages}
+        hasMoreMessages={assistantMessagesHasMore}
+        loadingMessages={assistantMessagesLoading}
         disabled={!activeProject || loading}
+        agentAvailable={Boolean(settings?.selectedAgentProfileId)}
+        getProject={() => useCanvasStore.getState().activeProject}
         onCreateNode={(input) => createNode(input)}
+        onCreateGenerateNodeFromText={(nodeId) => createGenerateNodeFromText(nodeId)}
         onAddConnection={(fromNodeId, toNodeId) => addConnection(fromNodeId, toNodeId)}
         onUpdateNodeContent={(nodeId, content) => updateNodeContent(nodeId, content)}
+        onEnrichTextNode={(nodeId) => enrichTextNode(nodeId)}
+        onTextNodeGenerate={(nodeId) => generateFromTextNode(nodeId)}
         onGenerateNodeRun={(nodeId) => generateCanvasNode(nodeId)}
         onRunWorkflow={() => runCanvasWorkflow()}
+        onAppendMessages={(messages) => appendAssistantMessages(messages)}
+        onClearMessages={() => clearAssistantMessages()}
+        onLoadMoreMessages={() => loadMoreAssistantMessages()}
+        onFocusNode={(nodeId, options) => viewportRef.current?.focusNode(nodeId, options)}
         onNotify={notify}
       />
       <input

@@ -1,4 +1,5 @@
 import {
+  buildChatCompletionsEndpoint,
   buildImageEditEndpoint,
   buildImageEndpoint,
   buildResponsesEndpoint,
@@ -13,7 +14,7 @@ import {
   fetchTextStreamThroughPlatform
 } from '../lib/platform'
 import type { ImageApiData, ImageGenerationCallLog } from '../shared/types'
-import type { ImageGenerationRequest, ProviderAdapter, ProviderRuntimeProfile } from './types'
+import type { CanvasAgentChatMessage, CanvasAgentToolCall, CanvasAgentTurnRequest, CanvasAgentTurnResponse, ImageGenerationRequest, ProviderAdapter, ProviderRuntimeProfile } from './types'
 
 type ImageApiResponse = {
   data?: ImageApiData[]
@@ -56,13 +57,36 @@ type ResponsesImageStreamResult = {
   eventCount: number
 }
 
+type ChatCompletionsPayload = {
+  choices?: Array<{
+    message?: {
+      content?: ChatCompletionContent
+      tool_calls?: ChatCompletionToolCallPayload[]
+    }
+  }>
+  error?: ProviderPayloadError | string
+  error_code?: string
+  message?: string
+}
+
+type ChatCompletionContent = string | Array<{ text?: string; type?: string }> | null
+
+type ChatCompletionToolCallPayload = {
+  id?: string
+  type?: string
+  function?: {
+    name?: string
+    arguments?: string | Record<string, unknown>
+  }
+}
+
 const RESPONSES_IMAGE_TEST_TIMEOUT_MS = 20000
 const RESPONSES_IMAGE_GENERATION_TIMEOUT_BUFFER_MS = 5000
 
 export const openAiCompatibleAdapter: ProviderAdapter = {
   type: 'openai-compatible',
   label: 'OpenAI 兼容接口',
-  capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test', 'streaming', 'input-fidelity'],
+  capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'canvas-agent', 'native-tool-calling', 'connection-test', 'streaming', 'input-fidelity'],
   async testConnection(profile, signal) {
     const startedAt = Date.now()
     const endpoint = buildResponsesEndpoint(profile.baseUrl)
@@ -210,6 +234,9 @@ export const openAiCompatibleAdapter: ProviderAdapter = {
         .join('\n'),
       signal
     )
+  },
+  async runCanvasAgentTurn(profile, request) {
+    return requestCanvasAgentTurn(profile, request)
   }
 }
 
@@ -450,6 +477,117 @@ async function requestPrompt(profile: ProviderRuntimeProfile, instruction: strin
   const prompt = sanitizePromptText(extractResponseText(payload))
   if (!prompt) throw new Error('提示词助手没有返回内容。')
   return prompt
+}
+
+async function requestCanvasAgentTurn(profile: ProviderRuntimeProfile, request: CanvasAgentTurnRequest): Promise<CanvasAgentTurnResponse> {
+  if (!profile.apiKey) throw new Error('API Key 尚未配置。')
+  const endpoint = buildChatCompletionsEndpoint(profile.baseUrl)
+  const body = {
+    model: profile.defaultAgentModel || profile.defaultPromptModel,
+    messages: request.messages.map(toChatCompletionMessage),
+    tools: request.tools,
+    tool_choice: 'auto',
+    temperature: 0.2
+  }
+  const response = await fetchJsonThroughPlatform(endpoint, {
+    method: 'POST',
+    headers: buildHeaders(profile.apiKey),
+    signal: request.signal,
+    body: JSON.stringify(body)
+  })
+  const text = await response.text()
+  const payload = parseChatCompletionsPayload(text)
+  if (!response.ok) {
+    throw new ProviderHttpError(getProviderErrorMessage(payload, `Canvas Agent 请求失败，HTTP 状态码 ${response.status}。`), {
+      endpoint,
+      status: response.status,
+      statusText: response.statusText,
+      responseBody: text,
+      responseError: payload.error
+    })
+  }
+  const message = payload.choices?.[0]?.message
+  return {
+    content: extractChatCompletionContent(message?.content),
+    toolCalls: extractChatCompletionToolCalls(message?.tool_calls),
+    raw: payload
+  }
+}
+
+function toChatCompletionMessage(message: CanvasAgentChatMessage): Record<string, unknown> {
+  if (message.role === 'assistant') {
+    return {
+      role: 'assistant',
+      content: message.content || null,
+      ...(message.tool_calls?.length ? {
+        tool_calls: message.tool_calls.map((toolCall) => ({
+          id: toolCall.id,
+          type: 'function',
+          function: {
+            name: toolCall.name,
+            arguments: JSON.stringify(toolCall.arguments || {})
+          }
+        }))
+      } : {})
+    }
+  }
+  if (message.role === 'tool') {
+    return {
+      role: 'tool',
+      tool_call_id: message.tool_call_id,
+      name: message.name,
+      content: message.content
+    }
+  }
+  return {
+    role: message.role,
+    content: message.content
+  }
+}
+
+function parseChatCompletionsPayload(text: string): ChatCompletionsPayload {
+  if (!text.trim()) return {}
+  try {
+    return JSON.parse(text) as ChatCompletionsPayload
+  } catch {
+    return {}
+  }
+}
+
+function extractChatCompletionContent(content: ChatCompletionContent | undefined): string {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content)) return ''
+  return content
+    .map((item) => typeof item?.text === 'string' ? item.text : '')
+    .filter(Boolean)
+    .join('\n')
+}
+
+function extractChatCompletionToolCalls(toolCalls: ChatCompletionToolCallPayload[] | undefined): CanvasAgentToolCall[] {
+  if (!Array.isArray(toolCalls)) return []
+  return toolCalls
+    .map((toolCall, index) => {
+      if (!isRecord(toolCall) || !isRecord(toolCall.function)) return null
+      const name = typeof toolCall.function.name === 'string' ? toolCall.function.name.trim() : ''
+      if (!name) return null
+      return {
+        id: typeof toolCall.id === 'string' && toolCall.id.trim() ? toolCall.id : `tool-call-${index + 1}`,
+        name,
+        arguments: parseToolCallArguments(toolCall.function.arguments)
+      }
+    })
+    .filter((toolCall): toolCall is CanvasAgentToolCall => Boolean(toolCall))
+}
+
+function parseToolCallArguments(value: unknown): Record<string, unknown> {
+  if (isRecord(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value) as unknown
+    return isRecord(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
 }
 
 function buildHeaders(apiKey: string): Record<string, string> {
@@ -745,7 +883,7 @@ function extractResponseText(payload: ResponsesApiPayload): string {
   return payload.choices?.find((choice) => typeof choice.message?.content === 'string')?.message?.content || ''
 }
 
-function getProviderErrorMessage(payload: ImageApiResponse | ResponsesApiPayload, fallback: string): string {
+function getProviderErrorMessage(payload: ImageApiResponse | ResponsesApiPayload | ChatCompletionsPayload, fallback: string): string {
   const error = isRecord(payload.error) ? payload.error : undefined
   const message = (typeof payload.error === 'string' ? payload.error : error?.message) || payload.message || fallback
   const code = payload.error_code || (typeof error?.code === 'string' ? error.code : undefined) || (typeof error?.type === 'string' ? error.type : undefined)

@@ -25,6 +25,38 @@ export type ImageGenerationRequest = {
   }) => void
 }
 
+export type CanvasAgentToolDefinition = {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }
+}
+
+export type CanvasAgentToolCall = {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export type CanvasAgentChatMessage =
+  | { role: 'system' | 'user'; content: string }
+  | { role: 'assistant'; content: string; tool_calls?: CanvasAgentToolCall[] }
+  | { role: 'tool'; content: string; tool_call_id: string; name: string }
+
+export type CanvasAgentTurnRequest = {
+  messages: CanvasAgentChatMessage[]
+  tools: CanvasAgentToolDefinition[]
+  signal?: AbortSignal
+}
+
+export type CanvasAgentTurnResponse = {
+  content: string
+  toolCalls: CanvasAgentToolCall[]
+  raw?: unknown
+}
+
 export interface ProviderAdapter {
   type: ProviderType
   label: string
@@ -33,4 +65,8 @@ export interface ProviderAdapter {
   generateImage(profile: ProviderRuntimeProfile, request: ImageGenerationRequest): Promise<ImageApiData[]>
   inspirePrompt(profile: ProviderRuntimeProfile, input?: PromptAssistInput, signal?: AbortSignal): Promise<string>
   enrichPrompt(profile: ProviderRuntimeProfile, input: PromptAssistInput & { prompt: string }, signal?: AbortSignal): Promise<string>
+  runCanvasAgentTurn?(
+    profile: ProviderRuntimeProfile,
+    request: CanvasAgentTurnRequest
+  ): Promise<CanvasAgentTurnResponse>
 }

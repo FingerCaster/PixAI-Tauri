@@ -1557,6 +1557,10 @@ describe('useAppStore', () => {
     const resultNodes = activeProject.nodes.filter((node) => node.type === 'result')
     expect(resultNodes).toHaveLength(6)
     expect(resultNodes.filter((node) => node.metadata.status === 'succeeded')).toHaveLength(5)
+    const batchRunIds = new Set(resultNodes.map((node) => node.metadata.batchRunId))
+    expect(batchRunIds.size).toBe(1)
+    const batchRunId = resultNodes[0].metadata.batchRunId
+    expect(batchRunId).toMatch(/^canvas-batch-run_/)
     const failedNode = resultNodes.find((node) => node.metadata.status === 'failed')
     expect(failedNode).toMatchObject({
       type: 'result',
@@ -1568,6 +1572,7 @@ describe('useAppStore', () => {
         runId: secondRun.id,
         requestIndex: 1,
         batchRootId: generateNode.id,
+        batchRunId,
         batchIndex: 1,
         promptVariant: 'variant two'
       }
@@ -1575,10 +1580,96 @@ describe('useAppStore', () => {
     expect(activeProject.nodes.find((node) => node.id === generateNode.id)).toMatchObject({
       metadata: {
         status: 'failed',
+        runId: thirdRun.id,
+        historyItemId: thirdItems[1].id,
+        requestIndex: 1,
+        batchRunId,
         errorMessage: '批量生成部分失败：5 成功，1 失败'
       }
     })
     expect(notify).toHaveBeenLastCalledWith('Canvas 批量生成完成：5 成功，1 失败')
+  })
+
+  it('marks a successful canvas batch run complete with one batch id', async () => {
+    await useAppStore.getState().load()
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      ratio: '1:1' as const,
+      size: '1024x1024',
+      quality: 'high' as const
+    }
+    const batchNode = canvasNode({
+      id: 'node-batch-success-all',
+      type: 'batch',
+      content: ['variant one', 'variant two', 'variant three'].join('\n')
+    })
+    const generateNode = canvasNode({ id: 'node-batch-success-generate', type: 'generate', content: 'shared base prompt' })
+    const project = canvasProjectForAppStore(conversation.id, [batchNode, generateNode], [
+      { id: 'connection-batch-success-all', fromNodeId: batchNode.id, toNodeId: generateNode.id, kind: 'batch' }
+    ])
+    const items = [1, 2, 3].map((index) => succeededHistoryItem({
+      id: `history-batch-success-${index}`,
+      conversationId: conversation.id,
+      runId: `run-batch-success-${index}`,
+      prompt: `shared base prompt\n\nvariant ${['one', 'two', 'three'][index - 1]}`,
+      requestIndex: 0,
+      dataUrl: `data:image/png;base64,YmF0Y2gtc3VjY2Vzcy0${index}=`,
+      fileSizeBytes: 8
+    }))
+    const runs = items.map((item, index) => generationRunForAppStore({
+      id: `run-batch-success-${index + 1}`,
+      conversationId: conversation.id,
+      prompt: item.prompt,
+      items: [item]
+    }))
+    const notify = vi.fn()
+    useAppStore.setState({
+      conversations: [conversation],
+      activeConversationId: conversation.id,
+      history: [],
+      runsByConversation: {},
+      notify
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    vi.spyOn(pixaiApi.canvas, 'update').mockImplementation(async (_id, input) => ({
+      ...useCanvasStore.getState().activeProject!,
+      ...input,
+      updatedAt: '2026-06-06T01:25:00.000Z'
+    }))
+    const generateSpy = vi.spyOn(pixaiApi.image, 'generate')
+      .mockResolvedValueOnce({ run: runs[0], items: [items[0]] })
+      .mockResolvedValueOnce({ run: runs[1], items: [items[1]] })
+      .mockResolvedValueOnce({ run: runs[2], items: [items[2]] })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([runs[2], runs[1], runs[0]])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([items[2], items[1], items[0]])
+
+    await useAppStore.getState().generateCanvasNode(generateNode.id)
+
+    expect(generateSpy).toHaveBeenCalledTimes(3)
+    const activeProject = useCanvasStore.getState().activeProject!
+    const resultNodes = activeProject.nodes.filter((node) => node.type === 'result')
+    expect(resultNodes).toHaveLength(3)
+    const batchRunIds = new Set(resultNodes.map((node) => node.metadata.batchRunId))
+    expect(batchRunIds.size).toBe(1)
+    const batchRunId = resultNodes[0].metadata.batchRunId
+    expect(batchRunId).toMatch(/^canvas-batch-run_/)
+    expect(resultNodes.map((node) => node.title)).toEqual(['批量 1 · #1', '批量 2 · #1', '批量 3 · #1'])
+    expect(resultNodes.map((node) => node.metadata.promptVariant)).toEqual(['variant one', 'variant two', 'variant three'])
+    expect(activeProject.nodes.find((node) => node.id === generateNode.id)).toMatchObject({
+      metadata: {
+        status: 'succeeded',
+        runId: runs[2].id,
+        historyItemId: items[2].id,
+        requestIndex: 0,
+        batchRunId,
+        errorMessage: ''
+      }
+    })
+    expect(notify).toHaveBeenLastCalledWith('Canvas 批量生成完成：3 成功，0 失败')
   })
 
   it('rejects canvas workflow runs that exceed the request budget before generating', async () => {

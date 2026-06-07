@@ -9,7 +9,7 @@ import {
   writeJsonState
 } from '../lib/platform'
 import { nowIso } from '../lib/time'
-import { DEFAULT_MODEL, DEFAULT_PROMPT_MODEL, trimBaseUrl } from '../shared/image-options'
+import { DEFAULT_AGENT_MODEL, DEFAULT_MODEL, DEFAULT_PROMPT_MODEL, trimBaseUrl } from '../shared/image-options'
 import type { ConnectionTestResult, ImageGenerationEndpoint, ProviderProfile, ProviderProfileInput, ProviderSettings, ProviderSettingsUpdate, ProviderUsage } from '../shared/types'
 
 const STATE_NAME = 'provider-settings'
@@ -75,8 +75,9 @@ export class ProviderSettingsStore {
       baseUrl: trimBaseUrl(input.baseUrl || existing?.baseUrl || 'https://api.openai.com'),
       defaultImageModel: input.defaultImageModel?.trim() || existing?.defaultImageModel || DEFAULT_MODEL,
       defaultPromptModel: normalizePromptModel(input.defaultPromptModel?.trim() || existing?.defaultPromptModel),
+      defaultAgentModel: normalizeAgentModel(input.defaultAgentModel?.trim() || existing?.defaultAgentModel),
       imageGenerationEndpoint: normalizeImageGenerationEndpoint(input.imageGenerationEndpoint || existing?.imageGenerationEndpoint),
-      enabledUsages: input.enabledUsages || existing?.enabledUsages || ['image', 'prompt'],
+      enabledUsages: input.enabledUsages || existing?.enabledUsages || ['image', 'prompt', 'agent'],
       capabilities: input.capabilities || existing?.capabilities || adapter.capabilities,
       apiKeyStored,
       insecureStorage,
@@ -91,7 +92,8 @@ export class ProviderSettingsStore {
     const next = normalizeSettings({
       profiles,
       selectedImageProfileId: current.selectedImageProfileId || profile.id,
-      selectedPromptProfileId: current.selectedPromptProfileId || profile.id
+      selectedPromptProfileId: current.selectedPromptProfileId || profile.id,
+      selectedAgentProfileId: current.selectedAgentProfileId || profile.id
     })
     await this.save(next)
     return next
@@ -104,7 +106,8 @@ export class ProviderSettingsStore {
     const next = normalizeSettings({
       profiles,
       selectedImageProfileId: current.selectedImageProfileId === id ? '' : current.selectedImageProfileId,
-      selectedPromptProfileId: current.selectedPromptProfileId === id ? '' : current.selectedPromptProfileId
+      selectedPromptProfileId: current.selectedPromptProfileId === id ? '' : current.selectedPromptProfileId,
+      selectedAgentProfileId: current.selectedAgentProfileId === id ? '' : current.selectedAgentProfileId
     })
     await this.save(next)
     return next
@@ -152,7 +155,8 @@ function createDefaultSettings(): ProviderSettings {
   return {
     profiles: [],
     selectedImageProfileId: '',
-    selectedPromptProfileId: ''
+    selectedPromptProfileId: '',
+    selectedAgentProfileId: ''
   }
 }
 
@@ -161,15 +165,20 @@ function normalizeSettings(settings: ProviderSettings, fallback?: ProviderSettin
   return {
     profiles,
     selectedImageProfileId: selectProfileForUsage(profiles, settings.selectedImageProfileId, 'image', fallback?.selectedImageProfileId),
-    selectedPromptProfileId: selectProfileForUsage(profiles, settings.selectedPromptProfileId, 'prompt', fallback?.selectedPromptProfileId)
+    selectedPromptProfileId: selectProfileForUsage(profiles, settings.selectedPromptProfileId, 'prompt', fallback?.selectedPromptProfileId),
+    selectedAgentProfileId: selectProfileForUsage(profiles, settings.selectedAgentProfileId, 'agent', fallback?.selectedAgentProfileId)
   }
 }
 
 function normalizeProfile(profile: ProviderProfile): ProviderProfile {
+  const adapter = getAdapter(profile.type || 'openai-compatible')
   return {
     ...profile,
     imageGenerationEndpoint: normalizeImageGenerationEndpoint(profile.imageGenerationEndpoint),
-    defaultPromptModel: normalizePromptModel(profile.defaultPromptModel)
+    defaultPromptModel: normalizePromptModel(profile.defaultPromptModel),
+    defaultAgentModel: normalizeAgentModel(profile.defaultAgentModel),
+    enabledUsages: normalizeEnabledUsages(profile.enabledUsages),
+    capabilities: uniqueStrings(profile.capabilities || adapter.capabilities)
   }
 }
 
@@ -183,8 +192,30 @@ function normalizePromptModel(model?: string): string {
   return candidate
 }
 
+function normalizeAgentModel(model?: string): string {
+  const candidate = model?.trim()
+  if (!candidate || LEGACY_DEFAULT_PROMPT_MODELS.has(candidate)) return DEFAULT_AGENT_MODEL
+  return candidate
+}
+
+function normalizeEnabledUsages(usages?: ProviderUsage[]): ProviderUsage[] {
+  const validUsages: ProviderUsage[] = ['image', 'prompt', 'agent']
+  const normalized = uniqueStrings((usages || ['image', 'prompt']).filter((usage): usage is ProviderUsage => validUsages.includes(usage)))
+  return normalized.length > 0 ? normalized : ['image', 'prompt']
+}
+
 function selectProfileForUsage(profiles: ProviderProfile[], selectedId: string | undefined, usage: ProviderUsage, fallbackId?: string): string {
-  const selected = profiles.find((profile) => profile.id === selectedId && profile.enabledUsages.includes(usage))
-  const fallback = profiles.find((profile) => profile.id === fallbackId && profile.enabledUsages.includes(usage))
-  return selected?.id || fallback?.id || profiles.find((profile) => profile.enabledUsages.includes(usage))?.id || ''
+  const selected = profiles.find((profile) => profile.id === selectedId && isProfileCompatibleWithUsage(profile, usage))
+  const fallback = profiles.find((profile) => profile.id === fallbackId && isProfileCompatibleWithUsage(profile, usage))
+  return selected?.id || fallback?.id || profiles.find((profile) => isProfileCompatibleWithUsage(profile, usage))?.id || ''
+}
+
+function isProfileCompatibleWithUsage(profile: ProviderProfile, usage: ProviderUsage): boolean {
+  if (!profile.enabledUsages.includes(usage)) return false
+  if (usage !== 'agent') return true
+  return profile.capabilities.includes('canvas-agent') && profile.capabilities.includes('native-tool-calling')
+}
+
+function uniqueStrings<T extends string>(values: T[]): T[] {
+  return Array.from(new Set(values))
 }

@@ -5,8 +5,8 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { GallerySelect } from '../../common/GallerySelect'
-import { DEFAULT_MODEL, DEFAULT_PROMPT_MODEL } from '../../../shared/image-options'
-import type { ImageGenerationEndpoint, ProviderProfile } from '../../../shared/types'
+import { DEFAULT_AGENT_MODEL, DEFAULT_MODEL, DEFAULT_PROMPT_MODEL } from '../../../shared/image-options'
+import type { ImageGenerationEndpoint, ProviderProfile, ProviderUsage } from '../../../shared/types'
 
 type ProviderProfileDialogProps = {
   mode: 'create' | 'edit'
@@ -34,7 +34,7 @@ export function ProviderProfileDialog({
   return (
     <Dialog open={Boolean(profileDraft)} onOpenChange={(open) => { if (!open) onClose() }}>
       {profileDraft ? (
-        <DialogContent className="provider-modal max-w-2xl" aria-label={mode === 'create' ? '新增供应商' : '编辑供应商'} aria-describedby={undefined}>
+        <DialogContent className="provider-modal max-w-3xl" aria-label={mode === 'create' ? '新增供应商' : '编辑供应商'} aria-describedby={undefined}>
         <DialogHeader className="modal-head">
           <DialogTitle>{mode === 'create' ? '新增供应商' : '编辑供应商'}</DialogTitle>
         </DialogHeader>
@@ -42,33 +42,26 @@ export function ProviderProfileDialog({
           <div className="field grid gap-1.5">
             <span className="text-xs text-muted-foreground">用途</span>
             <div className="segmented provider-usage grid grid-cols-3 gap-1 rounded-xl border border-border bg-muted p-1">
-              <Button
-                className={cn('h-8', hasSameUsages(profileDraft, ['image']) ? 'on bg-background shadow-sm' : '')}
-                variant={hasSameUsages(profileDraft, ['image']) ? 'secondary' : 'ghost'}
-                size="sm"
-                type="button"
-                onClick={() => onProfileChange({ ...profileDraft, enabledUsages: ['image'] })}
-              >
-                生图
-              </Button>
-              <Button
-                className={cn('h-8', hasSameUsages(profileDraft, ['prompt']) ? 'on bg-background shadow-sm' : '')}
-                variant={hasSameUsages(profileDraft, ['prompt']) ? 'secondary' : 'ghost'}
-                size="sm"
-                type="button"
-                onClick={() => onProfileChange({ ...profileDraft, enabledUsages: ['prompt'] })}
-              >
-                提示词
-              </Button>
-              <Button
-                className={cn('h-8', hasSameUsages(profileDraft, ['image', 'prompt']) ? 'on bg-background shadow-sm' : '')}
-                variant={hasSameUsages(profileDraft, ['image', 'prompt']) ? 'secondary' : 'ghost'}
-                size="sm"
-                type="button"
-                onClick={() => onProfileChange({ ...profileDraft, enabledUsages: ['image', 'prompt'] })}
-              >
-                二者都可
-              </Button>
+              {([
+                ['image', '生图'],
+                ['prompt', '提示词'],
+                ['agent', 'Canvas Agent']
+              ] as Array<[ProviderUsage, string]>).map(([usage, label]) => {
+                const enabled = profileDraft.enabledUsages.includes(usage)
+                return (
+                  <Button
+                    key={usage}
+                    className={cn('h-8', enabled ? 'on bg-background shadow-sm' : '')}
+                    variant={enabled ? 'secondary' : 'ghost'}
+                    size="sm"
+                    type="button"
+                    aria-pressed={enabled}
+                    onClick={() => onProfileChange({ ...profileDraft, enabledUsages: toggleUsage(profileDraft.enabledUsages, usage) })}
+                  >
+                    {label}
+                  </Button>
+                )
+              })}
             </div>
           </div>
           <Label className="grid gap-1.5 text-xs text-muted-foreground">
@@ -123,6 +116,15 @@ export function ProviderProfileDialog({
               />
             </Label>
           ) : null}
+          {profileDraft.enabledUsages.includes('agent') ? (
+            <Label className="grid gap-1.5 text-xs text-muted-foreground">
+              Canvas Agent 模型
+              <Input
+                value={profileDraft.defaultAgentModel}
+                onChange={(event) => onProfileChange({ ...profileDraft, defaultAgentModel: event.target.value })}
+              />
+            </Label>
+          ) : null}
         </div>
         <div className="button-row modal-actions flex justify-end gap-2">
           {mode === 'edit' && profileCount > 0 ? (
@@ -155,9 +157,10 @@ export function createProviderProfileDraft(): ProviderProfile {
     baseUrl: 'http://127.0.0.1:37123',
     defaultImageModel: DEFAULT_MODEL,
     defaultPromptModel: DEFAULT_PROMPT_MODEL,
+    defaultAgentModel: DEFAULT_AGENT_MODEL,
     imageGenerationEndpoint: 'images-api',
-    enabledUsages: ['image', 'prompt'],
-    capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test', 'streaming', 'input-fidelity'],
+    enabledUsages: ['image', 'prompt', 'agent'],
+    capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'canvas-agent', 'native-tool-calling', 'connection-test', 'streaming', 'input-fidelity'],
     apiKeyStored: false,
     insecureStorage: false,
     createdAt: now,
@@ -165,6 +168,9 @@ export function createProviderProfileDraft(): ProviderProfile {
   }
 }
 
-function hasSameUsages(profile: ProviderProfile, usages: Array<'image' | 'prompt'>): boolean {
-  return profile.enabledUsages.length === usages.length && usages.every((usage) => profile.enabledUsages.includes(usage))
+function toggleUsage(usages: ProviderUsage[], usage: ProviderUsage): ProviderUsage[] {
+  const next = usages.includes(usage)
+    ? usages.filter((item) => item !== usage)
+    : [...usages, usage]
+  return next.length > 0 ? next : [usage]
 }

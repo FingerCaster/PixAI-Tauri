@@ -1,18 +1,24 @@
 import type { CanvasNodeType } from '../shared/types'
 
 export type CanvasAssistantNodeRef = {
+  id?: string
+  name?: string
   nodeType?: CanvasNodeType
   ordinal?: number
   latest?: boolean
 }
 
-export type CanvasAssistantCreateNodeAction = { type: 'create-node'; nodeType: CanvasNodeType; content?: string }
+export type CanvasAssistantCreateNodeAction = { type: 'create-node'; nodeType: CanvasNodeType; content?: string; title?: string }
+export type CanvasAssistantEnrichPromptAction = { type: 'enrich-prompt'; targetRef: CanvasAssistantNodeRef }
+export type CanvasAssistantGenerateFromTextAction = { type: 'generate-from-text'; targetRef: CanvasAssistantNodeRef }
 
 export type CanvasAssistantAction =
   | CanvasAssistantCreateNodeAction
-  | { type: 'create-chain'; prompt: string; run?: boolean }
+  | { type: 'create-chain'; prompt: string; run?: boolean; textTitle?: string; generateTitle?: string }
   | { type: 'connect'; fromRef: CanvasAssistantNodeRef; toRef: CanvasAssistantNodeRef }
   | { type: 'set-prompt'; targetRef: CanvasAssistantNodeRef; content: string }
+  | CanvasAssistantEnrichPromptAction
+  | CanvasAssistantGenerateFromTextAction
   | { type: 'run-node'; targetRef?: CanvasAssistantNodeRef }
   | { type: 'run-workflow' }
 
@@ -38,16 +44,30 @@ export function parseCanvasAssistantCommand(input: string): CanvasAssistantPlan 
     return plan([{ type: 'run-workflow' }], '准备运行整个 Canvas workflow。')
   }
 
-  const chainPrompt = extractCreateTextPrompt(message)
-  if (chainPrompt && wantsGenerate(message)) {
+  const chainText = extractCreateTextSpec(message)
+  if (chainText.content && wantsGenerate(message)) {
     return plan([
-      { type: 'create-chain', prompt: chainPrompt, run: wantsRun(message) }
+      {
+        type: 'create-chain',
+        prompt: chainText.content,
+        run: wantsRun(message),
+        ...(chainText.title ? { textTitle: chainText.title } : {})
+      }
     ], wantsRun(message) ? '准备创建文本到生成节点的链路，并运行生成。' : '准备创建文本到生成节点的链路。')
   }
 
   const setPrompt = parseSetPromptCommand(message)
   if (setPrompt) {
     return plan([setPrompt], '准备修改节点提示词。')
+  }
+
+  const enrichPrompt = parseEnrichPromptCommand(message)
+  if (enrichPrompt) {
+    const actions: CanvasAssistantAction[] = [enrichPrompt]
+    if (wantsGenerate(message)) {
+      actions.push({ type: 'generate-from-text', targetRef: enrichPrompt.targetRef })
+    }
+    return plan(actions, actions.length > 1 ? '准备丰富节点提示词，并从该文本节点生成图片。' : '准备丰富节点提示词。')
   }
 
   const connect = parseConnectCommand(message)
@@ -72,13 +92,14 @@ function parseCreateNodeCommand(message: string): CanvasAssistantCreateNodeActio
   if (!/(创建|新增|添加|加一个|加个)/.test(message)) return null
   const nodeType = parseNodeType(message)
   if (!nodeType) return null
-  const content = nodeType === 'text' || nodeType === 'generate' || nodeType === 'batch'
-    ? extractCreateNodeContent(message, nodeType)
-    : ''
+  const spec = nodeType === 'text' || nodeType === 'generate' || nodeType === 'batch'
+    ? extractCreateNodeSpec(message, nodeType)
+    : { content: '', title: extractTitleMention(message) }
   return {
     type: 'create-node',
     nodeType,
-    ...(content ? { content } : {})
+    ...(spec.content ? { content: spec.content } : {}),
+    ...(spec.title ? { title: spec.title } : {})
   }
 }
 
@@ -92,12 +113,30 @@ function parseConnectCommand(message: string): CanvasAssistantAction | null {
 }
 
 function parseSetPromptCommand(message: string): CanvasAssistantAction | null {
-  const match = /(?:修改|设置|更新|改)\s*(.+?)\s*(?:提示词|prompt|内容)?\s*(?:为|成|:|：)\s*(?:：|:)?\s*(.+)$/iu.exec(message)
+  const match = /(?:修改|设置|更新|改)\s*(.+?)\s*(?:为|成|:|：)\s*(?:：|:)?\s*(.+)$/iu.exec(message)
   if (!match) return null
   const targetRef = parseNodeRef(match[1])
   const content = cleanupContent(match[2])
   if (!targetRef || !content) return null
   return { type: 'set-prompt', targetRef, content }
+}
+
+function parseEnrichPromptCommand(message: string): CanvasAssistantEnrichPromptAction | null {
+  if (!/(丰富|优化|扩写|润色)/.test(message)) return null
+
+  const targetFirst = /^(.+?)\s*(?:丰富|优化|扩写|润色)\s*(?:(?:这个|当前)\s*)?(?:节点)?\s*(?:提示词|文本|prompt)?(?:\s*(?:，|,)?\s*(?:然后|并且|并|再).*)?$/iu.exec(message)
+  if (targetFirst) {
+    const targetRef = parseNodeRef(targetFirst[1])
+    if (targetRef) return { type: 'enrich-prompt', targetRef }
+  }
+
+  const enrichFirst = /^(?:丰富|优化|扩写|润色)\s*(.+)$/iu.exec(message)
+  if (enrichFirst) {
+    const targetRef = parseNodeRef(cleanupEnrichTarget(enrichFirst[1]))
+    if (targetRef) return { type: 'enrich-prompt', targetRef }
+  }
+
+  return null
 }
 
 function parseRunNodeCommand(message: string): CanvasAssistantAction | null {
@@ -108,11 +147,16 @@ function parseRunNodeCommand(message: string): CanvasAssistantAction | null {
 }
 
 function parseNodeRef(input: string): CanvasAssistantNodeRef | null {
+  let name = parseAtMention(input)
   const nodeType = parseNodeType(input)
   const latest = /最新|最后|刚才|最近/.test(input)
   const ordinal = parseOrdinal(input)
-  if (!nodeType && !latest && ordinal == null) return null
+  if (name && nodeType && ordinal != null && normalizeNodeRefName(name) === normalizeNodeRefName(nodeTypeLabel(nodeType))) {
+    name = null
+  }
+  if (!name && !nodeType && !latest && ordinal == null) return null
   return {
+    ...(name ? { name } : {}),
     ...(nodeType ? { nodeType } : {}),
     ...(latest ? { latest: true } : {}),
     ...(ordinal != null ? { ordinal } : {})
@@ -120,8 +164,8 @@ function parseNodeRef(input: string): CanvasAssistantNodeRef | null {
 }
 
 function parseNodeType(input: string): CanvasNodeType | null {
-  if (/文本|text/i.test(input)) return 'text'
   if (/生成|generate/i.test(input)) return 'generate'
+  if (/提示词|prompt|文本|text/i.test(input)) return 'text'
   if (/配置|参数|config/i.test(input)) return 'config'
   if (/批量|batch/i.test(input)) return 'batch'
   if (/结果|result/i.test(input)) return 'result'
@@ -139,13 +183,13 @@ function parseOrdinal(input: string): number | null {
   return chinese ? chineseMap[chinese[1]] || null : null
 }
 
-function extractCreateTextPrompt(message: string): string {
+function extractCreateTextSpec(message: string): { content: string; title: string } {
   const match = /(?:创建|新增|添加|加一个|加个)\s*(?:文本节点|文本|text|提示词节点)?\s*(?:：|:|为|内容是|内容为)?\s*(.+)$/iu.exec(message)
-  if (!match) return ''
-  return cleanupContent(match[1].replace(/(?:，|,)?\s*(?:然后|并且|并)\s*(?:生成|创建生成|运行生成|生成并运行).*$/u, ''))
+  if (!match) return { content: '', title: '' }
+  return extractTitledContent(match[1].replace(/(?:，|,)?\s*(?:然后|并且|并)\s*(?:生成|创建生成|运行生成|生成并运行).*$/u, ''))
 }
 
-function extractCreateNodeContent(message: string, nodeType: CanvasNodeType): string {
+function extractCreateNodeSpec(message: string, nodeType: CanvasNodeType): { content: string; title: string } {
   const typePattern = nodeType === 'text'
     ? '(?:文本节点|文本|text|提示词节点)'
     : nodeType === 'generate'
@@ -154,8 +198,8 @@ function extractCreateNodeContent(message: string, nodeType: CanvasNodeType): st
         ? '(?:批量节点|批量|batch)'
         : ''
   const match = new RegExp(`(?:创建|新增|添加|加一个|加个)\\s*${typePattern}\\s*(?:：|:|为|内容是|内容为)?\\s*(.+)$`, 'iu').exec(message)
-  if (!match) return ''
-  return cleanupContent(match[1].replace(/(?:，|,)?\s*(?:然后|并且|并)\s*(?:生成|创建生成|运行生成|生成并运行).*$/u, ''))
+  if (!match) return { content: '', title: extractTitleMention(message) }
+  return extractTitledContent(match[1].replace(/(?:，|,)?\s*(?:然后|并且|并)\s*(?:生成|创建生成|运行生成|生成并运行).*$/u, ''))
 }
 
 function wantsGenerate(message: string): boolean {
@@ -172,6 +216,37 @@ function isRunWorkflowCommand(message: string): boolean {
 
 function cleanupContent(value: string): string {
   return value.trim().replace(/^[："':“”]+|["'“”]+$/g, '').trim()
+}
+
+function cleanupEnrichTarget(value: string): string {
+  return cleanupContent(value)
+    .replace(/\s*(?:，|,)?\s*(?:然后|并且|并|再).+$/u, '')
+    .replace(/\s*(?:(?:这个|当前)\s*)?(?:节点)?\s*(?:提示词|文本|prompt)\s*$/iu, '')
+    .replace(/\s*(?:(?:这个|当前)\s*)节点\s*$/iu, '')
+    .trim()
+}
+
+function extractTitledContent(value: string): { content: string; title: string } {
+  const title = parseAtMention(value)
+  const content = cleanupContent(title ? value.replace(new RegExp(`@${escapeRegExp(title)}\\s*`, 'u'), '') : value)
+  return { content, title: title || '' }
+}
+
+function extractTitleMention(value: string): string {
+  return parseAtMention(value) || ''
+}
+
+function parseAtMention(value: string): string | null {
+  const match = /@([^\s@，,。；;：:、]+)/u.exec(value)
+  return match ? cleanupContent(match[1]) : null
+}
+
+function normalizeNodeRefName(value: string): string {
+  return value.trim().toLocaleLowerCase()
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function normalizeCommand(input: string): string {

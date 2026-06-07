@@ -11,12 +11,14 @@ export type GenerationOrigin =
   | { kind: 'workspace' }
   | { kind: 'canvas'; canvasProjectId: string; canvasNodeId: string }
 export type ProviderType = 'openai-compatible'
-export type ProviderUsage = 'image' | 'prompt'
+export type ProviderUsage = 'image' | 'prompt' | 'agent'
 export type ImageGenerationEndpoint = 'images-api' | 'responses-api'
 export type AdapterCapability =
   | 'text-to-image'
   | 'image-to-image'
   | 'prompt-assist'
+  | 'canvas-agent'
+  | 'native-tool-calling'
   | 'connection-test'
   | 'streaming'
   | 'input-fidelity'
@@ -55,6 +57,7 @@ export type CanvasNodeMetadata = {
   runId?: string
   requestIndex?: number
   batchRootId?: string
+  batchRunId?: string
   batchIndex?: number
   promptVariant?: string
   errorMessage?: string
@@ -86,6 +89,24 @@ export type CanvasConnection = {
   kind: CanvasConnectionKind
 }
 
+export type CanvasAssistantMessage = {
+  id: string
+  role: 'assistant' | 'user'
+  content: string
+  createdAt?: string
+}
+
+export type CanvasAssistantSessionMessage = CanvasAssistantMessage & {
+  projectId: string
+  createdAt: string
+}
+
+export type CanvasAssistantSessionPage = {
+  messages: CanvasAssistantSessionMessage[]
+  total: number
+  hasMore: boolean
+}
+
 export type CanvasProject = {
   id: string
   title: string
@@ -93,6 +114,7 @@ export type CanvasProject = {
   schemaVersion: 1
   nodes: CanvasNodeData[]
   connections: CanvasConnection[]
+  assistantMessages?: CanvasAssistantMessage[]
   viewport: CanvasViewport
   createdAt: string
   updatedAt: string
@@ -106,7 +128,7 @@ export type CanvasProjectSummary = {
   nodeCount: number
 }
 
-export type CanvasProjectInput = Partial<Pick<CanvasProject, 'title' | 'viewport' | 'nodes' | 'connections'>> & {
+export type CanvasProjectInput = Partial<Pick<CanvasProject, 'title' | 'viewport' | 'nodes' | 'connections' | 'assistantMessages'>> & {
   conversationId?: string
 }
 
@@ -117,6 +139,7 @@ export type ProviderProfile = {
   baseUrl: string
   defaultImageModel: string
   defaultPromptModel: string
+  defaultAgentModel: string
   imageGenerationEndpoint: ImageGenerationEndpoint
   enabledUsages: ProviderUsage[]
   capabilities: AdapterCapability[]
@@ -136,6 +159,7 @@ export type ProviderProfileInput = Partial<
     | 'baseUrl'
     | 'defaultImageModel'
     | 'defaultPromptModel'
+    | 'defaultAgentModel'
     | 'imageGenerationEndpoint'
     | 'enabledUsages'
     | 'capabilities'
@@ -148,10 +172,11 @@ export type ProviderSettings = {
   profiles: ProviderProfile[]
   selectedImageProfileId: string
   selectedPromptProfileId: string
+  selectedAgentProfileId: string
 }
 
 export type ProviderSettingsUpdate = Partial<
-  Pick<ProviderSettings, 'selectedImageProfileId' | 'selectedPromptProfileId'>
+  Pick<ProviderSettings, 'selectedImageProfileId' | 'selectedPromptProfileId' | 'selectedAgentProfileId'>
 >
 
 export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'unsupported'

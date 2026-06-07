@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 import { Minus, Move, Plus, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DEFAULT_CANVAS_VIEWPORT, clampCanvasZoom, normalizeViewport } from '../../services/canvas-projects'
@@ -23,8 +23,13 @@ type CanvasViewportProps = {
   onGenerateNodeRun?: (nodeId: string) => void | Promise<void>
   generationPreviews?: GenerationPreviewState
   promptEnriching?: boolean
+  promptEnrichingNodeId?: string | null
   emptyTitle?: string
   emptyDescription?: string
+}
+
+export type CanvasViewportHandle = {
+  focusNode: (nodeId: string, options?: { highlight?: boolean }) => void
 }
 
 type CanvasConnectedNodeCreateInput = {
@@ -41,7 +46,7 @@ type DragState = {
 
 const noopAsync = () => undefined
 
-export function CanvasViewport({
+export const CanvasViewport = forwardRef<CanvasViewportHandle, CanvasViewportProps>(function CanvasViewport({
   viewport,
   nodes = [],
   connections = [],
@@ -59,10 +64,12 @@ export function CanvasViewport({
   onGenerateNodeRun = noopAsync,
   generationPreviews = {},
   promptEnriching = false,
+  promptEnrichingNodeId = null,
   emptyTitle = 'Canvas',
   emptyDescription
-}: CanvasViewportProps) {
+}, ref) {
   const [draftViewport, setDraftViewport] = useState(() => normalizeViewport(viewport))
+  const viewportRef = useRef<HTMLDivElement>(null)
   const latestViewportRef = useRef(draftViewport)
   const dragRef = useRef<DragState | null>(null)
   const nodeLayerRef = useRef<CanvasNodeLayerHandle | null>(null)
@@ -92,10 +99,19 @@ export function CanvasViewport({
     })
   }
 
+  useImperativeHandle(ref, () => ({
+    focusNode: (nodeId, options) => {
+      const node = nodes.find((item) => item.id === nodeId)
+      if (!node) return
+      nodeLayerRef.current?.focusNode(node.id, options)
+      setDraft(viewportForFocusedNode(node, latestViewportRef.current, viewportRef.current))
+    }
+  }), [nodes])
+
   const gridSize = Math.max(12, Math.round(32 * draftViewport.k))
 
   return (
-    <div className="canvas-viewport relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
+    <div ref={viewportRef} className="canvas-viewport relative min-h-0 flex-1 overflow-hidden rounded-lg border border-border bg-card">
       <div
         className="absolute inset-0 cursor-grab touch-none active:cursor-grabbing"
         style={{
@@ -183,6 +199,7 @@ export function CanvasViewport({
             onGenerateNodeRun={onGenerateNodeRun}
             generationPreviews={generationPreviews}
             promptEnriching={promptEnriching}
+            promptEnrichingNodeId={promptEnrichingNodeId}
           />
         )}
       </div>
@@ -203,9 +220,24 @@ export function CanvasViewport({
       </div>
     </div>
   )
-}
+})
 
 function shouldIgnoreViewportWheel(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false
   return Boolean(target.closest('textarea, input, [contenteditable="true"], [data-canvas-stop-zoom="true"]'))
+}
+
+function viewportForFocusedNode(
+  node: CanvasNodeData,
+  currentViewport: CanvasViewportState,
+  element: HTMLElement | null
+): CanvasViewportState {
+  const rect = element?.getBoundingClientRect()
+  const width = rect?.width || element?.clientWidth || 800
+  const height = rect?.height || element?.clientHeight || 600
+  return normalizeViewport({
+    ...currentViewport,
+    x: Math.round(width / 2 - (node.position.x + node.width / 2) * currentViewport.k),
+    y: Math.round(height / 2 - (node.position.y + node.height / 2) * currentViewport.k)
+  })
 }

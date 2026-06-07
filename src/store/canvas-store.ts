@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { createId } from '../lib/ids'
+import { CANVAS_ASSISTANT_MESSAGES_PAGE_SIZE } from '../services/canvas-assistant-sessions'
 import { DEFAULT_CANVAS_VIEWPORT, canvasConnectionKindForNodes, wouldCreateCanvasConnectionCycle } from '../services/canvas-projects'
 import { pixaiApi } from '../services/app-api'
-import type { CanvasNodeData, CanvasNodeMetadata, CanvasNodeType, CanvasPoint, CanvasProject, CanvasProjectSummary, CanvasViewport } from '../shared/types'
+import type { CanvasAssistantMessage, CanvasNodeData, CanvasNodeMetadata, CanvasNodeType, CanvasPoint, CanvasProject, CanvasProjectSummary, CanvasViewport } from '../shared/types'
 
 export type CanvasImageNodeInput = {
   name: string
@@ -16,6 +17,7 @@ export type CanvasImageNodeInput = {
   storagePath?: string | null
   requestIndex?: number
   batchRootId?: string
+  batchRunId?: string
   batchIndex?: number
   promptVariant?: string
 }
@@ -26,6 +28,7 @@ export type CanvasFailedResultInput = {
   historyItemId?: string
   requestIndex?: number
   batchRootId?: string
+  batchRunId?: string
   batchIndex?: number
   promptVariant?: string
 }
@@ -39,6 +42,7 @@ export type CanvasConnectedNodeInput = {
 export type CanvasNodeCreateInput = {
   type: CanvasNodeType
   content?: string
+  title?: string
   metadata?: Partial<CanvasNodeMetadata>
 }
 
@@ -46,6 +50,10 @@ export type CanvasStoreState = {
   projects: CanvasProjectSummary[]
   activeProjectId: string | null
   activeProject: CanvasProject | null
+  assistantMessages: CanvasAssistantMessage[]
+  assistantMessagesHasMore: boolean
+  assistantMessagesLoading: boolean
+  assistantMessagesTotal: number
   loading: boolean
   errorMessage: string | null
   loadProjects: () => Promise<void>
@@ -56,6 +64,11 @@ export type CanvasStoreState = {
   exportActiveProject: () => Promise<CanvasProject | null>
   importProjectFromJson: (input: unknown, conversationId: string) => Promise<CanvasProject | null>
   updateViewport: (viewport: CanvasViewport) => Promise<void>
+  loadAssistantMessages: (projectId?: string) => Promise<void>
+  loadMoreAssistantMessages: () => Promise<void>
+  appendAssistantMessages: (messages: CanvasAssistantMessage[]) => Promise<void>
+  clearAssistantMessages: () => Promise<void>
+  updateAssistantMessages: (messages: CanvasAssistantMessage[]) => Promise<void>
   resetViewport: () => Promise<void>
   addTextNode: () => Promise<void>
   addImageNode: (input: CanvasImageNodeInput) => Promise<void>
@@ -83,12 +96,17 @@ const initialCanvasStoreState = {
   projects: [],
   activeProjectId: null,
   activeProject: null,
+  assistantMessages: [],
+  assistantMessagesHasMore: false,
+  assistantMessagesLoading: false,
+  assistantMessagesTotal: 0,
   loading: false,
   errorMessage: null
 }
 
 let defaultProjectRequest: { conversationId: string; promise: Promise<CanvasProject | null> } | null = null
 type CanvasSet = (partial: Partial<CanvasStoreState>) => void
+type CanvasGet = () => CanvasStoreState
 const IMAGE_NODE_WIDTH = 320
 const IMAGE_NODE_HEIGHT = 260
 const GENERATE_NODE_HEIGHT = 340
@@ -115,13 +133,7 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     try {
       const project = await pixaiApi.canvas.create(input)
       const projects = await pixaiApi.canvas.list()
-      set({
-        projects,
-        activeProjectId: project.id,
-        activeProject: project,
-        loading: false
-      })
-      return project
+      return await activateCanvasProject(project, projects, set)
     } catch (error) {
       set({ loading: false, errorMessage: getCanvasErrorMessage(error) })
       return null
@@ -132,19 +144,20 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     try {
       const deletingActiveProject = get().activeProjectId === projectId
       await pixaiApi.canvas.delete(projectId)
+      let cleanupError: unknown = null
+      try {
+        await pixaiApi.canvasAssistant.deleteProject(projectId)
+      } catch (error) {
+        cleanupError = error
+      }
       const projects = await pixaiApi.canvas.list()
       if (!deletingActiveProject) {
-        set({ projects, loading: false })
+        set({ projects, loading: false, errorMessage: cleanupError ? getCanvasErrorMessage(cleanupError) : null })
         return
       }
       const nextProjectId = projects[0]?.id || null
       const nextProject = nextProjectId ? await pixaiApi.canvas.get(nextProjectId) : null
-      set({
-        projects,
-        activeProjectId: nextProject?.id || null,
-        activeProject: nextProject,
-        loading: false
-      })
+      await activateCanvasProject(nextProject, projects, set, cleanupError ? getCanvasErrorMessage(cleanupError) : null)
     } catch (error) {
       set({ loading: false, errorMessage: getCanvasErrorMessage(error) })
     }
@@ -173,13 +186,7 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     try {
       const project = await pixaiApi.canvas.get(projectId)
       const projects = await pixaiApi.canvas.list()
-      set({
-        projects,
-        activeProjectId: project?.id || null,
-        activeProject: project,
-        loading: false
-      })
-      return project
+      return await activateCanvasProject(project, projects, set)
     } catch (error) {
       set({ loading: false, errorMessage: getCanvasErrorMessage(error) })
       return null
@@ -203,13 +210,7 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
     try {
       const project = await pixaiApi.canvas.importProject(input, conversationId)
       const projects = await pixaiApi.canvas.list()
-      set({
-        projects,
-        activeProjectId: project.id,
-        activeProject: project,
-        loading: false
-      })
-      return project
+      return await activateCanvasProject(project, projects, set)
     } catch (error) {
       set({ loading: false, errorMessage: getCanvasErrorMessage(error) })
       return null
@@ -233,6 +234,119 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
   },
   resetViewport: async () => {
     await get().updateViewport({ ...DEFAULT_CANVAS_VIEWPORT })
+  },
+  loadAssistantMessages: async (projectId) => {
+    const targetProjectId = (projectId || get().activeProjectId || get().activeProject?.id || '').trim()
+    if (!targetProjectId) {
+      set({
+        assistantMessages: [],
+        assistantMessagesHasMore: false,
+        assistantMessagesLoading: false,
+        assistantMessagesTotal: 0
+      })
+      return
+    }
+    set({ assistantMessagesLoading: true, errorMessage: null })
+    try {
+      const page = await pixaiApi.canvasAssistant.list(targetProjectId, { limit: CANVAS_ASSISTANT_MESSAGES_PAGE_SIZE })
+      if (get().activeProjectId !== targetProjectId) {
+        set({ assistantMessagesLoading: false })
+        return
+      }
+      set({
+        assistantMessages: page.messages,
+        assistantMessagesHasMore: page.hasMore,
+        assistantMessagesLoading: false,
+        assistantMessagesTotal: page.total
+      })
+    } catch (error) {
+      set({ assistantMessagesLoading: false, errorMessage: getCanvasErrorMessage(error) })
+    }
+  },
+  loadMoreAssistantMessages: async () => {
+    const projectId = get().activeProjectId || get().activeProject?.id
+    const before = get().assistantMessages[0]?.id
+    if (!projectId || !before || get().assistantMessagesLoading || !get().assistantMessagesHasMore) return
+    set({ assistantMessagesLoading: true, errorMessage: null })
+    try {
+      const page = await pixaiApi.canvasAssistant.list(projectId, {
+        limit: CANVAS_ASSISTANT_MESSAGES_PAGE_SIZE,
+        before
+      })
+      if (get().activeProjectId !== projectId) {
+        set({ assistantMessagesLoading: false })
+        return
+      }
+      set({
+        assistantMessages: mergeAssistantMessages(page.messages, get().assistantMessages),
+        assistantMessagesHasMore: page.hasMore,
+        assistantMessagesLoading: false,
+        assistantMessagesTotal: page.total
+      })
+    } catch (error) {
+      set({ assistantMessagesLoading: false, errorMessage: getCanvasErrorMessage(error) })
+    }
+  },
+  appendAssistantMessages: async (messages) => {
+    const project = get().activeProject
+    if (!project || messages.length === 0) return
+    set({ errorMessage: null })
+    try {
+      const appended = await pixaiApi.canvasAssistant.append(project.id, messages)
+      if (appended.length === 0 || get().activeProjectId !== project.id) return
+      const currentMessages = get().assistantMessages
+      const nextMessages = mergeAssistantMessages(currentMessages, appended)
+      const currentIds = new Set(currentMessages.map((message) => message.id))
+      const appendedIds = new Set(appended.filter((message) => !currentIds.has(message.id)).map((message) => message.id))
+      set({
+        assistantMessages: nextMessages,
+        assistantMessagesTotal: Math.max(nextMessages.length, get().assistantMessagesTotal + appendedIds.size)
+      })
+    } catch (error) {
+      set({ errorMessage: getCanvasErrorMessage(error) })
+    }
+  },
+  clearAssistantMessages: async () => {
+    const project = get().activeProject
+    if (!project) return
+    set({ assistantMessagesLoading: true, errorMessage: null })
+    try {
+      await pixaiApi.canvasAssistant.clear(project.id)
+      if (get().activeProjectId !== project.id) {
+        set({ assistantMessagesLoading: false })
+        return
+      }
+      set({
+        assistantMessages: [],
+        assistantMessagesHasMore: false,
+        assistantMessagesLoading: false,
+        assistantMessagesTotal: 0
+      })
+    } catch (error) {
+      set({ assistantMessagesLoading: false, errorMessage: getCanvasErrorMessage(error) })
+    }
+  },
+  updateAssistantMessages: async (messages) => {
+    const project = get().activeProject
+    if (!project) return
+    set({ assistantMessagesLoading: true, errorMessage: null })
+    try {
+      await pixaiApi.canvasAssistant.clear(project.id)
+      await pixaiApi.canvasAssistant.append(project.id, messages)
+      const page = await pixaiApi.canvasAssistant.list(project.id, { limit: CANVAS_ASSISTANT_MESSAGES_PAGE_SIZE })
+      if (get().activeProjectId !== project.id) {
+        set({ assistantMessagesLoading: false })
+        return
+      }
+      set({
+        assistantMessages: page.messages,
+        assistantMessagesHasMore: page.hasMore,
+        assistantMessagesLoading: false,
+        assistantMessagesTotal: page.total
+      })
+    } catch (error) {
+      set({ assistantMessagesLoading: false, errorMessage: getCanvasErrorMessage(error) })
+    }
   },
   addTextNode: async () => {
     await persistActiveProject(set, get, (project) => ({
@@ -278,6 +392,7 @@ export const useCanvasStore = create<CanvasStoreState>((set, get) => ({
       if (!node || node.type === 'image') return project
       createdNode = {
         ...node,
+        ...(input.title?.trim() ? { title: input.title.trim() } : {}),
         metadata: {
           ...node.metadata,
           ...(input.content !== undefined ? { content: input.content } : {}),
@@ -508,10 +623,60 @@ export function resetCanvasStoreForTests(): void {
   useCanvasStore.setState(initialCanvasStoreState)
 }
 
+async function activateCanvasProject(
+  project: CanvasProject | null,
+  projects: CanvasProjectSummary[],
+  set: CanvasSet,
+  errorMessage: string | null = null
+): Promise<CanvasProject | null> {
+  if (!project) {
+    set({
+      projects,
+      activeProjectId: null,
+      activeProject: null,
+      assistantMessages: [],
+      assistantMessagesHasMore: false,
+      assistantMessagesLoading: false,
+      assistantMessagesTotal: 0,
+      loading: false,
+      errorMessage
+    })
+    return null
+  }
+
+  let nextProject = project
+  let nextErrorMessage = errorMessage
+  if ((project.assistantMessages || []).length > 0) {
+    try {
+      nextProject = await pixaiApi.canvasAssistant.migrateProjectMessages(project) || project
+      nextProject = await pixaiApi.canvas.update(project.id, { assistantMessages: [] })
+    } catch (error) {
+      nextProject = { ...project, assistantMessages: [] }
+      nextErrorMessage = getCanvasErrorMessage(error)
+    }
+  }
+
+  const page = await pixaiApi.canvasAssistant.list(nextProject.id, {
+    limit: CANVAS_ASSISTANT_MESSAGES_PAGE_SIZE
+  })
+  set({
+    projects: updateProjectSummary(projects, nextProject),
+    activeProjectId: nextProject.id,
+    activeProject: nextProject,
+    assistantMessages: page.messages,
+    assistantMessagesHasMore: page.hasMore,
+    assistantMessagesLoading: false,
+    assistantMessagesTotal: page.total,
+    loading: false,
+    errorMessage: nextErrorMessage
+  })
+  return nextProject
+}
+
 async function ensureDefaultProjectForConversation(
   conversationId: string,
   set: CanvasSet,
-  get: typeof useCanvasStore.getState
+  get: CanvasGet
 ): Promise<CanvasProject | null> {
   set({ loading: true, errorMessage: null })
   try {
@@ -526,13 +691,7 @@ async function ensureDefaultProjectForConversation(
       project = await pixaiApi.canvas.create({ conversationId, title: 'Canvas 项目' })
     }
     projects = await pixaiApi.canvas.list()
-    set({
-      projects,
-      activeProjectId: project.id,
-      activeProject: project,
-      loading: false
-    })
-    return project
+    return await activateCanvasProject(project, projects, set)
   } catch (error) {
     set({ loading: false, errorMessage: getCanvasErrorMessage(error) })
     return null
@@ -566,9 +725,32 @@ function updateProjectSummary(projects: CanvasProjectSummary[], project: CanvasP
   return next.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
 }
 
+function mergeAssistantMessages(...groups: CanvasAssistantMessage[][]): CanvasAssistantMessage[] {
+  const messagesById = new Map<string, CanvasAssistantMessage>()
+  for (const messages of groups) {
+    for (const message of messages) {
+      if (!message?.id) continue
+      messagesById.set(message.id, message)
+    }
+  }
+  return [...messagesById.values()].sort(compareAssistantMessages)
+}
+
+function compareAssistantMessages(left: CanvasAssistantMessage, right: CanvasAssistantMessage): number {
+  const leftTime = assistantMessageTime(left)
+  const rightTime = assistantMessageTime(right)
+  if (leftTime !== rightTime) return leftTime - rightTime
+  return left.id.localeCompare(right.id)
+}
+
+function assistantMessageTime(message: CanvasAssistantMessage): number {
+  const parsed = message.createdAt ? Date.parse(message.createdAt) : Number.NaN
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 async function persistActiveProject(
   set: CanvasSet,
-  get: typeof useCanvasStore.getState,
+  get: CanvasGet,
   mutate: (project: CanvasProject) => CanvasProject
 ): Promise<boolean> {
   const project = get().activeProject
@@ -793,7 +975,8 @@ function findFailedResultNodeBinding(project: CanvasProject, sourceNodeId: strin
     const sameRequest = validCanvasResultIndex(node.metadata.requestIndex) === requestIndex
     const sameBatch = validCanvasResultIndex(node.metadata.batchIndex) === batchIndex
     const sameBatchRoot = (node.metadata.batchRootId || '') === (input.batchRootId || '')
-    return sameRequest && sameBatch && sameBatchRoot
+    const sameBatchRun = (node.metadata.batchRunId || '') === (input.batchRunId || '')
+    return sameRequest && sameBatch && sameBatchRoot && sameBatchRun
   }) || null
 }
 
@@ -898,8 +1081,10 @@ function imageNodeTitle(input: CanvasImageNodeInput): string {
 function resultNodeTitle(input: CanvasImageNodeInput): string {
   const requestIndex = validCanvasResultIndex(input.requestIndex)
   const batchIndex = validCanvasResultIndex(input.batchIndex)
+  const batchRunLabel = input.batchRunId ? '本批次' : ''
   if (batchIndex != null && requestIndex != null) return `批量 ${batchIndex + 1} · #${requestIndex + 1}`
   if (batchIndex != null) return `批量结果 #${batchIndex + 1}`
+  if (batchRunLabel && requestIndex != null) return `${batchRunLabel}结果 #${requestIndex + 1}`
   if (requestIndex != null) return `生成结果 #${requestIndex + 1}`
   const title = imageNodeTitle(input)
   return title === '图片节点' ? '生成结果' : title
@@ -929,6 +1114,7 @@ function generatedResultMetadata(base: Partial<CanvasNodeMetadata>, input: Canva
     ...(input.naturalHeight ? { naturalHeight: input.naturalHeight } : {}),
     ...(requestIndex != null ? { requestIndex } : {}),
     ...(input.batchRootId?.trim() ? { batchRootId: input.batchRootId.trim() } : {}),
+    ...(input.batchRunId?.trim() ? { batchRunId: input.batchRunId.trim() } : {}),
     ...(batchIndex != null ? { batchIndex } : {}),
     ...(input.promptVariant?.trim() ? { promptVariant: input.promptVariant.trim() } : {}),
     maskDataUrl: '',
@@ -947,6 +1133,7 @@ function failedResultMetadata(base: Partial<CanvasNodeMetadata>, input: CanvasFa
     ...(input.historyItemId ? { historyItemId: input.historyItemId } : {}),
     ...(requestIndex != null ? { requestIndex } : {}),
     ...(input.batchRootId?.trim() ? { batchRootId: input.batchRootId.trim() } : {}),
+    ...(input.batchRunId?.trim() ? { batchRunId: input.batchRunId.trim() } : {}),
     ...(batchIndex != null ? { batchIndex } : {}),
     ...(input.promptVariant?.trim() ? { promptVariant: input.promptVariant.trim() } : {}),
     errorMessage: input.errorMessage

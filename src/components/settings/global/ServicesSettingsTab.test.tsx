@@ -40,9 +40,10 @@ function provider(): ProviderProfile {
     baseUrl: 'https://example.com',
     defaultImageModel: 'gpt-image-2',
     defaultPromptModel: 'gpt-4.1',
+    defaultAgentModel: 'gpt-4.1',
     imageGenerationEndpoint: 'images-api',
-    enabledUsages: ['image', 'prompt'],
-    capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'connection-test'],
+    enabledUsages: ['image', 'prompt', 'agent'],
+    capabilities: ['text-to-image', 'image-to-image', 'prompt-assist', 'canvas-agent', 'native-tool-calling', 'connection-test'],
     apiKeyStored: true,
     insecureStorage: false,
     createdAt: '2026-06-02T10:00:00.000Z',
@@ -60,7 +61,8 @@ describe('ServicesSettingsTab destructive actions', () => {
       settings: {
         profiles: [profile],
         selectedImageProfileId: profile.id,
-        selectedPromptProfileId: profile.id
+        selectedPromptProfileId: profile.id,
+        selectedAgentProfileId: profile.id
       },
       updateActiveConversation: vi.fn().mockResolvedValue(undefined),
       updateSettings: vi.fn().mockResolvedValue(undefined),

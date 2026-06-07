@@ -56,9 +56,39 @@ describe('CanvasProjectService', () => {
 
     const exported = await service.exportProject(created.id)
     exported.nodes[0].metadata.content = 'mutated'
+    exported.assistantMessages?.push({ id: 'message-mutated', role: 'user', content: 'mutated' })
 
     await expect(service.get(created.id)).resolves.toMatchObject({
-      nodes: [expect.objectContaining({ metadata: { content: 'original' } })]
+      nodes: [expect.objectContaining({ metadata: { content: 'original' } })],
+      assistantMessages: []
+    })
+  })
+
+  it('persists assistant messages with canvas projects', async () => {
+    const service = new CanvasProjectService()
+    const created = await service.create({ conversationId: 'conversation-assistant-messages', title: '助手画布' })
+
+    const updated = await service.update(created.id, {
+      assistantMessages: [
+        { id: 'message-welcome', role: 'assistant', content: '可以帮你安排 Canvas。' },
+        { id: 'message-user', role: 'user', content: '创建文本节点：猫咪' },
+        { id: 'message-empty', role: 'user', content: '' },
+        { id: 'message-invalid-role', role: 'system', content: 'hidden' } as unknown as { id: string; role: 'assistant'; content: string }
+      ]
+    })
+
+    expect(updated.assistantMessages).toEqual([
+      { id: 'message-welcome', role: 'assistant', content: '可以帮你安排 Canvas。' },
+      { id: 'message-user', role: 'user', content: '创建文本节点：猫咪' }
+    ])
+    await expect(service.get(created.id)).resolves.toMatchObject({
+      assistantMessages: [
+        { id: 'message-welcome', role: 'assistant', content: '可以帮你安排 Canvas。' },
+        { id: 'message-user', role: 'user', content: '创建文本节点：猫咪' }
+      ]
+    })
+    await expect(service.exportProject(created.id)).resolves.toMatchObject({
+      assistantMessages: []
     })
   })
 
@@ -105,6 +135,10 @@ describe('CanvasProjectService', () => {
         { id: 'connection-ok', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' },
         { id: 'connection-missing', fromNodeId: textNode.id, toNodeId: 'missing', kind: 'prompt' }
       ],
+      assistantMessages: [
+        { id: 'message-import-assistant', role: 'assistant', content: '旧项目助手回复' },
+        { id: 'message-import-user', role: 'user', content: '旧项目用户命令' }
+      ],
       viewport: { x: 2.4, y: -4.6, k: 0.01 }
     }, 'conversation-current-import')
 
@@ -129,6 +163,10 @@ describe('CanvasProjectService', () => {
     expect(imported.nodes[1].metadata.historyItemId).toBeUndefined()
     expect(imported.connections).toEqual([
       { id: 'connection-ok', fromNodeId: textNode.id, toNodeId: generateNode.id, kind: 'prompt' }
+    ])
+    expect(imported.assistantMessages).toEqual([
+      { id: 'message-import-assistant', role: 'assistant', content: '旧项目助手回复' },
+      { id: 'message-import-user', role: 'user', content: '旧项目用户命令' }
     ])
   })
 

@@ -11,6 +11,7 @@ function canvasProject(input: Partial<CanvasProject> = {}): CanvasProject {
     schemaVersion: 1,
     nodes: input.nodes || [],
     connections: input.connections || [],
+    ...(input.assistantMessages ? { assistantMessages: input.assistantMessages } : {}),
     viewport: input.viewport || { x: 0, y: 0, k: 1 },
     createdAt: input.createdAt || '2026-06-05T00:00:00.000Z',
     updatedAt: input.updatedAt || '2026-06-05T00:00:00.000Z'
@@ -129,6 +130,38 @@ describe('useCanvasStore', () => {
     })
   })
 
+  it('migrates legacy project assistant messages when opening a canvas project', async () => {
+    const legacyProject = canvasProject({
+      id: 'canvas-open-legacy-chat',
+      title: '旧助手画布',
+      assistantMessages: [
+        { id: 'legacy-open-user', role: 'user', content: '旧用户命令', createdAt: '2026-06-05T00:00:00.000Z' },
+        { id: 'legacy-open-assistant', role: 'assistant', content: '旧助手回复', createdAt: '2026-06-05T00:00:01.000Z' }
+      ]
+    })
+    const clearedProject = { ...legacyProject, assistantMessages: [], updatedAt: '2026-06-05T00:10:00.000Z' }
+    vi.spyOn(pixaiApi.canvas, 'get').mockResolvedValue(legacyProject)
+    vi.spyOn(pixaiApi.canvas, 'list').mockResolvedValue([
+      {
+        id: legacyProject.id,
+        title: legacyProject.title,
+        conversationId: legacyProject.conversationId,
+        updatedAt: legacyProject.updatedAt,
+        nodeCount: 0
+      }
+    ])
+    const update = vi.spyOn(pixaiApi.canvas, 'update').mockResolvedValue(clearedProject)
+
+    await expect(useCanvasStore.getState().openProject(legacyProject.id)).resolves.toEqual(clearedProject)
+
+    expect(update).toHaveBeenCalledWith(legacyProject.id, { assistantMessages: [] })
+    expect(useCanvasStore.getState().activeProject?.assistantMessages).toEqual([])
+    expect(useCanvasStore.getState().assistantMessages).toEqual([
+      expect.objectContaining({ id: 'legacy-open-user', role: 'user', content: '旧用户命令' }),
+      expect.objectContaining({ id: 'legacy-open-assistant', role: 'assistant', content: '旧助手回复' })
+    ])
+  })
+
   it('updates active viewport optimistically and persists the final value', async () => {
     const project = canvasProject()
     const updated = canvasProject({
@@ -200,6 +233,41 @@ describe('useCanvasStore', () => {
       errorMessage: null
     })
     expect(useCanvasStore.getState().projects.map((project) => project.id)).toEqual([imported.id, current.id])
+  })
+
+  it('deletes assistant session messages when deleting a canvas project', async () => {
+    const project = canvasProject({ id: 'canvas-delete-with-chat' })
+    const nextProject = canvasProject({
+      id: 'canvas-delete-next',
+      conversationId: 'conversation-delete-next',
+      updatedAt: '2026-06-05T00:09:00.000Z'
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [
+        { id: project.id, title: project.title, conversationId: project.conversationId, updatedAt: project.updatedAt, nodeCount: 0 },
+        { id: nextProject.id, title: nextProject.title, conversationId: nextProject.conversationId, updatedAt: nextProject.updatedAt, nodeCount: 0 }
+      ]
+    })
+    await pixaiApi.canvasAssistant.append(project.id, [
+      { id: 'delete-chat-user', role: 'user', content: '删除前消息' }
+    ])
+    vi.spyOn(pixaiApi.canvas, 'delete').mockResolvedValue()
+    vi.spyOn(pixaiApi.canvas, 'list').mockResolvedValue([
+      { id: nextProject.id, title: nextProject.title, conversationId: nextProject.conversationId, updatedAt: nextProject.updatedAt, nodeCount: 0 }
+    ])
+    vi.spyOn(pixaiApi.canvas, 'get').mockResolvedValue(nextProject)
+    const deleteSession = vi.spyOn(pixaiApi.canvasAssistant, 'deleteProject')
+
+    await useCanvasStore.getState().deleteProject(project.id)
+
+    expect(deleteSession).toHaveBeenCalledWith(project.id)
+    await expect(pixaiApi.canvasAssistant.list(project.id)).resolves.toMatchObject({ total: 0, messages: [] })
+    expect(useCanvasStore.getState()).toMatchObject({
+      activeProjectId: nextProject.id,
+      activeProject: expect.objectContaining({ id: nextProject.id })
+    })
   })
 
   it('keeps the current project when canvas import fails', async () => {
@@ -327,6 +395,49 @@ describe('useCanvasStore', () => {
       type: 'text',
       position: { x: 948, y: 96 }
     })
+  })
+
+  it('stores assistant messages in the session store without updating the canvas project', async () => {
+    const project = canvasProject({
+      nodes: [{
+        id: 'node-unchanged-while-clearing-chat',
+        type: 'text',
+        title: '文本节点',
+        position: { x: 0, y: 0 },
+        width: 220,
+        height: 140,
+        metadata: { content: 'prompt' }
+      }]
+    })
+    useCanvasStore.setState({
+      activeProjectId: project.id,
+      activeProject: project,
+      projects: [{ id: project.id, title: project.title, updatedAt: project.updatedAt, nodeCount: project.nodes.length }]
+    })
+    const update = vi.spyOn(pixaiApi.canvas, 'update')
+    const append = vi.spyOn(pixaiApi.canvasAssistant, 'append')
+
+    await useCanvasStore.getState().appendAssistantMessages([
+      { id: 'assistant-message-1', role: 'assistant', content: '可以帮你安排画布。', createdAt: '2026-06-05T00:01:00.000Z' },
+      { id: 'assistant-message-2', role: 'user', content: '创建文本节点：猫咪', createdAt: '2026-06-05T00:01:01.000Z' }
+    ])
+
+    expect(append).toHaveBeenCalledWith(project.id, [
+      { id: 'assistant-message-1', role: 'assistant', content: '可以帮你安排画布。', createdAt: '2026-06-05T00:01:00.000Z' },
+      { id: 'assistant-message-2', role: 'user', content: '创建文本节点：猫咪', createdAt: '2026-06-05T00:01:01.000Z' }
+    ])
+    expect(update).not.toHaveBeenCalled()
+    expect(useCanvasStore.getState().assistantMessages).toEqual([
+      expect.objectContaining({ id: 'assistant-message-1', role: 'assistant', content: '可以帮你安排画布。' }),
+      expect.objectContaining({ id: 'assistant-message-2', role: 'user', content: '创建文本节点：猫咪' })
+    ])
+
+    await useCanvasStore.getState().clearAssistantMessages()
+
+    expect(useCanvasStore.getState().assistantMessages).toEqual([])
+    expect(useCanvasStore.getState().assistantMessagesTotal).toBe(0)
+    expect(useCanvasStore.getState().activeProject?.nodes).toEqual(project.nodes)
+    expect(update).not.toHaveBeenCalled()
   })
 
   it('creates a connected generate node from a non-empty text node', async () => {
@@ -683,11 +794,13 @@ describe('useCanvasStore', () => {
 
     const textNode = await useCanvasStore.getState().createNode({
       type: 'text',
-      content: 'assistant prompt'
+      content: 'assistant prompt',
+      title: '主提示词'
     })
     const generateNode = await useCanvasStore.getState().createNode({
       type: 'generate',
-      content: 'local generate prompt'
+      content: 'local generate prompt',
+      title: '最终生成'
     })
     const imageNode = await useCanvasStore.getState().createNode({
       type: 'image',
@@ -696,10 +809,12 @@ describe('useCanvasStore', () => {
 
     expect(textNode).toMatchObject({
       type: 'text',
+      title: '主提示词',
       metadata: { content: 'assistant prompt' }
     })
     expect(generateNode).toMatchObject({
       type: 'generate',
+      title: '最终生成',
       metadata: { content: 'local generate prompt', status: 'idle' }
     })
     expect(imageNode).toBeNull()

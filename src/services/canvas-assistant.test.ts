@@ -60,6 +60,38 @@ describe('canvas assistant command parser', () => {
     })
   })
 
+  it('parses node names from @ mentions', () => {
+    expect(parseCanvasAssistantCommand('创建文本节点 @主提示词：电影感猫咪肖像')).toMatchObject({
+      actions: [
+        {
+          type: 'create-node',
+          nodeType: 'text',
+          title: '主提示词',
+          content: '电影感猫咪肖像'
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('创建生成节点 @最终生成：局部生成提示词')).toMatchObject({
+      actions: [
+        {
+          type: 'create-node',
+          nodeType: 'generate',
+          title: '最终生成',
+          content: '局部生成提示词'
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('创建文本节点 @主提示词：赛博城市夜景，然后生成')).toMatchObject({
+      actions: [
+        {
+          type: 'create-chain',
+          textTitle: '主提示词',
+          prompt: '赛博城市夜景'
+        }
+      ]
+    })
+  })
+
   it('parses connection commands by ordinal node references', () => {
     expect(parseCanvasAssistantCommand('连接第1个文本到第2个生成')).toMatchObject({
       actions: [
@@ -67,6 +99,95 @@ describe('canvas assistant command parser', () => {
           type: 'connect',
           fromRef: { nodeType: 'text', ordinal: 1 },
           toRef: { nodeType: 'generate', ordinal: 2 }
+        }
+      ]
+    })
+  })
+
+  it('parses node references from @ mentions', () => {
+    expect(parseCanvasAssistantCommand('连接@主提示词到@最终生成')).toMatchObject({
+      actions: [
+        {
+          type: 'connect',
+          fromRef: { name: '主提示词' },
+          toRef: { name: '最终生成' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('修改@主提示词为：柔和棚拍猫咪')).toMatchObject({
+      actions: [
+        {
+          type: 'set-prompt',
+          targetRef: { name: '主提示词' },
+          content: '柔和棚拍猫咪'
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('运行@最终生成')).toMatchObject({
+      actions: [
+        {
+          type: 'run-node',
+          targetRef: { name: '最终生成' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('@主提示词 丰富当前节点提示词')).toMatchObject({
+      actions: [
+        {
+          type: 'enrich-prompt',
+          targetRef: { name: '主提示词' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('丰富@主提示词提示词')).toMatchObject({
+      actions: [
+        {
+          type: 'enrich-prompt',
+          targetRef: { name: '主提示词' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('@主提示词 丰富这个提示词')).toMatchObject({
+      actions: [
+        {
+          type: 'enrich-prompt',
+          targetRef: { name: '主提示词' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('@主提示词 丰富这个节点 并生成一张图')).toMatchObject({
+      actions: [
+        {
+          type: 'enrich-prompt',
+          targetRef: { name: '主提示词' }
+        },
+        {
+          type: 'generate-from-text',
+          targetRef: { name: '主提示词' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('@canvas-node_eee1ab0a-7ea8-4331-ace8-960310c43efb 丰富这个节点 并生成一张图 测试')).toMatchObject({
+      actions: [
+        {
+          type: 'enrich-prompt',
+          targetRef: { name: 'canvas-node_eee1ab0a-7ea8-4331-ace8-960310c43efb' }
+        },
+        {
+          type: 'generate-from-text',
+          targetRef: { name: 'canvas-node_eee1ab0a-7ea8-4331-ace8-960310c43efb' }
+        }
+      ]
+    })
+    expect(parseCanvasAssistantCommand('@文本节点 #2 丰富这个节点 并生成一张图 测试')).toMatchObject({
+      actions: [
+        {
+          type: 'enrich-prompt',
+          targetRef: { nodeType: 'text', ordinal: 2 }
+        },
+        {
+          type: 'generate-from-text',
+          targetRef: { nodeType: 'text', ordinal: 2 }
         }
       ]
     })

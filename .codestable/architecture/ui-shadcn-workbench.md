@@ -2,9 +2,9 @@
 doc_type: architecture
 slug: ui-shadcn-workbench
 scope: PixAI React 前端 UI 基座、经典工作台、Canvas 模式、设置系统、图库和提示词库的当前结构
-summary: 前端界面已统一到 Tailwind v4 + shadcn/ui primitives，App 按 view 分流到 WorkspaceShell、CanvasShell 和 SharedLibraryShell 三类外壳，业务状态仍由 Zustand store 提供，经典工作台支持生成中 partial preview，Canvas 是画布优先生图界面，支持浮动 dock、右侧画布助手、节点动作条、连接到空白创建下游节点、生成节点输入摘要、多结果 result 节点组织、文本一键生成、当前参考图/历史图/图库图/本地图片加入 Canvas、手动单节点生成、history/gallery 来源标识、project JSON 导入导出和有上限的顺序 workflow run。
+summary: 前端界面已统一到 Tailwind v4 + shadcn/ui primitives，App 按 view 分流到 WorkspaceShell、CanvasShell 和 SharedLibraryShell 三类外壳，业务状态仍由 Zustand store 提供，经典工作台支持生成中 partial preview，Canvas 是画布优先生图界面，支持浮动 dock、右侧 Canvas Agent / 画布助手、Agent Provider 原生 tool calling、运行 timeline、pending change、节点定位高亮、legacy 规则兜底、节点动作条、连接到空白创建下游节点、生成节点输入摘要、多结果 result 节点组织、文本一键生成、当前参考图/历史图/图库图/本地图片加入 Canvas、手动单节点生成、history/gallery 来源标识、project JSON 导入导出和有上限的顺序 workflow run。
 status: current
-last_reviewed: 2026-06-06
+last_reviewed: 2026-06-07
 tags: [ui, react, shadcn, tailwind, desktop-workbench]
 depends_on: []
 implements: [reference-image-input, canvas-assistant]
@@ -19,9 +19,11 @@ implements: [reference-image-input, canvas-assistant]
 - **SharedLibraryShell**：图库和提示词库的共享外壳，只组合 `AppTopNav` 与页面内容，不继承 Workspace 或 Canvas 的模式专属侧栏。
 - **工作台主界面**：`App` + `WorkspaceShell` + `Workspace`，负责经典工作台框架、普通会话列表、生成区和右侧参数栏。
 - **Partial image preview**：生成过程中从 Provider streaming SSE 事件解析出的中间图，只作为 `generationPreviews` 临时状态展示在经典工作台，不进入 history。
-- **Canvas 模式**：`view: 'canvas'` 对应的工作台模式，由 `CanvasShell` 承载项目侧栏，由 `CanvasWorkspace` 与 `CanvasViewport` 承载画布优先界面、浮动生图 dock、右侧画布助手、默认项目、视口保存恢复、文本/图片/生成/配置/批量/结果节点、节点动作条、连接到空白创建下游节点、生成节点输入摘要、多结果 result 节点组织、轻量连线、当前参考图 / 历史图 / 图库图 / 本地图片加入 Canvas 的素材桥入口、手动生成节点、project JSON 导入导出和顺序 workflow run。
+- **Canvas 模式**：`view: 'canvas'` 对应的工作台模式，由 `CanvasShell` 承载项目侧栏，由 `CanvasWorkspace` 与 `CanvasViewport` 承载画布优先界面、浮动生图 dock、右侧 Canvas Agent / 画布助手、默认项目、视口保存恢复、文本/图片/生成/配置/批量/结果节点、节点动作条、连接到空白创建下游节点、生成节点输入摘要、多结果 result 节点组织、轻量连线、当前参考图 / 历史图 / 图库图 / 本地图片加入 Canvas 的素材桥入口、手动生成节点、project JSON 导入导出和顺序 workflow run。
 - **Canvas workbench dock**：`CanvasWorkspace` 底部浮动的生图命令层，只承载文本、图片、生成、配置、批量、结果、运行、重置、导入、导出和引导入口；不承载视频或音频命令。
-- **Canvas Assistant Panel / 画布助手**：`CanvasWorkspace` 右侧常驻面板，保存页面会话内的助手消息，把用户命令交给本地规则调度器解析，再顺序调用 Canvas store / app-store 的创建节点、连接节点、修改提示词、运行生成和 workflow 能力。
+- **Canvas Assistant Panel / 画布助手**：`CanvasWorkspace` 右侧常驻面板。配置 Canvas Agent Provider 且 adapter 支持 `runCanvasAgentTurn` 时，它优先调用 `CanvasAgentRunner`，由模型通过原生 tool calling 读取画布摘要、inspect 节点、创建节点、连接节点、运行生成、提出提示词候选并触发节点定位高亮；未配置或不可用时保留 `parseCanvasAssistantCommand()` 本地规则兜底。助手消息不随 Canvas project JSON 保存，按 project 写入独立本地会话存储并在 UI 中分批加载。
+- **Canvas Agent timeline**：Canvas Agent 每轮运行在助手面板内展示的模型调用、工具调用、权限拦截、错误和最终回复事件；它只反映本次运行过程，不写入 Canvas project。
+- **Canvas Agent pending change**：由 `propose_prompt_enrichment` 等工具生成的待确认变更。候选内容显示在助手面板，用户点应用后才写入目标节点，取消或刷新不影响 Canvas project。
 - **CanvasNodeActionToolbar**：节点选中或 hover 时出现的浮动动作条，承载当前节点的生成、预览、mask、运行/重试、连接和删除等高频动作；不持久化 UI 状态。
 - **Canvas connection create menu**：从节点开始连接后点击空白画布出现的创建菜单；text/image/result/config/batch 只能创建下游 generate 节点，generate 只能创建下游 result 节点，连接类型仍由 `canvasConnectionKindForNodes()` 判定。
 - **Canvas project**：Canvas 本地项目实体，绑定创建或导入时的 `activeConversationId`，当前保存标题、文本/图片/生成/配置/批量/结果节点、轻量连线和 `{ x, y, k }` 视口。
@@ -98,11 +100,13 @@ shadcn 配置固定为 TSX、CSS variables、lucide 图标和 `@/components/ui` 
 
 `CanvasViewport` 负责无限画布交互：拖拽平移、滚轮缩放、按钮缩放、重置视图，并把 nodes/connections 交给 `CanvasNodeLayer` 渲染。视口在组件本地先做 draft 更新，提交时交回 Canvas store 持久化；当 `CanvasNodeLayer` 处于连接模式时，背景 pointer down 会先反算世界坐标并交给连接创建菜单接管，不启动 pan。`src/components/canvas/CanvasViewport.tsx:19` `src/components/canvas/CanvasViewport.tsx:36` `src/components/canvas/CanvasViewport.tsx:45`
 
-`CanvasWorkspace` 是画布优先界面：`CanvasViewport` 占满主区域，`CanvasProjectCommandBar` 作为左上浮层显示项目名、节点数、错误状态、导入/导出和引导，`CanvasWorkbenchDock` 作为底部浮层提供文本、图片、生成、配置、批量、结果、运行、重置、导入、导出和引导入口，`CanvasAssistantPanel` 作为右侧固定栏提供对话式调度入口。本地图片仍只读取 `image/*` 文件为 data URL 后写入 Canvas project；项目导入仍读取 `.json` 文件并克隆为当前会话的新 project；“运行”仍调用 `useAppStore.runCanvasWorkflow()`。Dock 和画布助手都不出现视频或音频入口。CanvasWorkspace 的 active project 分支是 flex 容器，确保 CanvasViewport 在真实浏览器中铺满主区域，右侧助手不会覆盖底部 dock 或画布浮层。`src/components/canvas/CanvasWorkspace.tsx:8` `src/components/canvas/CanvasWorkspace.tsx:59` `src/components/canvas/CanvasWorkspace.tsx:137`
+`CanvasWorkspace` 是画布优先界面：`CanvasViewport` 占满主区域，`CanvasProjectCommandBar` 作为左上浮层显示项目名、节点数、错误状态、导入/导出和引导，`CanvasWorkbenchDock` 作为底部浮层提供文本、图片、生成、配置、批量、结果、运行、重置、导入、导出和引导入口，`CanvasAssistantPanel` 作为右侧固定栏提供 Agent / 本地规则两种调度入口。本地图片仍只读取 `image/*` 文件为 data URL 后写入 Canvas project；项目导入仍读取 `.json` 文件并克隆为当前会话的新 project；“运行”仍调用 `useAppStore.runCanvasWorkflow()`。Dock 和画布助手都不出现视频或音频入口。CanvasWorkspace 的 active project 分支是 flex 容器，确保 CanvasViewport 在真实浏览器中铺满主区域，右侧助手不会覆盖底部 dock 或画布浮层。`CanvasWorkspace` 只根据 Provider settings 的 `selectedAgentProfileId` 判断是否展示 Agent 模式 badge，并把节点定位请求转发到 `CanvasViewportHandle.focusNode(nodeId, { highlight })`。`src/components/canvas/CanvasWorkspace.tsx:8` `src/components/canvas/CanvasWorkspace.tsx:203` `src/components/canvas/CanvasWorkspace.tsx:211` `src/components/canvas/CanvasWorkspace.tsx:224`
 
-`CanvasAssistantPanel` 管理页面会话内的助手消息和输入框；提交后调用 `parseCanvasAssistantCommand()` 得到结构化动作，再按顺序执行。它可以创建 text / generate / config / batch / result 节点，创建“文本 -> 生成”的 prompt chain，连接已有节点，修改 text/generate/batch 内容，运行指定或最新 generate node，或运行整个 Canvas workflow。连接前会复用 `canvasConnectionKindForNodes()` 和 `wouldCreateCanvasConnectionCycle()` 做本地校验，非法、重复或成环连接会以助手回执说明，不会写入 project。助手不调用 Provider、prompt API 或外部 AI；生成动作仍只通过 `useAppStore.generateCanvasNode()` / `runCanvasWorkflow()` 进入既有生成链路。`src/components/canvas/CanvasAssistantPanel.tsx:39` `src/services/canvas-assistant.ts:33` `src/store/canvas-store.ts:66`
+`CanvasAssistantPanel` 管理页面会话内的助手消息、输入框、Agent timeline 和 pending changes。提交后优先调用 `runCanvasAgent()`：runner 会把当前 Canvas project 摘要和历史消息交给 Canvas Agent Provider，通过原生 tool calling 调用受控工具；每次模型调用、工具调用、权限拦截、错误和最终回复都会形成 timeline event。Agent 不可用时，面板回退到 `parseCanvasAssistantCommand()` 本地规则路径，仍可创建 text / generate / config / batch / result 节点，创建“文本 -> 生成”的 prompt chain，连接已有节点，修改 text/generate/batch 内容，运行指定或最新 generate node，或运行整个 Canvas workflow。legacy 连接前仍复用 `canvasConnectionKindForNodes()` 和 `wouldCreateCanvasConnectionCycle()` 做本地校验，非法、重复或成环连接会以助手回执说明，不会写入 project。`src/components/canvas/CanvasAssistantPanel.tsx:8` `src/components/canvas/CanvasAssistantPanel.tsx:84` `src/components/canvas/CanvasAssistantPanel.tsx:130` `src/components/canvas/CanvasAssistantPanel.tsx:142` `src/components/canvas/CanvasAssistantPanel.tsx:343` `src/components/canvas/CanvasAssistantPanel.tsx:527` `src/components/canvas/CanvasAssistantPanel.tsx:575`
 
-`CanvasNodeLayer` 渲染文本、图片、生成、配置、批量、结果节点和 SVG 连线，负责节点选择、标题栏拖动、文本编辑、连接 handle、节点动作条、连接创建菜单、删除节点和删除连线。`CanvasNodeActionToolbar` 在节点 hover 或 selected 时出现：text 节点可一键创建下游 generate node 并触发生成；image/result 节点可预览图片和打开 mask 编辑；generate 节点可运行或重试，running 状态不可重复点击；删除节点统一走动作条且仍调用 `deleteNode()` 清理 connections。连接创建菜单在用户从节点开始连接后点击空白画布时出现：text/image/result/config/batch source 只提供 generate 目标，generate source 只提供 result 目标；菜单自身阻止背景 pan，创建目标后调用 `addConnectedNode()` 完成节点创建和自动连线。节点选择态只存在于组件局部，不持久化；生成节点主体由 `CanvasGenerateNodeBody` 承载 prompt、输入摘要、运行按钮、状态、错误和 partial preview；输入摘要由 `CanvasNodeLayer` 基于当前 nodes/connections 组装 project snapshot 后调用 `summarizeCanvasGenerationInput()` 计算。配置、批量、结果节点 body 分别由 `CanvasConfigNodeBody`、`CanvasBatchNodeBody`、`CanvasResultNodeBody` 承载。`src/components/canvas/CanvasNodeLayer.tsx:19` `src/components/canvas/CanvasGenerateNodeBody.tsx:1`
+Canvas Agent V1 的工具层集中在 `canvas-agent-context/tools/runner`：context 服务生成受限 summary、inspect 节点和 inspect 生成上下文；tool registry 声明 `list_canvas_state`、`inspect_node`、`focus_node`、创建/连接/运行工具、`propose_prompt_enrichment`、`apply_pending_change`、`confirm_tool_plan` 和 `cancel_pending_change`，并把 mutation 顺序转交给 Canvas store / app-store executor；runner 默认最多执行 8 次 tool call，未知工具、非法参数和工具错误会作为 tool result 回传给模型。`propose_prompt_enrichment` 只生成 pending change，不直接覆盖节点；`apply_pending_change` 是 confirm 权限工具，默认不允许由模型自动执行，UI 用户点“应用”时才以 `allowConfirmTools` 路径执行。`src/services/canvas-agent-context.ts:62` `src/services/canvas-agent-tools.ts:18` `src/services/canvas-agent-tools.ts:66` `src/services/canvas-agent-tools.ts:75` `src/services/canvas-agent-tools.ts:329` `src/services/canvas-agent-tools.ts:365` `src/services/canvas-agent-runner.ts:6` `src/services/canvas-agent-runner.ts:91` `src/services/canvas-agent-runner.ts:108`
+
+`CanvasNodeLayer` 渲染文本、图片、生成、配置、批量、结果节点和 SVG 连线，负责节点选择、标题栏拖动、文本编辑、连接 handle、节点动作条、连接创建菜单、删除节点和删除连线。`CanvasNodeActionToolbar` 在节点 hover 或 selected 时出现：text 节点可一键创建下游 generate node 并触发生成；image/result 节点可预览图片和打开 mask 编辑；generate 节点可运行或重试，running 状态不可重复点击；删除节点统一走动作条且仍调用 `deleteNode()` 清理 connections。连接创建菜单在用户从节点开始连接后点击空白画布时出现：text/image/result/config/batch source 只提供 generate 目标，generate source 只提供 result 目标；菜单自身阻止背景 pan，创建目标后调用 `addConnectedNode()` 完成节点创建和自动连线。节点选择态和 Agent highlight 都只存在于组件局部，不持久化；`CanvasViewportHandle.focusNode(nodeId, { highlight: true })` 会先把视口定位到目标节点，再让 `CanvasNodeLayer` 短时显示高亮 ring。生成节点主体由 `CanvasGenerateNodeBody` 承载 prompt、输入摘要、运行按钮、状态、错误和 partial preview；输入摘要由 `CanvasNodeLayer` 基于当前 nodes/connections 组装 project snapshot 后调用 `summarizeCanvasGenerationInput()` 计算。配置、批量、结果节点 body 分别由 `CanvasConfigNodeBody`、`CanvasBatchNodeBody`、`CanvasResultNodeBody` 承载。`src/components/canvas/CanvasNodeLayer.tsx:19` `src/components/canvas/CanvasNodeLayer.tsx:104` `src/components/canvas/CanvasNodeLayer.tsx:153` `src/components/canvas/CanvasNodeLayer.tsx:353` `src/components/canvas/CanvasViewport.tsx:32` `src/components/canvas/CanvasViewport.tsx:103` `src/components/canvas/CanvasGenerateNodeBody.tsx:1`
 
 经典工作台和图库复用的 `ImageTile` 在成功图更多菜单中提供“加入 Canvas”入口。该入口调用 `useAppStore.addHistoryToCanvas(historyId)`：先把历史图通过 `pixaiApi.reference.addFromHistoryMany(activeConversationId, [historyId])` 导入当前会话参考图，再确保当前会话有默认 Canvas project，最后创建带 `historyItemId` 与 `referenceImageId` 的 Canvas image node，并切换到 Canvas 视图。当前参考图缩略图则走 `useAppStore.addReferenceToCanvas(referenceImageId)`：它不复制 reference，不调用 `reference.addFromHistoryMany()`，只把已有参考图的 `referenceImageId/storagePath`、安全展示源和基础文件信息写入 Canvas image node；同一参考图重复加入由 `useCanvasStore.addImageNode()` 去重。`src/components/workspace/ImageTile.tsx:23` `src/components/workspace/ImageTile.tsx:186` `src/components/workspace/Composer.tsx:289` `src/store/app-store.ts:608` `src/store/app-store.ts:647`
 
@@ -112,7 +116,7 @@ Canvas generate node 通过 `useAppStore.generateCanvasNode(nodeId)` 手动触�
 
 `useAppStore.runCanvasWorkflow()` 从 active project 构建 bounded workflow plan：按 project.nodes 顺序选择空闲 generate node，batch node 的非空行会展开为多个请求，超过 8 个请求时整体拒绝且不发起半执行；单个请求失败会标记当前 generate node failed 并继续后续请求。该执行仍不是 DAG 拓扑、并发队列或后台调度。`src/services/canvas-workflow.ts:1` `src/store/app-store.ts:573`
 
-Canvas 模式当前支持右侧画布助手、节点动作条、连接到空白创建合法下游节点、生成节点输入摘要、多图/批量结果追加 result 节点、文本一键生成、当前参考图/历史图/图库图/本地图片加入 Canvas、图片/结果预览和 mask 编辑、生成节点运行/重试、手动单节点生成、Canvas-origin history/gallery 标识、project JSON 导入导出、配置/批量/结果节点和 8 次请求以内的顺序 workflow run，但不支持端口体系、复杂 DAG 调度、并发队列、后台批量调度、workflow agent、复杂结果分组折叠、从图库跳回 Canvas 节点、节点级取消 UI、视频/音频节点或助手动作、带图片资源包的项目包、云同步或批量导入导出。
+Canvas 模式当前支持右侧 Canvas Agent / 画布助手、Agent Provider 原生 tool calling、运行 timeline、pending prompt change、节点 focus/highlight、legacy 规则兜底、节点动作条、连接到空白创建合法下游节点、生成节点输入摘要、多图/批量结果追加 result 节点、文本一键生成、当前参考图/历史图/图库图/本地图片加入 Canvas、图片/结果预览和 mask 编辑、生成节点运行/重试、手动单节点生成、Canvas-origin history/gallery 标识、project JSON 导入导出、配置/批量/结果节点和 8 次请求以内的顺序 workflow run，但不支持端口体系、复杂 DAG 调度、并发队列、后台批量调度、复杂 workflow agent、复杂结果分组折叠、从图库跳回 Canvas 节点、节点级取消 UI、视频/音频节点或助手动作、删除/批量破坏性 Agent 工具、带图片资源包的项目包、云同步或批量导入导出。
 
 ### 2.4 设置系统
 
@@ -120,9 +124,9 @@ Canvas 模式当前支持右侧画布助手、节点动作条、连接到空白�
 
 `GlobalSettingsModal` 使用 shadcn Dialog + Tabs + ScrollArea，按 General、Notifications、Services、Extensions 四个 tab 组织低频应用级配置。`src/components/settings/global/GlobalSettingsModal.tsx:20` `src/components/settings/global/GlobalSettingsModal.tsx:42` `src/components/settings/global/GlobalSettingsModal.tsx:64`
 
-`ServicesSettingsTab` 负责 Provider 默认选择、模型默认值、Provider 列表和 Provider 编辑弹窗入口；它复用 `GallerySelect`、`Input`、`Button`、`Card` 等 primitives。`src/components/settings/global/ServicesSettingsTab.tsx:14` `src/components/settings/global/ServicesSettingsTab.tsx:118` `src/components/settings/global/ServicesSettingsTab.tsx:225`
+`ServicesSettingsTab` 负责图片、提示词和 Canvas Agent 三类 Provider 默认选择、模型默认值、Provider 列表和 Provider 编辑弹窗入口；Canvas Agent 默认 Provider 只展示同时启用 `agent` usage 且具备 `canvas-agent` / `native-tool-calling` capability 的 profile。`src/components/settings/global/ServicesSettingsTab.tsx:14` `src/components/settings/global/ServicesSettingsTab.tsx:30` `src/components/settings/global/ServicesSettingsTab.tsx:120` `src/components/settings/global/ServicesSettingsTab.tsx:179` `src/components/settings/global/ServicesSettingsTab.tsx:284`
 
-`ProviderProfileDialog` 是 Provider 创建/编辑表单，使用 Dialog、Input、Label、Button 与 Select 封装。`src/components/settings/providers/ProviderProfileDialog.tsx:20` `src/components/settings/providers/ProviderProfileDialog.tsx:35`
+`ProviderProfileDialog` 是 Provider 创建/编辑表单，使用 Dialog、Input、Label、Button 与 Select 封装，并允许分别开关 image / prompt / agent usage、填写 Canvas Agent 模型和维护 profile capabilities。`src/components/settings/providers/ProviderProfileDialog.tsx:20` `src/components/settings/providers/ProviderProfileDialog.tsx:48` `src/components/settings/providers/ProviderProfileDialog.tsx:121` `src/components/settings/providers/ProviderProfileDialog.tsx:160`
 
 ### 2.5 库页面
 
@@ -142,6 +146,8 @@ UI 不直接持久化业务数据。`useAppStore` 仍拥有视图、主题、设
 
 主题状态是 `darkMode`，切换 action 是 `toggleTheme()`；`App` 把它翻译为 `.dark` class。`src/store/app-store.ts:39` `src/store/app-store.ts:64` `src/store/app-store.ts:194` `src/App.tsx:102`
 
+Provider settings 现在区分 `image`、`prompt` 和 `agent` 三种 usage，并在 `ProviderSettings.selectedAgentProfileId` 中保存 Canvas Agent 默认 Provider；profile 自身保存 `defaultAgentModel` 和 capability 列表。`ProviderSettingsStore` normalize 时只会把 `selectedAgentProfileId` 指向同时启用 `agent` usage 且包含 `canvas-agent` / `native-tool-calling` capability 的 profile，没有兼容 profile 时保持空字符串。`src/shared/types.ts:14` `src/shared/types.ts:20` `src/shared/types.ts:142` `src/shared/types.ts:175` `src/services/provider-settings.ts:159` `src/services/provider-settings.ts:169` `src/services/provider-settings.ts:213`
+
 Canvas project 状态不进入 `useAppStore` 的业务 action 列表。`useCanvasStore` 单独保存项目摘要、当前项目、loading 和错误，并暴露 `loadProjects`、`ensureDefaultProject`、`openProject`、`exportActiveProject`、`importProjectFromJson`、`updateViewport`、`resetViewport` 以及节点/连线 actions：`addTextNode`、`addImageNode`、`addGenerateNode`、`addConfigNode`、`addBatchNode`、`addResultNode`、`createNode`、`createGenerateNodeFromText`、`addConnectedNode`、`updateNodeContent`、`updateNodeMetadata`、`updateGenerateNodeState`、`bindImageNodeReference`、`recordGeneratedResult`、`addGeneratedImageNode`、`moveNode`、`deleteNode`、`addConnection`、`deleteConnection`。`createNode({ type, content, metadata })` 是画布助手使用的返回节点原子 action，只创建可空白初始化的 text/generate/config/batch/result 节点，不创建空 image 节点；创建成功后返回持久化后的节点 id 供后续连接或运行。`createGenerateNodeFromText(textNodeId)` 会在一次 project mutation 内创建空 generate node 并建立 prompt connection，返回新 generate node id；空文本或非 text node 不写盘。`addConnectedNode({ sourceNodeId, type, position })` 会在一次 project mutation 内创建目标节点，并用 `canvasConnectionKindForNodes(source, target)` 推导连接类型；非法 source、非法目标、重复连接或潜在环路不写盘。`ensureDefaultProject` 带 single-flight 保护，避免 React StrictMode 或 effect 重入时重复创建默认项目；导入成功后 store 会刷新 project summaries 并把 active project 切到导入结果。`src/store/canvas-store.ts:6` `src/store/canvas-store.ts:28` `src/store/canvas-store.ts:66`
 
 Canvas image node metadata 当前可保留 `referenceImageId`、`historyItemId`、`storagePath`、`mimeType`、`fileSizeBytes`、`naturalWidth` 和 `naturalHeight`。`useCanvasStore.addImageNode()` 会把来源绑定字段写入 metadata，并在同一 project 内对相同 `referenceImageId` 或 `historyItemId` 去重，避免重复加入同一参考图或历史图。`src/shared/types.ts:47` `src/store/canvas-store.ts:266` `src/store/canvas-store.ts:280`
@@ -152,11 +158,17 @@ Canvas generate node metadata 当前可保留 `status/runId/requestIndex/errorMe
 
 `CanvasWorkflowService` 是纯计划层：`buildCanvasGenerationPlanForNode()` 解析单个 generate node 的 prompt/config/batch 输入，`buildCanvasWorkflowPlan()` 解析整个 project 的顺序请求计划、missing prompt、running skip 和 8 次请求预算，`summarizeCanvasGenerationInput()` 解析生成节点的只读输入摘要。它不调用 `ImageService`、不修改 store、不读写 history。`src/services/canvas-workflow.ts:1`
 
-`CanvasAssistantService` 是纯解析层：`parseCanvasAssistantCommand(input)` 把显式中文命令解析成 `create-node`、`create-chain`、`connect`、`set-prompt`、`run-node` 或 `run-workflow` 动作；未知输入返回示例 hints。它不读写 store、不调用 Provider、不保存助手消息，是 UI 可替换的轻量调度契约。`src/services/canvas-assistant.ts:1`
+`CanvasAgentService` 是 Provider 调用门面：它读取 `selectedAgentProfileId`，取对应 runtime profile 和 adapter；没有 agent provider 或 adapter 不支持 `runCanvasAgentTurn` 时抛出 `CanvasAgentUnavailableError`，让 UI 回到 legacy 本地规则路径。OpenAI-compatible adapter 的 `runCanvasAgentTurn()` 使用 profile 的 `defaultAgentModel`，把 tool definitions 发给模型并解析返回的 tool calls。`src/services/canvas-agent-service.ts:17` `src/services/canvas-agent-service.ts:22` `src/adapters/types.ts:68` `src/adapters/openai-compatible.ts:238` `src/adapters/openai-compatible.ts:486`
+
+`CanvasAgentContext` / `CanvasAgentToolRegistry` / `CanvasAgentRunner` 共同承担 Agent 状态、工具和循环。Context 只生成短摘要、节点 inspect 和生成上下文 inspect，并对图片 data URL 做脱敏/摘要化；tool registry 统一校验参数、权限和结果，所有带 `focusNodeId` 的工具结果会调用 `focusNode(id, { highlight: true })`；runner 维护 timeline 和 pending changes，默认最多 8 次工具调用。pending change、timeline 和短时高亮都属于运行态 UI 状态，不写入 Canvas project，也不进入 project JSON 导出。`src/services/canvas-agent-context.ts:62` `src/services/canvas-agent-context.ts:81` `src/services/canvas-agent-context.ts:103` `src/services/canvas-agent-tools.ts:66` `src/services/canvas-agent-tools.ts:75` `src/services/canvas-agent-runner.ts:6` `src/services/canvas-agent-runner.ts:39` `src/services/canvas-agent-runner.ts:61`
+
+`CanvasAssistantService` 是 legacy 纯解析层：`parseCanvasAssistantCommand(input)` 把显式中文命令解析成 `create-node`、`create-chain`、`connect`、`set-prompt`、`run-node` 或 `run-workflow` 动作；未知输入返回示例 hints。它不读写 store、不调用 Provider、不保存助手消息，是 Canvas Agent 不可用时的本地兜底契约。`src/services/canvas-assistant.ts:1`
 
 `GenerationOrigin` 是 `GenerateImageInput`、`GenerationRun` 和 `ImageHistoryItem` 上的可选来源字段。`ImageService` 创建 run、成功 history 和失败 history 时透传合法 origin；`AppDatabase` 读取旧数据时会保留合法 `workspace/canvas` origin、清理缺 project/node id 的非法 Canvas origin，并把 `canvas` / `画布` 纳入 history 查询文本。`src/shared/types.ts:8` `src/shared/generation-origin.ts:1` `src/services/image-service.ts:22` `src/services/app-database.ts:133`
 
-`CanvasProjectService` 使用独立本地 state key `pixai-canvas-projects` 保存 `{ projects: CanvasProject[] }`，不修改 conversations、runs 或 history 的持久化结构。服务提供 list/get/exportProject/create/importProject/update/delete，并在读取到无效 Canvas JSON 时记录 `[PixAI Canvas] Invalid canvas project state; resetting.` 后恢复为空项目列表。服务会规范化 nodes/connections：过滤无效图片节点/结果节点、无效端点、自连接和重复连线；图片展示源支持 data URL、http(s)、asset、blob、browser-memory 和本地路径，并保留 `referenceImageId/historyItemId/storagePath/requestIndex/batchRootId/batchIndex/promptVariant` 来源与结果上下文字段。`importProject(input, conversationId)` 把未知 JSON 当不可信输入处理，刷新 project id、绑定传入 conversation、重写时间戳、过滤非法结构，并把导入的 `running` generate/result node 降级为 `idle`，同时清除不会继续完成的运行绑定。`src/services/canvas-projects.ts:6` `src/services/canvas-projects.ts:47` `src/services/canvas-projects.ts:101` `src/services/canvas-projects.ts:188`
+`CanvasProjectService` 使用独立本地 state key `pixai-canvas-projects` 保存 `{ projects: CanvasProject[] }`，不修改 conversations、runs 或 history 的持久化结构。服务提供 list/get/exportProject/create/importProject/update/delete，并在读取到无效 Canvas JSON 时记录 `[PixAI Canvas] Invalid canvas project state; resetting.` 后恢复为空项目列表。服务会规范化 nodes/connections：过滤无效图片节点/结果节点、无效端点、自连接和重复连线；图片展示源支持 data URL、http(s)、asset、blob、browser-memory 和本地路径，并保留 `referenceImageId/historyItemId/storagePath/requestIndex/batchRootId/batchIndex/promptVariant` 来源与结果上下文字段。`importProject(input, conversationId)` 把未知 JSON 当不可信输入处理，刷新 project id、绑定传入 conversation、重写时间戳、过滤非法结构，并把导入的 `running` generate/result node 降级为 `idle`，同时清除不会继续完成的运行绑定。`assistantMessages` 只作为旧数据兼容字段读取和迁移，`exportProject()` 默认返回空助手消息。`src/services/canvas-projects.ts:6` `src/services/canvas-projects.ts:47` `src/services/canvas-projects.ts:101` `src/services/canvas-projects.ts:188`
+
+`CanvasAssistantSessionService` 是画布助手消息的当前事实源。Tauri runtime 下它通过 `src/lib/platform.ts` 调用 Rust commands，把消息写入 app data 下的 `pixai-canvas-assistant.sqlite3`；浏览器/test fallback 使用 `pixai-canvas-assistant-sessions` JSON state。会话记录按 `projectId` 隔离，支持 append、最近页 list、before cursor 加载更早、clear 当前项目聊天、deleteProject 清理项目消息，并在打开旧 project 时把 `CanvasProject.assistantMessages` 迁移到独立会话存储。`src/services/canvas-assistant-sessions.ts:1` `src/lib/platform.ts:253` `src-tauri/src/lib.rs:1`
 
 Canvas project JSON 文件读写由 `src/lib/platform.ts` 的文本 helper 承担：`downloadTextFile()` 在 Tauri 下走保存对话框 + `write_binary_file`，浏览器下走 object URL 下载；`readTextFile()` 封装 DOM `FileReader`。这些 helper 只处理文本文件，不理解 Canvas project 业务。`src/lib/platform.ts:434` `src/lib/platform.ts:456`
 
@@ -166,6 +178,7 @@ Canvas viewport 由 `CanvasProjectService.normalizeViewport()` 规范化，缩�
 
 - UI 技术栈采用 Tailwind v4 + shadcn/ui，详见 `.codestable/compound/2026-05-24-decision-shadcn-tailwind-ui-stack.md`。这条决策约束后续页面优先扩展 `src/components/ui/*`，不恢复旧 `styles.css`。
 - 设置系统继续分为工作区高频参数与全局低频设置。这个边界在总入口已有记录，并由 `WorkspaceConfigPanel` 与 `GlobalSettingsModal` 两个组件实现。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:99` `src/components/settings/global/GlobalSettingsModal.tsx:42`
+- Canvas Agent 使用独立 Agent Provider 选择，不复用 Prompt Provider；V1 只走 adapter 原生 tool calling，不实现 JSON plan fallback。模型只能通过受控工具影响 Canvas，confirm 工具默认不自动执行。`src/services/provider-settings.ts:169` `src/adapters/types.ts:68` `src/services/canvas-agent-tools.ts:66`
 
 ## 5. 代码锚点
 
@@ -186,12 +199,13 @@ Canvas viewport 由 `CanvasProjectService.normalizeViewport()` 规范化，缩�
 - `src/shared/generation-origin.ts` — generation origin normalize、Canvas 判定和来源搜索文本。
 - `src/lib/platform.ts:fetchTextStreamThroughPlatform` — 浏览器/Tauri 流式文本 chunk 管道。
 - `src/lib/platform.ts:downloadTextFile` / `readTextFile` — 浏览器/Tauri 文本文件导出和 DOM 文件读取 helper。
-- `src/adapters/openai-compatible.ts:openAiCompatibleAdapter` — OpenAI compatible images/responses SSE 解析和 partial image callback。
+- `src/adapters/types.ts` — Provider adapter capability 与 Canvas Agent tool calling 契约。
+- `src/adapters/openai-compatible.ts:openAiCompatibleAdapter` — OpenAI compatible images/responses SSE 解析、partial image callback 和 Canvas Agent 原生 tool calling 请求解析。
 - `src/services/image-service.ts:ImageService` — run/request 级生成编排、最终 history 落库和 partial preview 语义补齐。
 - `src/components/canvas/CanvasWorkspace.tsx:CanvasWorkspace` — Canvas 模式画布优先页面容器、默认项目创建/恢复、项目 command bar、生图 dock、项目 JSON 导入导出和空状态。
-- `src/components/canvas/CanvasAssistantPanel.tsx:CanvasAssistantPanel` — 右侧画布助手对话 UI、助手动作顺序执行和执行回执。
-- `src/components/canvas/CanvasViewport.tsx:CanvasViewport` — 空无限画布视口、平移缩放、重置控件和连接模式下的空白点击接管。
-- `src/components/canvas/CanvasNodeLayer.tsx:CanvasNodeLayer` — 文本/图片/生成节点、SVG 连线、选择、拖动、节点动作条、连接创建菜单、删除和连接 handle。
+- `src/components/canvas/CanvasAssistantPanel.tsx:CanvasAssistantPanel` — 右侧 Canvas Agent / 画布助手对话 UI、Agent timeline、pending change、legacy fallback 和执行回执。
+- `src/components/canvas/CanvasViewport.tsx:CanvasViewport` — 空无限画布视口、平移缩放、重置控件、连接模式下的空白点击接管和节点 focus imperative handle。
+- `src/components/canvas/CanvasNodeLayer.tsx:CanvasNodeLayer` — 文本/图片/生成节点、SVG 连线、选择、拖动、节点动作条、连接创建菜单、删除、连接 handle 和短时高亮。
 - `src/components/canvas/CanvasGenerateNodeBody.tsx:CanvasGenerateNodeBody` — 生成节点主体、输入摘要、运行按钮、状态、错误和 partial preview 展示。
 - `src/components/canvas/CanvasConfigNodeBody.tsx:CanvasConfigNodeBody` — 配置节点 ratio / quality / n 覆盖 UI。
 - `src/components/canvas/CanvasBatchNodeBody.tsx:CanvasBatchNodeBody` — 批量节点 prompt 变体编辑 UI。
@@ -199,28 +213,38 @@ Canvas viewport 由 `CanvasProjectService.normalizeViewport()` 规范化，缩�
 - `src/store/canvas-store.ts:useCanvasStore` — Canvas project 独立 Zustand store。
 - `src/services/canvas-projects.ts:CanvasProjectService` — Canvas project 本地持久化服务、导入导出 clone 和 viewport 规范化。
 - `src/services/canvas-workflow.ts` — Canvas workflow 纯计划解析、生成节点输入摘要、batch 展开和 request budget。
-- `src/services/canvas-assistant.ts` — 画布助手纯命令解析、动作类型和未知命令示例。
+- `src/services/canvas-agent-service.ts` — Canvas Agent Provider 选择、adapter 获取和不可用错误语义。
+- `src/services/canvas-agent-context.ts` — Canvas Agent summary、inspect node 和 inspect generation context 纯函数。
+- `src/services/canvas-agent-tools.ts` — Canvas Agent V1 工具 registry、权限、参数校验、pending change 和 focus/highlight 执行约束。
+- `src/services/canvas-agent-runner.ts` — Canvas Agent 有限 tool loop、timeline、pending changes、错误恢复和 8 次工具调用预算。
+- `src/services/canvas-assistant.ts` — legacy 画布助手纯命令解析、动作类型和未知命令示例。
 - `src/store/app-store.ts:addHistoryToCanvas` — history -> reference -> Canvas image node 的跨 store 编排入口。
 - `src/store/app-store.ts:addReferenceToCanvas` — 当前参考图 -> Canvas image node 的跨 store 编排入口。
 - `src/store/app-store.ts:generateCanvasNode` — Canvas generate node -> ImageService/history -> Canvas result node 的跨 store 编排入口。
 - `src/store/app-store.ts:runCanvasWorkflow` — Canvas bounded workflow run 的跨 store 编排入口。
 - `src/services/app-api.ts:createPixaiApi` — `pixaiApi.canvas` 门面挂载点。
+- `src/services/provider-settings.ts` — Provider settings 持久化、agent usage/default profile normalize 和 compatibility 校验。
 - `src/components/settings/workspace/WorkspaceConfigPanel.tsx:WorkspaceConfigPanel` — 高频生图参数栏。
 - `src/components/settings/global/GlobalSettingsModal.tsx:GlobalSettingsModal` — 低频全局设置容器。
+- `src/components/settings/global/ServicesSettingsTab.tsx` — 图片 / 提示词 / Canvas Agent 默认 Provider 选择和 Provider 列表。
+- `src/components/settings/providers/ProviderProfileDialog.tsx` — Provider profile usage、Agent 模型和 capability 编辑表单。
 
 ## 6. 已知约束 / 边界情况
 
 - UI 重写不得改变 `useAppStore` actions 的业务语义；视觉组件从 store 读取或调用 action，但不重新定义持久化边界。`src/store/app-store.ts:60`
-- 高频生图参数必须在工作区一层可达；Provider 完整维护在全局 Services tab 内。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:121` `src/components/settings/global/ServicesSettingsTab.tsx:118`
+- 高频生图参数必须在工作区一层可达；Provider 完整维护在全局 Services tab 内。Canvas Agent 默认 Provider 需要独立选择，只能指向 agent-compatible profile。`src/components/settings/workspace/WorkspaceConfigPanel.tsx:121` `src/components/settings/global/ServicesSettingsTab.tsx:118` `src/components/settings/global/ServicesSettingsTab.tsx:179`
 - 主模式页面使用专属 Shell，跨模式共享页使用 Shared Shell；不要把模式专属侧栏或参数面板塞进单一全局 Layout。
 - 工作区参数栏只属于 WorkspaceShell。CanvasShell 不渲染 `WorkspaceConfigPanel` 或“参数栏”按钮；Canvas 未来的 inspector / project panel 需要使用 Canvas 专属状态和组件。
 - Gallery / Prompt Library 只使用 SharedLibraryShell，不继承普通会话侧栏或 Canvas project 侧栏。
 - Canvas workbench dock 只承载生图相关命令：文本、图片、生成、配置、批量、结果、运行、重置、导入、导出和引导；不得引入视频或音频入口。
-- Canvas Assistant Panel 只属于 CanvasWorkspace，不复用或打开 WorkspaceConfigPanel；助手消息只保存在 React 页面会话内，不写入 Canvas project JSON。
+- Canvas Assistant Panel 只属于 CanvasWorkspace，不复用或打开 WorkspaceConfigPanel；助手消息写入独立本地会话存储，不写入 Canvas project JSON，不做云同步。Agent timeline、pending change 和节点高亮都是运行态 UI 状态，不持久化到 Canvas project。
 - 应用是桌面工作台，当前 CSS 基线设置了 `1080px × 720px` 最小尺寸，不按移动端响应式重排。`src/index.css:126`
 - 隐藏文件上传 input 仍保留在 `Composer` 中，因为浏览器文件选择能力需要真实 file input 作为入口；粘贴 / 拖入图片只是新增入口，不能替代文件选择控件。Windows Tauri 默认文件拖放会先进入原生 `onDragDropEvent`，不能只依赖 HTML5 `DataTransfer.files`。`src/components/workspace/Composer.tsx:71` `src/components/workspace/Composer.tsx:167`
 - Canvas project 绑定进入 Canvas 或导入项目时的当前会话，不创建隐藏会话，不改变会话列表语义；后续生成节点如果需要一项目一会话，需要单独 feature 明确迁移策略。
-- Canvas 模式当前提供 project shell、画布优先 viewport、底部生图 dock、右侧画布助手、文本/图片/生成/配置/批量/结果节点、节点动作条、连接到空白创建合法下游节点、生成节点输入摘要、多图/批量结果追加 result 节点、基础连线、当前参考图/历史图/图库图/本地图片到 Canvas image/result node 的桥接、文本一键生成、手动单节点生成、Canvas-origin history/gallery 标识、Canvas project JSON 导入导出，以及 8 次请求以内的顺序 workflow run；仍不支持端口体系、复杂 DAG 调度、并发队列、后台批量调度、workflow agent、复杂结果分组折叠、从图库跳回 Canvas 节点、节点级取消 UI、视频/音频节点或助手动作、带图片资源包的项目包、云同步或批量导入导出。
+- Canvas 模式当前提供 project shell、画布优先 viewport、底部生图 dock、右侧 Canvas Agent / 画布助手、Agent Provider 原生 tool calling、timeline、pending prompt change、节点定位高亮、legacy 规则兜底、文本/图片/生成/配置/批量/结果节点、节点动作条、连接到空白创建合法下游节点、生成节点输入摘要、多图/批量结果追加 result 节点、基础连线、当前参考图/历史图/图库图/本地图片到 Canvas image/result node 的桥接、文本一键生成、手动单节点生成、Canvas-origin history/gallery 标识、Canvas project JSON 导入导出，以及 8 次请求以内的顺序 workflow run；仍不支持端口体系、复杂 DAG 调度、并发队列、后台批量调度、复杂 workflow agent、复杂结果分组折叠、从图库跳回 Canvas 节点、节点级取消 UI、视频/音频节点或助手动作、删除/批量破坏性 Agent 工具、带图片资源包的项目包、云同步或批量导入导出。
+- Canvas Agent V1 只支持原生 tool calling，不做 JSON plan fallback；未知工具、非法参数和工具执行失败必须反馈给模型，不能静默吞掉。
+- Canvas Agent mutation 工具顺序执行，不并发；单轮 runner 默认最多 8 次工具调用，预算耗尽后停止并返回明确说明。
+- Canvas Agent confirm 工具默认不由模型自动执行；`apply_pending_change` 只能由 UI 用户显式应用 pending change 后走允许确认工具的路径。
 - 从当前参考图加入 Canvas 不复制 reference，只保存 `referenceImageId/storagePath` 绑定和安全展示源；同一参考图重复加入由 Canvas store 去重。
 - Canvas project 导入永远 clone 为新 project，不覆盖已有项目，不复用 JSON 内 project id；导入只接受 schemaVersion 1 或缺省 schema，且 running generate/result node 会降级为 idle，避免恢复不会结束的旧运行态。
 - 图片节点当前可把 data URL 或可展示路径保存在 project JSON 中；`referenceImageId/historyItemId/storagePath` 只做来源绑定和后续生成输入准备，不新增素材文件清理策略。

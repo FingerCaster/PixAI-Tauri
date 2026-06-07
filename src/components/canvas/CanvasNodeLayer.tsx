@@ -31,10 +31,12 @@ type CanvasNodeLayerProps = {
   onGenerateNodeRun: (nodeId: string) => void | Promise<void>
   generationPreviews?: GenerationPreviewState
   promptEnriching?: boolean
+  promptEnrichingNodeId?: string | null
 }
 
 export type CanvasNodeLayerHandle = {
   handleCanvasBlankPointerDown: (input: CanvasBlankPointerDownInput) => boolean
+  focusNode: (nodeId: string, options?: { highlight?: boolean }) => void
 }
 
 type SelectedCanvasItem = { kind: 'node' | 'connection'; id: string } | null
@@ -89,7 +91,8 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
   onTextNodeGenerate,
   onGenerateNodeRun,
   generationPreviews = {},
-  promptEnriching = false
+  promptEnriching = false,
+  promptEnrichingNodeId = null
 }, ref) {
   const [draftNodes, setDraftNodes] = useState(nodes)
   const [selectedItem, setSelectedItem] = useState<SelectedCanvasItem>(null)
@@ -98,8 +101,10 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
   const [preview, setPreview] = useState<{ node: CanvasNodeData; source: string } | null>(null)
   const [maskEditor, setMaskEditor] = useState<{ node: CanvasNodeData; source: string } | null>(null)
   const [expandedTextNodeId, setExpandedTextNodeId] = useState<string | null>(null)
+  const [highlightedNodeId, setHighlightedNodeId] = useState<string | null>(null)
   const dragRef = useRef<DragState | null>(null)
   const dirtyContentNodeIdsRef = useRef<Set<string>>(new Set())
+  const highlightTimeoutRef = useRef<number | null>(null)
   const displayNodes = useMemo(() => draftNodes.map(normalizeNodeForRender), [draftNodes])
   const generationInputSummaryByNodeId = useMemo(() => {
     const project = renderCanvasProject(displayNodes, connections, viewport)
@@ -128,9 +133,28 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
     if (selectedItem?.kind === 'node' && !nodeById.has(selectedItem.id)) setSelectedItem(null)
     if (connectionSourceId && !nodeById.has(connectionSourceId)) setConnectionSourceId(null)
     if (pendingConnectionCreate && !nodeById.has(pendingConnectionCreate.sourceNodeId)) setPendingConnectionCreate(null)
-  }, [connectionSourceId, nodeById, pendingConnectionCreate, selectedItem])
+    if (highlightedNodeId && !nodeById.has(highlightedNodeId)) setHighlightedNodeId(null)
+  }, [connectionSourceId, highlightedNodeId, nodeById, pendingConnectionCreate, selectedItem])
+
+  useEffect(() => () => {
+    if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current)
+  }, [])
+
+  const flashNode = (nodeId: string) => {
+    if (highlightTimeoutRef.current) window.clearTimeout(highlightTimeoutRef.current)
+    setHighlightedNodeId(nodeId)
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedNodeId((current) => (current === nodeId ? null : current))
+      highlightTimeoutRef.current = null
+    }, 1600)
+  }
 
   useImperativeHandle(ref, () => ({
+    focusNode: (nodeId, options) => {
+      if (!nodeById.has(nodeId)) return
+      setSelectedItem({ kind: 'node', id: nodeId })
+      if (options?.highlight) flashNode(nodeId)
+    },
     handleCanvasBlankPointerDown: (input) => {
       if (!connectionSourceId) {
         if (pendingConnectionCreate) setPendingConnectionCreate(null)
@@ -326,10 +350,12 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
       </svg>
       {displayNodes.map((node) => {
         const selected = selectedItem?.kind === 'node' && selectedItem.id === node.id
+        const highlighted = highlightedNodeId === node.id
         const connecting = connectionSourceId === node.id
         const sourceLabel = sourcePortLabel(node)
         const targetLabel = connectionSourceNode && !connecting ? targetPortLabel(connectionSourceNode, node) : null
         const displayTitle = displayNodeTitle(node)
+        const currentNodeEnriching = promptEnrichingNodeId === node.id
         return (
           <div
             key={node.id}
@@ -345,6 +371,7 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
             }}
             data-canvas-node-id={node.id}
             data-canvas-node-type={node.type}
+            data-canvas-node-selected={selected ? 'true' : undefined}
             onPointerDown={(event) => {
               event.stopPropagation()
               selectNode(node.id)
@@ -365,7 +392,8 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
             <div
               className={cn(
                 'grid h-full grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-lg border bg-card text-card-foreground shadow-sm',
-                selected ? 'border-primary shadow-md ring-2 ring-primary/18' : 'border-border'
+                selected ? 'border-primary shadow-md ring-2 ring-primary/18' : 'border-border',
+                highlighted ? 'ring-4 ring-primary/45 shadow-lg shadow-primary/20 transition-shadow duration-300' : ''
               )}
             >
             <div
@@ -522,7 +550,7 @@ export const CanvasNodeLayer = forwardRef<CanvasNodeLayerHandle, CanvasNodeLayer
                       void onTextNodeEnrich(node.id)
                     }}
                   >
-                    {promptEnriching ? <Loader2 className="animate-spin" /> : <WandSparkles />}
+                    {currentNodeEnriching ? <Loader2 className="animate-spin" /> : <WandSparkles />}
                     丰富
                   </Button>
                 </div>

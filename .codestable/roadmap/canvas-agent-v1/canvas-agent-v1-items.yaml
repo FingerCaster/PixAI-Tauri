@@ -1,0 +1,75 @@
+roadmap: canvas-agent-v1
+created: 2026-06-07
+
+items:
+  - slug: canvas-agent-provider-settings
+    description: 为 Provider settings 增加 agent usage、agent 默认选择和 UI 配置入口
+    depends_on: []
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: 先解决 Agent Provider 和 Prompt Provider 分离
+
+  - slug: canvas-agent-adapter-contract
+    description: 定义 Canvas Agent tool calling 类型，并在 OpenAI-compatible adapter 实现 Responses API tool call 请求解析
+    depends_on: [canvas-agent-provider-settings]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: V1 只支持原生 tool calling
+
+  - slug: canvas-agent-state-summary
+    description: 实现 Canvas summary、inspect node、inspect generation context 的纯函数服务
+    depends_on: []
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: Summary 限制长文本，详情通过 inspect 工具读取
+
+  - slug: canvas-agent-tool-registry
+    description: 实现 V1 工具声明、参数校验、权限等级与 Canvas executor 适配
+    depends_on: [canvas-agent-state-summary]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: V1 mutation 顺序执行，不暴露删除类工具
+
+  - slug: canvas-agent-runner
+    description: 实现有限 tool loop、错误恢复、timeline 事件和 provider 调用
+    depends_on: [canvas-agent-adapter-contract, canvas-agent-tool-registry]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: true
+    notes: 默认最多 8 次 tool call，做完后端到端最小 Agent 可运行
+
+  - slug: canvas-agent-pending-changes
+    description: 实现提示词候选变更、确认应用、取消和 UI 操作
+    depends_on: [canvas-agent-tool-registry, canvas-agent-runner]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: propose_prompt_enrichment 不自动覆盖节点内容
+
+  - slug: canvas-agent-assistant-ui
+    description: Canvas Assistant Panel 接入 Agent Runner，展示 Run Timeline、pending change，并把 tool focus/highlight 接入 viewport
+    depends_on: [canvas-agent-runner, canvas-agent-pending-changes]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: UI 只承载对话、timeline 和确认操作，不再承载工具解析主逻辑
+
+  - slug: canvas-agent-legacy-fallback
+    description: 保留并收敛旧 regex 执行路径，未配置 Agent Provider 时自动 fallback 且 UI 明确标识
+    depends_on: [canvas-agent-assistant-ui]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: 保障未配置 agent provider 的用户仍可使用显式命令
+
+  - slug: canvas-agent-v1-acceptance-hardening
+    description: 全链路测试、类型检查、必要文档回写和回归修复
+    depends_on: [canvas-agent-legacy-fallback]
+    status: done
+    feature: canvas-agent-v1
+    minimal_loop: false
+    notes: 完成后回写 architecture 和 requirements 现状

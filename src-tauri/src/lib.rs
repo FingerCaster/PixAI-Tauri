@@ -2,6 +2,7 @@ use reqwest::{
     header::{HeaderValue, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     Client, Method,
 };
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{
@@ -38,6 +39,7 @@ const CODEX_BRIDGE_HOST: &str = "127.0.0.1";
 const CODEX_BRIDGE_PORT: u16 = 43117;
 const MAX_CODEX_BRIDGE_REQUEST_BYTES: usize = 2 * 1024 * 1024;
 const MAX_REFERENCE_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_CANVAS_ASSISTANT_MESSAGE_PAGE_SIZE: i64 = 100;
 const CODEX_BRIDGE_REQUEST_EVENT: &str = "pixai://codex-bridge/request";
 #[cfg(target_os = "windows")]
 const SYSTEM_NOTIFICATION_ACTIVATED_EVENT: &str = "pixai://system-notification/activated";
@@ -207,6 +209,32 @@ struct CodexBridgeHttpResponse {
     cors_origin: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasAssistantSessionMessage {
+    id: String,
+    project_id: String,
+    role: String,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasAssistantMessagePageRequest {
+    project_id: String,
+    limit: Option<i64>,
+    before: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CanvasAssistantMessagePage {
+    messages: Vec<CanvasAssistantSessionMessage>,
+    total: i64,
+    has_more: bool,
+}
+
 #[tauri::command]
 fn app_data_dir(app: AppHandle) -> Result<String, String> {
     Ok(app_data_path(&app)?.to_string_lossy().to_string())
@@ -343,6 +371,55 @@ fn read_json_state(app: AppHandle, name: String) -> Result<Option<String>, Strin
 fn write_json_state(app: AppHandle, name: String, payload: String) -> Result<(), String> {
     let path = data_file_path(&app, &name)?;
     fs::write(path, payload).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn append_canvas_assistant_messages(
+    app: AppHandle,
+    messages: Vec<CanvasAssistantSessionMessage>,
+) -> Result<(), String> {
+    if messages.is_empty() {
+        return Ok(());
+    }
+    let database_path = canvas_assistant_database_path(&app)?;
+    with_canvas_assistant_database(&database_path, |connection| {
+        append_canvas_assistant_messages_to(connection, messages)
+    })
+}
+
+#[tauri::command]
+fn list_canvas_assistant_messages(
+    app: AppHandle,
+    request: CanvasAssistantMessagePageRequest,
+) -> Result<CanvasAssistantMessagePage, String> {
+    let database_path = canvas_assistant_database_path(&app)?;
+    with_canvas_assistant_database(&database_path, |connection| {
+        list_canvas_assistant_messages_from(
+            connection,
+            &request.project_id,
+            request.limit.unwrap_or(50),
+            request.before.as_deref(),
+        )
+    })
+}
+
+#[tauri::command]
+fn clear_canvas_assistant_messages(app: AppHandle, project_id: String) -> Result<(), String> {
+    let database_path = canvas_assistant_database_path(&app)?;
+    with_canvas_assistant_database(&database_path, |connection| {
+        clear_canvas_assistant_messages_for(connection, &project_id)
+    })
+}
+
+#[tauri::command]
+fn delete_project_canvas_assistant_messages(
+    app: AppHandle,
+    project_id: String,
+) -> Result<(), String> {
+    let database_path = canvas_assistant_database_path(&app)?;
+    with_canvas_assistant_database(&database_path, |connection| {
+        clear_canvas_assistant_messages_for(connection, &project_id)
+    })
 }
 
 #[tauri::command]
@@ -670,7 +747,7 @@ fn read_local_image_file(path: String) -> Result<LocalImageReadResult, String> {
         ),
         file_size_bytes: fs::metadata(&resolved)
             .map_err(|error| error.to_string())?
-        .len(),
+            .len(),
     })
 }
 
@@ -705,18 +782,14 @@ async fn read_remote_image_url(url: String) -> Result<RemoteImageReadResult, Str
     }
 
     let filename = remote_filename(&request_url, response.headers().get(CONTENT_DISPOSITION));
-    let mime_type = normalize_remote_image_mime_type(response.headers().get(CONTENT_TYPE), &filename)?;
+    let mime_type =
+        normalize_remote_image_mime_type(response.headers().get(CONTENT_TYPE), &filename)?;
     let name = ensure_image_filename(&filename, mime_type);
-    let mut data = Vec::with_capacity(
-        content_length
-            .unwrap_or(0)
-            .min(MAX_REFERENCE_IMAGE_BYTES) as usize,
-    );
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|error| format_http_proxy_error("read-body", request_url_string.as_str(), &error))?
-    {
+    let mut data =
+        Vec::with_capacity(content_length.unwrap_or(0).min(MAX_REFERENCE_IMAGE_BYTES) as usize);
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
+        format_http_proxy_error("read-body", request_url_string.as_str(), &error)
+    })? {
         if data.len() as u64 + chunk.len() as u64 > MAX_REFERENCE_IMAGE_BYTES {
             return Err("单张参考图不能超过 20MB。".to_string());
         }
@@ -930,6 +1003,261 @@ fn app_data_path(app: &AppHandle) -> Result<PathBuf, String> {
 fn data_file_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     let safe_name = sanitize_name(name)?;
     Ok(app_data_path(app)?.join(format!("{safe_name}.json")))
+}
+
+fn canvas_assistant_database_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(app_data_path(app)?.join("pixai-canvas-assistant.sqlite3"))
+}
+
+fn with_canvas_assistant_database<T>(
+    path: &Path,
+    operation: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let connection = Connection::open(path).map_err(|error| error.to_string())?;
+    initialize_canvas_assistant_database(&connection)?;
+    operation(&connection)
+}
+
+fn initialize_canvas_assistant_database(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS canvas_assistant_messages (
+              id TEXT PRIMARY KEY,
+              project_id TEXT NOT NULL,
+              role TEXT NOT NULL CHECK(role IN ('assistant', 'user')),
+              content TEXT NOT NULL,
+              created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_canvas_assistant_messages_project_created
+            ON canvas_assistant_messages(project_id, created_at, id);
+            "#,
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn append_canvas_assistant_messages_to(
+    connection: &Connection,
+    messages: Vec<CanvasAssistantSessionMessage>,
+) -> Result<(), String> {
+    let transaction = connection
+        .unchecked_transaction()
+        .map_err(|error| error.to_string())?;
+    for message in messages {
+        if !is_valid_canvas_assistant_message(&message) {
+            continue;
+        }
+        transaction
+            .execute(
+                r#"
+                INSERT OR IGNORE INTO canvas_assistant_messages
+                  (id, project_id, role, content, created_at)
+                VALUES (?1, ?2, ?3, ?4, ?5)
+                "#,
+                params![
+                    message.id,
+                    message.project_id,
+                    message.role,
+                    message.content,
+                    message.created_at
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn list_canvas_assistant_messages_from(
+    connection: &Connection,
+    project_id: &str,
+    limit: i64,
+    before: Option<&str>,
+) -> Result<CanvasAssistantMessagePage, String> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() {
+        return Ok(CanvasAssistantMessagePage {
+            messages: Vec::new(),
+            total: 0,
+            has_more: false,
+        });
+    }
+    let limit = limit.clamp(1, MAX_CANVAS_ASSISTANT_MESSAGE_PAGE_SIZE);
+    let total: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM canvas_assistant_messages WHERE project_id = ?1",
+            params![project_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let before_message_id = before.map(str::trim).filter(|value| !value.is_empty());
+    let before_rowid = if let Some(message_id) = before_message_id {
+        match canvas_assistant_message_rowid(connection, project_id, message_id)? {
+            Some(rowid) => Some(rowid),
+            None => {
+                return Ok(CanvasAssistantMessagePage {
+                    messages: Vec::new(),
+                    total,
+                    has_more: false,
+                });
+            }
+        }
+    } else {
+        None
+    };
+    let mut messages = if let Some(before_rowid) = before_rowid {
+        query_canvas_assistant_messages_before(connection, project_id, limit, before_rowid)?
+    } else {
+        query_latest_canvas_assistant_messages(connection, project_id, limit)?
+    };
+    messages.reverse();
+    let has_more = if let Some(message) = messages.first() {
+        match canvas_assistant_message_rowid(connection, project_id, &message.id)? {
+            Some(rowid) => canvas_assistant_messages_before_count(connection, project_id, rowid)? > 0,
+            None => false,
+        }
+    } else {
+        false
+    };
+    Ok(CanvasAssistantMessagePage {
+        messages,
+        total,
+        has_more,
+    })
+}
+
+fn query_latest_canvas_assistant_messages(
+    connection: &Connection,
+    project_id: &str,
+    limit: i64,
+) -> Result<Vec<CanvasAssistantSessionMessage>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, project_id, role, content, created_at
+            FROM canvas_assistant_messages
+            WHERE project_id = ?1
+            ORDER BY rowid DESC
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    collect_canvas_assistant_messages(
+        statement.query_map(params![project_id, limit], row_to_canvas_assistant_message),
+    )
+}
+
+fn query_canvas_assistant_messages_before(
+    connection: &Connection,
+    project_id: &str,
+    limit: i64,
+    before_rowid: i64,
+) -> Result<Vec<CanvasAssistantSessionMessage>, String> {
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, project_id, role, content, created_at
+            FROM canvas_assistant_messages
+            WHERE project_id = ?1
+              AND rowid < ?2
+            ORDER BY rowid DESC
+            LIMIT ?3
+            "#,
+        )
+        .map_err(|error| error.to_string())?;
+    collect_canvas_assistant_messages(statement.query_map(
+        params![project_id, before_rowid, limit],
+        row_to_canvas_assistant_message,
+    ))
+}
+
+fn canvas_assistant_message_rowid(
+    connection: &Connection,
+    project_id: &str,
+    message_id: &str,
+) -> Result<Option<i64>, String> {
+    connection
+        .query_row(
+            r#"
+            SELECT rowid
+            FROM canvas_assistant_messages
+            WHERE project_id = ?1 AND id = ?2
+            "#,
+            params![project_id, message_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| error.to_string())
+}
+
+fn canvas_assistant_messages_before_count(
+    connection: &Connection,
+    project_id: &str,
+    before_rowid: i64,
+) -> Result<i64, String> {
+    connection
+        .query_row(
+            r#"
+            SELECT COUNT(*)
+            FROM canvas_assistant_messages
+            WHERE project_id = ?1
+              AND rowid < ?2
+            "#,
+            params![project_id, before_rowid],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn collect_canvas_assistant_messages(
+    rows: Result<
+        rusqlite::MappedRows<
+            '_,
+            fn(&rusqlite::Row<'_>) -> rusqlite::Result<CanvasAssistantSessionMessage>,
+        >,
+        rusqlite::Error,
+    >,
+) -> Result<Vec<CanvasAssistantSessionMessage>, String> {
+    rows.map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn row_to_canvas_assistant_message(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<CanvasAssistantSessionMessage> {
+    Ok(CanvasAssistantSessionMessage {
+        id: row.get(0)?,
+        project_id: row.get(1)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
+fn clear_canvas_assistant_messages_for(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<(), String> {
+    let project_id = project_id.trim();
+    if project_id.is_empty() {
+        return Ok(());
+    }
+    connection
+        .execute(
+            "DELETE FROM canvas_assistant_messages WHERE project_id = ?1",
+            params![project_id],
+        )
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn is_valid_canvas_assistant_message(message: &CanvasAssistantSessionMessage) -> bool {
+    !message.id.trim().is_empty()
+        && !message.project_id.trim().is_empty()
+        && (message.role == "assistant" || message.role == "user")
+        && !message.content.trim().is_empty()
+        && !message.created_at.trim().is_empty()
 }
 
 fn activate_main_window_for(app: &AppHandle) -> Result<(), String> {
@@ -1838,6 +2166,117 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stores_canvas_assistant_messages_with_paging_and_cleanup() {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_canvas_assistant_database(&connection).expect("schema");
+
+        append_canvas_assistant_messages_to(
+            &connection,
+            vec![
+                test_canvas_assistant_message("message-1", "project-a", "user", "first", 1),
+                test_canvas_assistant_message("message-2", "project-a", "assistant", "second", 2),
+                test_canvas_assistant_message("message-3", "project-a", "user", "third", 3),
+                test_canvas_assistant_message("message-4", "project-a", "assistant", "fourth", 4),
+                test_canvas_assistant_message(
+                    "message-2",
+                    "project-a",
+                    "assistant",
+                    "duplicate",
+                    2,
+                ),
+                test_canvas_assistant_message("message-other", "project-b", "user", "other", 1),
+                test_canvas_assistant_message(
+                    "message-invalid-role",
+                    "project-a",
+                    "system",
+                    "hidden",
+                    5,
+                ),
+            ],
+        )
+        .expect("append");
+
+        let latest = list_canvas_assistant_messages_from(&connection, "project-a", 2, None)
+            .expect("latest page");
+        assert_eq!(latest.total, 4);
+        assert!(latest.has_more);
+        assert_eq!(
+            latest
+                .messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message-3", "message-4"]
+        );
+
+        let older =
+            list_canvas_assistant_messages_from(&connection, "project-a", 2, Some("message-3"))
+                .expect("older page");
+        assert!(!older.has_more);
+        assert_eq!(
+            older
+                .messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message-1", "message-2"]
+        );
+
+        clear_canvas_assistant_messages_for(&connection, "project-a").expect("clear project");
+        let empty =
+            list_canvas_assistant_messages_from(&connection, "project-a", 50, None).expect("empty");
+        assert_eq!(empty.messages.len(), 0);
+        let other =
+            list_canvas_assistant_messages_from(&connection, "project-b", 50, None).expect("other");
+        assert_eq!(other.messages.len(), 1);
+    }
+
+    #[test]
+    fn keeps_insert_order_when_canvas_assistant_messages_share_the_same_timestamp() {
+        let connection = Connection::open_in_memory().expect("in-memory sqlite");
+        initialize_canvas_assistant_database(&connection).expect("schema");
+
+        append_canvas_assistant_messages_to(
+            &connection,
+            vec![
+                CanvasAssistantSessionMessage {
+                    id: "message-10".to_string(),
+                    project_id: "project-order".to_string(),
+                    role: "user".to_string(),
+                    content: "first".to_string(),
+                    created_at: "2026-06-07T00:00:00.000Z".to_string(),
+                },
+                CanvasAssistantSessionMessage {
+                    id: "message-2".to_string(),
+                    project_id: "project-order".to_string(),
+                    role: "assistant".to_string(),
+                    content: "second".to_string(),
+                    created_at: "2026-06-07T00:00:00.000Z".to_string(),
+                },
+                CanvasAssistantSessionMessage {
+                    id: "message-11".to_string(),
+                    project_id: "project-order".to_string(),
+                    role: "user".to_string(),
+                    content: "third".to_string(),
+                    created_at: "2026-06-07T00:00:00.000Z".to_string(),
+                },
+            ],
+        )
+        .expect("append");
+
+        let page = list_canvas_assistant_messages_from(&connection, "project-order", 10, None)
+            .expect("ordered page");
+
+        assert_eq!(
+            page.messages
+                .iter()
+                .map(|message| message.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["message-10", "message-2", "message-11"]
+        );
+    }
+
+    #[test]
     fn installs_codex_skill_files_under_the_selected_skills_directory() {
         let skills_dir = env::temp_dir().join(format!(
             "pixai-skill-test-{}",
@@ -1920,6 +2359,8 @@ mod tests {
         drop(listener);
         let error = tauri::async_runtime::block_on(async {
             reqwest::Client::builder()
+                .no_proxy()
+                .timeout(Duration::from_secs(2))
                 .build()
                 .unwrap()
                 .get(&url)
@@ -1949,6 +2390,23 @@ mod tests {
     }
 }
 
+#[cfg(test)]
+fn test_canvas_assistant_message(
+    id: &str,
+    project_id: &str,
+    role: &str,
+    content: &str,
+    seconds: u32,
+) -> CanvasAssistantSessionMessage {
+    CanvasAssistantSessionMessage {
+        id: id.to_string(),
+        project_id: project_id.to_string(),
+        role: role.to_string(),
+        content: content.to_string(),
+        created_at: format!("2026-06-07T00:00:{seconds:02}.000Z"),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1975,6 +2433,10 @@ pub fn run() {
             send_system_notification,
             read_json_state,
             write_json_state,
+            append_canvas_assistant_messages,
+            list_canvas_assistant_messages,
+            clear_canvas_assistant_messages,
+            delete_project_canvas_assistant_messages,
             set_profile_secret,
             get_profile_secret,
             delete_profile_secret,

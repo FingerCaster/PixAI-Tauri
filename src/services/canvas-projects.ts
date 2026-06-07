@@ -4,6 +4,7 @@ import { nowIso } from '../lib/time'
 import type {
   CanvasConnection,
   CanvasConnectionKind,
+  CanvasAssistantMessage,
   CanvasNodeData,
   CanvasNodeMetadata,
   CanvasNodeType,
@@ -22,6 +23,8 @@ const MAX_NODE_SIZE = 640
 const DEFAULT_GENERATE_NODE_HEIGHT = 340
 const MAX_NODE_TITLE_LENGTH = 80
 const MAX_NODE_CONTENT_LENGTH = 500_000
+const MAX_ASSISTANT_MESSAGES = 200
+const MAX_ASSISTANT_MESSAGE_LENGTH = 20_000
 
 type PersistedCanvasData = {
   projects: CanvasProject[]
@@ -48,7 +51,7 @@ export class CanvasProjectService {
   async exportProject(id: string): Promise<CanvasProject> {
     const project = await this.get(id)
     if (!project) throw new Error('Canvas project not found.')
-    return project
+    return { ...project, assistantMessages: [] }
   }
 
   async create(input: { conversationId: string; title?: string }): Promise<CanvasProject> {
@@ -63,6 +66,7 @@ export class CanvasProjectService {
       schemaVersion: SCHEMA_VERSION,
       nodes: [],
       connections: [],
+      assistantMessages: [],
       viewport: { ...DEFAULT_CANVAS_VIEWPORT },
       createdAt: now,
       updatedAt: now
@@ -85,6 +89,9 @@ export class CanvasProjectService {
     const connections = input.connections
       ? normalizeCanvasConnections(input.connections, nodes)
       : normalizeCanvasConnections(current.connections, nodes)
+    const assistantMessages = input.assistantMessages !== undefined
+      ? normalizeCanvasAssistantMessages(input.assistantMessages)
+      : current.assistantMessages || []
     const next: CanvasProject = {
       ...current,
       ...(conversationId ? { conversationId } : {}),
@@ -92,6 +99,7 @@ export class CanvasProjectService {
       ...(input.viewport ? { viewport: normalizeViewport(input.viewport) } : {}),
       nodes,
       connections,
+      assistantMessages,
       updatedAt: nowIso()
     }
     data.projects = data.projects.map((project) => (project.id === id ? next : project))
@@ -244,6 +252,7 @@ function normalizeProject(input: unknown): CanvasProject | null {
     schemaVersion: SCHEMA_VERSION,
     nodes,
     connections: normalizeCanvasConnections(Array.isArray(input.connections) ? input.connections as CanvasConnection[] : [], nodes),
+    assistantMessages: normalizeCanvasAssistantMessages(input.assistantMessages),
     viewport: normalizeViewport(isRecord(input.viewport) ? {
       x: numberValue(input.viewport.x, DEFAULT_CANVAS_VIEWPORT.x),
       y: numberValue(input.viewport.y, DEFAULT_CANVAS_VIEWPORT.y),
@@ -268,6 +277,7 @@ function normalizeImportedProject(input: unknown, conversationId: string): Canva
     schemaVersion: SCHEMA_VERSION,
     nodes,
     connections: normalizeCanvasConnections(Array.isArray(input.connections) ? input.connections as CanvasConnection[] : [], nodes),
+    assistantMessages: normalizeCanvasAssistantMessages(input.assistantMessages),
     viewport: normalizeViewport(isRecord(input.viewport) ? {
       x: numberValue(input.viewport.x, DEFAULT_CANVAS_VIEWPORT.x),
       y: numberValue(input.viewport.y, DEFAULT_CANVAS_VIEWPORT.y),
@@ -285,6 +295,7 @@ function normalizeImportedCanvasNodes(input: CanvasNodeData[]): CanvasNodeData[]
       runId: _runId,
       requestIndex: _requestIndex,
       batchRootId: _batchRootId,
+      batchRunId: _batchRunId,
       batchIndex: _batchIndex,
       promptVariant: _promptVariant,
       errorMessage: _errorMessage,
@@ -320,6 +331,7 @@ function cloneProject(project: CanvasProject): CanvasProject {
       metadata: { ...node.metadata }
     })),
     connections: project.connections.map((connection) => ({ ...connection })),
+    assistantMessages: (project.assistantMessages || []).map((message) => ({ ...message })),
     viewport: { ...project.viewport }
   }
 }
@@ -388,6 +400,7 @@ function normalizeCanvasNodeMetadata(type: CanvasNodeType, input: Record<string,
     ...(stringValue(input.runId) ? { runId: stringValue(input.runId) } : {}),
     ...(Number.isInteger(input.requestIndex) && Number(input.requestIndex) >= 0 ? { requestIndex: Number(input.requestIndex) } : {}),
     ...(stringValue(input.batchRootId) ? { batchRootId: stringValue(input.batchRootId) } : {}),
+    ...(stringValue(input.batchRunId) ? { batchRunId: stringValue(input.batchRunId) } : {}),
     ...(Number.isInteger(input.batchIndex) && Number(input.batchIndex) >= 0 ? { batchIndex: Number(input.batchIndex) } : {}),
     ...(stringValue(input.promptVariant) ? { promptVariant: stringValue(input.promptVariant).slice(0, MAX_NODE_CONTENT_LENGTH) } : {}),
     ...(stringValue(input.errorMessage) ? { errorMessage: stringValue(input.errorMessage) } : {}),
@@ -401,6 +414,24 @@ function normalizeCanvasNodeMetadata(type: CanvasNodeType, input: Record<string,
     ...(isCanvasMaskSource(stringValue(input.maskDataUrl)) ? { maskDataUrl: stringValue(input.maskDataUrl) } : {}),
     ...(isCanvasMaskSource(stringValue(input.maskDataUrl)) && stringValue(input.maskUpdatedAt) ? { maskUpdatedAt: stringValue(input.maskUpdatedAt) } : {})
   }
+}
+
+function normalizeCanvasAssistantMessages(input: unknown): CanvasAssistantMessage[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .map(normalizeCanvasAssistantMessage)
+    .filter((message): message is CanvasAssistantMessage => Boolean(message))
+    .slice(-MAX_ASSISTANT_MESSAGES)
+}
+
+function normalizeCanvasAssistantMessage(input: unknown): CanvasAssistantMessage | null {
+  if (!isRecord(input)) return null
+  const id = stringValue(input.id).slice(0, 160)
+  const role = input.role === 'assistant' || input.role === 'user' ? input.role : null
+  const content = stringValue(input.content).slice(0, MAX_ASSISTANT_MESSAGE_LENGTH)
+  if (!id || !role || !content) return null
+  const createdAt = stringValue(input.createdAt)
+  return { id, role, content, ...(createdAt ? { createdAt } : {}) }
 }
 
 function normalizeCanvasNodeStatus(value: unknown) {

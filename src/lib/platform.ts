@@ -4,7 +4,16 @@ import { openPath } from '@tauri-apps/plugin-opener'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import type { AppVersionInfo, CodexBridgeResponse, CodexSkillInstallRequest, CodexSkillStatus, ImageHistoryItem, ReferenceImageFilePayload } from '../shared/types'
+import type {
+  AppVersionInfo,
+  CanvasAssistantSessionMessage,
+  CanvasAssistantSessionPage,
+  CodexBridgeResponse,
+  CodexSkillInstallRequest,
+  CodexSkillStatus,
+  ImageHistoryItem,
+  ReferenceImageFilePayload
+} from '../shared/types'
 
 type SecretWriteResult = {
   insecure_storage: boolean
@@ -76,7 +85,9 @@ const memorySecrets = new Map<string, string>()
 const imageSourceCache = new Map<string, string>()
 let mockNotificationPermission: NotificationPermission | 'unsupported' | null = null
 const notificationLog: Array<{ title: string; body?: string }> = []
+const CANVAS_ASSISTANT_SESSIONS_STATE_NAME = 'pixai-canvas-assistant-sessions'
 const MAX_REMOTE_REFERENCE_IMAGE_BYTES = 20 * 1024 * 1024
+const MAX_CANVAS_ASSISTANT_MESSAGE_PAGE_SIZE = 100
 
 export function isTauriRuntime(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -237,6 +248,69 @@ export async function writeJsonState(name: string, payload: string): Promise<voi
   }
   memoryStorage.set(name, payload)
   globalThis.localStorage?.setItem(`pixai:${name}`, payload)
+}
+
+export async function appendCanvasAssistantMessages(messages: CanvasAssistantSessionMessage[]): Promise<void> {
+  if (messages.length === 0) return
+  if (isTauriRuntime()) {
+    await invoke('append_canvas_assistant_messages', { messages })
+    return
+  }
+  const state = await readCanvasAssistantSessionsState()
+  for (const message of messages) {
+    if (!isValidCanvasAssistantSessionMessage(message)) continue
+    const projectMessages = state.messagesByProject[message.projectId] || []
+    if (projectMessages.some((item) => item.id === message.id)) continue
+    state.messagesByProject[message.projectId] = projectMessages.concat(message)
+  }
+  await writeCanvasAssistantSessionsState(state)
+}
+
+export async function listCanvasAssistantMessages(
+  projectId: string,
+  options: { limit?: number; before?: string | null } = {}
+): Promise<CanvasAssistantSessionPage> {
+  if (isTauriRuntime()) {
+    return invoke<CanvasAssistantSessionPage>('list_canvas_assistant_messages', {
+      request: {
+        projectId,
+        limit: options.limit,
+        before: options.before || null
+      }
+    })
+  }
+  const state = await readCanvasAssistantSessionsState()
+  const messages = [...(state.messagesByProject[projectId] || [])]
+  const limit = normalizeCanvasAssistantMessagePageSize(options.limit)
+  const before = options.before?.trim()
+  const end = before ? messages.findIndex((message) => message.id === before) : messages.length
+  if (end < 0) return { messages: [], total: messages.length, hasMore: false }
+  const start = Math.max(0, end - limit)
+  return {
+    messages: messages.slice(start, end),
+    total: messages.length,
+    hasMore: start > 0
+  }
+}
+
+export async function clearCanvasAssistantMessages(projectId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke('clear_canvas_assistant_messages', { projectId })
+    return
+  }
+  const state = await readCanvasAssistantSessionsState()
+  state.messagesByProject[projectId] = []
+  await writeCanvasAssistantSessionsState(state)
+}
+
+export async function deleteProjectCanvasAssistantMessages(projectId: string): Promise<void> {
+  if (isTauriRuntime()) {
+    await invoke('delete_project_canvas_assistant_messages', { projectId })
+    return
+  }
+  const state = await readCanvasAssistantSessionsState()
+  delete state.messagesByProject[projectId]
+  await writeCanvasAssistantSessionsState(state)
 }
 
 export async function setProfileSecret(profileId: string, apiKey: string): Promise<{ insecureStorage: boolean; backend: string }> {
@@ -940,6 +1014,50 @@ function storagePathFromAssetUrl(value: string): string | null {
 
 function isLocalFilePath(value: string): boolean {
   return /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\')
+}
+
+type PersistedCanvasAssistantSessions = {
+  messagesByProject: Record<string, CanvasAssistantSessionMessage[]>
+}
+
+async function readCanvasAssistantSessionsState(): Promise<PersistedCanvasAssistantSessions> {
+  const payload = await readJsonState(CANVAS_ASSISTANT_SESSIONS_STATE_NAME)
+  if (!payload) return { messagesByProject: {} }
+  try {
+    const parsed = JSON.parse(payload) as PersistedCanvasAssistantSessions
+    if (!parsed || typeof parsed !== 'object' || !parsed.messagesByProject) return { messagesByProject: {} }
+    return {
+      messagesByProject: Object.fromEntries(
+        Object.entries(parsed.messagesByProject)
+          .map(([projectId, messages]) => [
+            projectId,
+            Array.isArray(messages)
+              ? messages.filter(isValidCanvasAssistantSessionMessage)
+              : []
+          ])
+      )
+    }
+  } catch {
+    return { messagesByProject: {} }
+  }
+}
+
+async function writeCanvasAssistantSessionsState(state: PersistedCanvasAssistantSessions): Promise<void> {
+  await writeJsonState(CANVAS_ASSISTANT_SESSIONS_STATE_NAME, JSON.stringify(state, null, 2))
+}
+
+function isValidCanvasAssistantSessionMessage(input: unknown): input is CanvasAssistantSessionMessage {
+  if (!isRecord(input)) return false
+  return typeof input.id === 'string' && input.id.trim().length > 0
+    && typeof input.projectId === 'string' && input.projectId.trim().length > 0
+    && (input.role === 'assistant' || input.role === 'user')
+    && typeof input.content === 'string' && input.content.trim().length > 0
+    && typeof input.createdAt === 'string' && input.createdAt.trim().length > 0
+}
+
+function normalizeCanvasAssistantMessagePageSize(value: number | undefined): number {
+  if (!Number.isFinite(value)) return 50
+  return Math.max(1, Math.min(MAX_CANVAS_ASSISTANT_MESSAGE_PAGE_SIZE, Math.trunc(Number(value))))
 }
 
 export async function getCodexSkillStatus(name: string): Promise<CodexSkillStatus> {

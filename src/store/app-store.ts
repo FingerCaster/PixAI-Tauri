@@ -4,6 +4,7 @@ import { buildCanvasGenerationPlanForNode, buildCanvasWorkflowPlan, MAX_CANVAS_W
 import { ImageGenerationPreflightError } from '../services/image-service'
 import { getBundledAppVersion } from '../shared/app-version'
 import { DEFAULT_IMAGE_OUTPUT_FORMAT, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible, normalizeImageGenerationTimeoutSeconds } from '../shared/image-options'
+import { createId } from '../lib/ids'
 import { imageSourceForDisplay, readLocalImageDataUrl, sendSystemNotification } from '../lib/platform'
 import { formatDuration } from '../lib/time'
 import { useCanvasStore } from './canvas-store'
@@ -134,6 +135,9 @@ type CanvasGenerationReferences = {
 type CanvasGenerationRunResult = {
   succeeded: number
   failed: number
+  runId?: string
+  historyItemId?: string
+  requestIndex?: number
 }
 
 let generationClockTimer: number | null = null
@@ -734,22 +738,28 @@ export const useAppStore = create<AppState>((set, get) => ({
       await runCanvasGenerationPlanItem(planItems[0], conversation, set, get)
       return
     }
+    const batchRunId = createId('canvas-batch-run')
     let succeeded = 0
     let failed = 0
+    let lastResult: CanvasGenerationRunResult = emptyCanvasGenerationRunResult()
     for (const item of planItems) {
       const result = await runCanvasGenerationPlanItem(item, conversation, set, get, {
         notifySuccess: false,
-        notifyFailure: false
+        notifyFailure: false,
+        batchRunId
       })
       succeeded += result.succeeded
       failed += result.failed
+      if (result.runId || result.historyItemId || result.succeeded > 0 || result.failed > 0) lastResult = result
     }
-    if (failed > 0) {
-      await useCanvasStore.getState().updateGenerateNodeState(nodeId, {
-        status: 'failed',
-        errorMessage: `批量生成部分失败：${succeeded} 成功，${failed} 失败`
-      })
-    }
+    await useCanvasStore.getState().updateGenerateNodeState(nodeId, {
+      status: failed > 0 ? 'failed' : 'succeeded',
+      errorMessage: failed > 0 ? `批量生成部分失败：${succeeded} 成功，${failed} 失败` : '',
+      batchRunId,
+      ...(lastResult.runId ? { runId: lastResult.runId } : {}),
+      ...(lastResult.historyItemId ? { historyItemId: lastResult.historyItemId } : {}),
+      ...(lastResult.requestIndex != null ? { requestIndex: lastResult.requestIndex } : {})
+    })
     get().notify(`Canvas 批量生成完成：${succeeded} 成功，${failed} 失败`)
   },
   runCanvasWorkflow: async () => {
@@ -779,12 +789,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       get().notify(plan.skippedRunningNodeIds.length > 0 ? 'Canvas workflow 没有空闲的可运行节点' : 'Canvas workflow 没有可运行节点')
       return
     }
+    const workflowBatchRunIds = new Map<string, string>()
     let succeeded = 0
     let failed = 0
     for (const item of plan.items) {
+      const batchRunId = item.batchIndex != null
+        ? workflowBatchRunIds.get(item.nodeId) || createCanvasWorkflowBatchRunId(workflowBatchRunIds, item.nodeId)
+        : undefined
       const result = await runCanvasGenerationPlanItem(item, conversation, set, get, {
         notifySuccess: false,
-        notifyFailure: false
+        notifyFailure: false,
+        batchRunId
       })
       succeeded += result.succeeded
       failed += result.failed
@@ -1289,9 +1304,9 @@ async function runCanvasGenerationPlanItem(
   conversation: Conversation,
   set: (partial: Partial<AppState>) => void,
   get: () => AppState,
-  options: { notifySuccess?: boolean; notifyFailure?: boolean } = {}
+  options: { notifySuccess?: boolean; notifyFailure?: boolean; batchRunId?: string } = {}
 ): Promise<CanvasGenerationRunResult> {
-  const { notifySuccess = true, notifyFailure = true } = options
+  const { notifySuccess = true, notifyFailure = true, batchRunId } = options
   const canvasStore = useCanvasStore.getState()
   const project = canvasStore.activeProject
   const node = project?.nodes.find((item) => item.id === planItem.nodeId)
@@ -1364,7 +1379,8 @@ async function runCanvasGenerationPlanItem(
     errorMessage: '',
     runId: '',
     requestIndex: 0,
-    historyItemId: ''
+    historyItemId: '',
+    ...(batchRunId ? { batchRunId } : {})
   })
 
   const previewRunIds = new Set<string>()
@@ -1413,24 +1429,27 @@ async function runCanvasGenerationPlanItem(
           await recordCanvasFailedGenerationResult(planItem, failedItem.errorMessage || message, {
             runId: result.run.id,
             requestIndex: failedItem.requestIndex ?? 0,
-            historyItemId: failedItem.id
+            historyItemId: failedItem.id,
+            batchRunId
           })
         }
       } else {
         await recordCanvasFailedGenerationResult(planItem, message, {
           runId: result.run.id,
-          requestIndex: result.items.find((item) => typeof item.requestIndex === 'number')?.requestIndex ?? 0
+          requestIndex: result.items.find((item) => typeof item.requestIndex === 'number')?.requestIndex ?? 0,
+          batchRunId
         })
       }
       if (notifyFailure) get().notify(`Canvas 生成失败：${message}`)
       await notifyGenerationFinished(result.items, message, get, '')
-      return { succeeded: 0, failed: Math.max(1, failedItems.length) }
+      return { succeeded: 0, failed: Math.max(1, failedItems.length), runId: result.run.id }
     }
     for (const failedItem of failedItems) {
       await recordCanvasFailedGenerationResult(planItem, failedItem.errorMessage || result.errorMessage || 'Canvas 生成失败', {
         runId: result.run.id,
         requestIndex: failedItem.requestIndex ?? 0,
-        historyItemId: failedItem.id
+        historyItemId: failedItem.id,
+        batchRunId
       })
     }
     for (let index = 0; index < successItems.length; index += 1) {
@@ -1446,6 +1465,7 @@ async function runCanvasGenerationPlanItem(
         storagePath: successItem.storagePath || null,
         requestIndex: successItem.requestIndex ?? index,
         ...(planItem.batchIndex != null ? { batchRootId: planItem.nodeId, batchIndex: planItem.batchIndex } : {}),
+        ...(batchRunId ? { batchRunId } : {}),
         ...(planItem.batchVariant ? { promptVariant: planItem.batchVariant } : {})
       })
     }
@@ -1455,6 +1475,7 @@ async function runCanvasGenerationPlanItem(
       runId: result.run.id,
       requestIndex: finalItem.requestIndex ?? 0,
       historyItemId: finalItem.id,
+      ...(batchRunId ? { batchRunId } : {}),
       errorMessage: failedItems.length > 0 ? `生成部分失败：${successItems.length} 成功，${failedItems.length} 失败` : ''
     })
     const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
@@ -1466,10 +1487,16 @@ async function runCanvasGenerationPlanItem(
       )
     }
     await notifyGenerationFinished(result.items, result.errorMessage || null, get, durationText)
-    return { succeeded: successItems.length, failed: failedItems.length }
+    return {
+      succeeded: successItems.length,
+      failed: failedItems.length,
+      runId: result.run.id,
+      historyItemId: finalItem.id,
+      requestIndex: finalItem.requestIndex ?? 0
+    }
   } catch (error) {
     const message = error instanceof ImageGenerationPreflightError ? error.message : error instanceof Error ? error.message : 'Canvas 生成失败'
-    await recordCanvasFailedGenerationResult(planItem, message, { requestIndex: 0 })
+    await recordCanvasFailedGenerationResult(planItem, message, { requestIndex: 0, batchRunId })
     if (notifyFailure) get().notify(`Canvas 生成失败：${message}`)
     await notifyGenerationFinished([], message, get, '')
     if (previewRunIds.size > 0) {
@@ -1503,7 +1530,7 @@ function failedCanvasGenerationRunResult(): CanvasGenerationRunResult {
 async function recordCanvasFailedGenerationResult(
   planItem: CanvasGenerationPlanItem,
   errorMessage: string,
-  input: { runId?: string; historyItemId?: string; requestIndex?: number }
+  input: { runId?: string; historyItemId?: string; requestIndex?: number; batchRunId?: string }
 ): Promise<void> {
   await useCanvasStore.getState().recordFailedResult(planItem.nodeId, {
     errorMessage,
@@ -1511,6 +1538,12 @@ async function recordCanvasFailedGenerationResult(
     ...(planItem.batchIndex != null ? { batchRootId: planItem.nodeId, batchIndex: planItem.batchIndex } : {}),
     ...(planItem.batchVariant ? { promptVariant: planItem.batchVariant } : {})
   })
+}
+
+function createCanvasWorkflowBatchRunId(batchRunIds: Map<string, string>, nodeId: string): string {
+  const batchRunId = createId('canvas-batch-run')
+  batchRunIds.set(nodeId, batchRunId)
+  return batchRunId
 }
 
 async function resolveCanvasGenerationReferences(

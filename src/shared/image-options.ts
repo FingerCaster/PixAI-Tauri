@@ -9,6 +9,7 @@ import type {
 
 export const DEFAULT_MODEL = 'gpt-image-2'
 export const DEFAULT_PROMPT_MODEL = 'gpt-5.4-mini'
+export const DEFAULT_AGENT_MODEL = DEFAULT_PROMPT_MODEL
 export const DEFAULT_IMAGE_OUTPUT_FORMAT: ImageOutputFormat = 'png'
 export const DEFAULT_IMAGE_MAX_RETRIES = 1
 export const MAX_IMAGE_MAX_RETRIES = 10
@@ -156,6 +157,10 @@ export function buildImageEditEndpoint(baseUrl: string): string {
 
 export function buildResponsesEndpoint(baseUrl: string): string {
   return `${trimBaseUrl(baseUrl)}/v1/responses`
+}
+
+export function buildChatCompletionsEndpoint(baseUrl: string): string {
+  return `${trimBaseUrl(baseUrl)}/v1/chat/completions`
 }
 
 export function trimBaseUrl(baseUrl: string): string {

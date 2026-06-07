@@ -24,8 +24,10 @@ export function ServicesSettingsTab() {
   const profiles = useMemo(() => settings?.profiles || [], [settings])
   const imageProfiles = useMemo(() => profiles.filter((profile) => profile.enabledUsages.includes('image')), [profiles])
   const promptProfiles = useMemo(() => profiles.filter((profile) => profile.enabledUsages.includes('prompt')), [profiles])
+  const agentProfiles = useMemo(() => profiles.filter(isAgentProfile), [profiles])
   const [selectedImageProfileId, setSelectedImageProfileId] = useState(settings?.selectedImageProfileId || '')
   const [selectedPromptProfileId, setSelectedPromptProfileId] = useState(settings?.selectedPromptProfileId || '')
+  const [selectedAgentProfileId, setSelectedAgentProfileId] = useState(settings?.selectedAgentProfileId || '')
   const [imageModel, setImageModel] = useState(DEFAULT_MODEL)
   const [profileDraft, setProfileDraft] = useState<ProviderProfile | null>(null)
   const [profileDraftMode, setProfileDraftMode] = useState<'create' | 'edit'>('create')
@@ -35,17 +37,21 @@ export function ServicesSettingsTab() {
     if (!settings) return
     const imageProfile = profiles.find((profile) => profile.id === settings.selectedImageProfileId) || imageProfiles[0]
     const promptProfile = profiles.find((profile) => profile.id === settings.selectedPromptProfileId) || promptProfiles[0]
+    const agentProfile = profiles.find((profile) => profile.id === settings.selectedAgentProfileId) || agentProfiles[0]
     setSelectedImageProfileId(imageProfile?.id || '')
     setSelectedPromptProfileId(promptProfile?.id || '')
+    setSelectedAgentProfileId(agentProfile?.id || '')
     setImageModel(imageProfile?.defaultImageModel || DEFAULT_MODEL)
-  }, [imageProfiles, profiles, promptProfiles, settings])
+  }, [agentProfiles, imageProfiles, profiles, promptProfiles, settings])
 
   if (!settings || !conversation) return null
 
   const imageSelectedProfile = profiles.find((profile) => profile.id === selectedImageProfileId) || imageProfiles[0] || null
   const promptSelectedProfile = profiles.find((profile) => profile.id === selectedPromptProfileId) || promptProfiles[0] || null
+  const agentSelectedProfile = profiles.find((profile) => profile.id === selectedAgentProfileId) || agentProfiles[0] || null
   const hasImageProfiles = imageProfiles.length > 0
   const hasPromptProfiles = promptProfiles.length > 0
+  const hasAgentProfiles = agentProfiles.length > 0
 
   const openNewProfileDialog = () => {
     setProfileApiKey('')
@@ -84,13 +90,15 @@ export function ServicesSettingsTab() {
   const saveServiceDefaults = async () => {
     const imageProfile = imageSelectedProfile
     const promptProfile = promptSelectedProfile
-    if (!imageProfile && !promptProfile) {
+    const agentProfile = agentSelectedProfile
+    if (!imageProfile && !promptProfile && !agentProfile) {
       openNewProfileDialog()
       return
     }
     await updateSettings({
       selectedImageProfileId: imageProfile?.id,
-      selectedPromptProfileId: promptProfile?.id
+      selectedPromptProfileId: promptProfile?.id,
+      selectedAgentProfileId: agentProfile?.id
     })
     await updateActiveConversation({ model: imageModel.trim() || DEFAULT_MODEL })
   }
@@ -107,6 +115,11 @@ export function ServicesSettingsTab() {
     await updateSettings({ selectedPromptProfileId: profile.id })
   }
 
+  const setAsAgentDefault = async (profile: ProviderProfile) => {
+    setSelectedAgentProfileId(profile.id)
+    await updateSettings({ selectedAgentProfileId: profile.id })
+  }
+
   return (
     <>
       <Card className="settings-status-card settings-status-card-highlight rounded-2xl shadow-none">
@@ -120,10 +133,10 @@ export function ServicesSettingsTab() {
         <CardContent className="grid gap-4">
           {!profiles.length ? (
             <div className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-3 text-sm leading-6 text-muted-foreground">
-              还没有 Provider。请先添加 Provider，再设置图片生成和提示词助手的默认服务。
+              还没有 Provider。请先添加 Provider，再设置图片生成、提示词助手和 Canvas Agent 的默认服务。
             </div>
           ) : null}
-          <div className="provider-default-grid grid grid-cols-2 gap-3">
+          <div className="provider-default-grid grid grid-cols-3 gap-3">
             <div className="field grid gap-1.5">
               <span className="text-xs text-muted-foreground">图片默认 Provider</span>
               {hasImageProfiles ? (
@@ -162,9 +175,27 @@ export function ServicesSettingsTab() {
                 </div>
               )}
             </div>
+            <div className="field grid gap-1.5">
+              <span className="text-xs text-muted-foreground">Canvas Agent 默认 Provider</span>
+              {hasAgentProfiles ? (
+                <GallerySelect
+                  value={selectedAgentProfileId}
+                  options={agentProfiles.map((profile) => ({ value: profile.id, label: profile.name }))}
+                  ariaLabel="Canvas Agent 默认 Provider"
+                  className="settings-select"
+                  onChange={(profileId) => {
+                    setSelectedAgentProfileId(profileId)
+                  }}
+                />
+              ) : (
+                <div className="grid min-h-9 place-items-start rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  先添加支持 Canvas Agent 的 Provider
+                </div>
+              )}
+            </div>
           </div>
           <div className="button-row provider-summary-actions flex justify-end">
-            <Button className="primary-button" type="button" disabled={!hasImageProfiles && !hasPromptProfiles} onClick={() => void saveServiceDefaults()}>
+            <Button className="primary-button" type="button" disabled={!hasImageProfiles && !hasPromptProfiles && !hasAgentProfiles} onClick={() => void saveServiceDefaults()}>
               <Save />
               保存默认设置
             </Button>
@@ -176,6 +207,7 @@ export function ServicesSettingsTab() {
         {profiles.map((profile) => {
           const isImageDefault = settings.selectedImageProfileId === profile.id
           const isPromptDefault = settings.selectedPromptProfileId === profile.id
+          const isAgentDefault = settings.selectedAgentProfileId === profile.id
           return (
             <Card key={profile.id} className="settings-status-card provider-summary-card rounded-2xl shadow-none">
               <CardHeader className="provider-summary-head flex items-start justify-between space-y-0">
@@ -185,6 +217,7 @@ export function ServicesSettingsTab() {
                     <div className="provider-badges flex shrink-0 gap-1">
                       {isImageDefault ? <Badge variant="default" className="pill tiny good">图片默认</Badge> : null}
                       {isPromptDefault ? <Badge variant="secondary" className="pill tiny blue">提示词默认</Badge> : null}
+                      {isAgentDefault ? <Badge variant="outline" className="pill tiny">Agent 默认</Badge> : null}
                     </div>
                   </div>
                   <span className="truncate text-sm text-muted-foreground">{profile.baseUrl}</span>
@@ -192,6 +225,8 @@ export function ServicesSettingsTab() {
                     {profile.enabledUsages.includes('image') ? `图片模型 ${profile.defaultImageModel}` : '不提供生图'}
                     {' · '}
                     {profile.enabledUsages.includes('prompt') ? `提示词模型 ${profile.defaultPromptModel}` : '不提供提示词'}
+                    {' · '}
+                    {isAgentProfile(profile) ? `Agent 模型 ${profile.defaultAgentModel}` : '不提供 Agent'}
                   </span>
                 </div>
                 <Button variant="outline" size="icon-sm" type="button" onClick={() => openEditProfileDialog(profile)} title="编辑 Provider">
@@ -215,6 +250,14 @@ export function ServicesSettingsTab() {
                 >
                   设为提示词默认
                 </Button>
+                <Button
+                  variant="outline"
+                  type="button"
+                  disabled={!isAgentProfile(profile) || isAgentDefault}
+                  onClick={() => void setAsAgentDefault(profile)}
+                >
+                  设为 Agent 默认
+                </Button>
               </CardContent>
             </Card>
           )
@@ -234,4 +277,10 @@ export function ServicesSettingsTab() {
       />
     </>
   )
+}
+
+function isAgentProfile(profile: ProviderProfile): boolean {
+  return profile.enabledUsages.includes('agent')
+    && profile.capabilities.includes('canvas-agent')
+    && profile.capabilities.includes('native-tool-calling')
 }
