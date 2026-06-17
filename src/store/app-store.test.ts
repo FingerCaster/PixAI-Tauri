@@ -138,6 +138,23 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().conversations[0].draftPrompt).toBe('最新输入')
   })
 
+  it('returns false when reference payload import fails', async () => {
+    await useAppStore.getState().load()
+    vi.spyOn(pixaiApi.reference, 'importPayloads').mockRejectedValue(new Error('reference import failed'))
+
+    const result = await useAppStore.getState().importReferencePayloads([
+      {
+        name: 'remote.png',
+        mimeType: 'image/png',
+        dataUrl: 'data:image/png;base64,cmVtb3Rl',
+        fileSizeBytes: 6
+      }
+    ])
+
+    expect(result).toBe(false)
+    expect(useAppStore.getState().toast).toBe('reference import failed')
+  })
+
   it('shows generation state immediately while image generation is pending', async () => {
     await useAppStore.getState().load()
     await useAppStore.getState().updateActiveConversation({ draftPrompt: '一只发光的玻璃风铃', n: 2 })

@@ -117,6 +117,187 @@ describe('Composer', () => {
     host.remove()
   })
 
+  it('keeps the inline prompt editor fixed-height and scrollable', async () => {
+    const { host, root } = await renderComposer(conversation({ draftPrompt: '长文本。'.repeat(120) }))
+    const textarea = document.querySelector<HTMLTextAreaElement>('.prompt-textarea')
+
+    expect(textarea?.className).toContain('h-28')
+    expect(textarea?.className).toContain('overflow-y-auto')
+    expect(textarea?.className).toContain('resize-none')
+    expect(document.querySelector<HTMLButtonElement>('button[title="放大查看提示词"]')).not.toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('renders only the add reference button in the empty text-to-image state', async () => {
+    const { host, root } = await renderComposer()
+    const promptBox = document.querySelector<HTMLDivElement>('.prompt-box')
+    const referenceRow = promptBox?.querySelector<HTMLDivElement>('.reference-row')
+
+    expect(document.body.textContent).toContain('文生图')
+    expect(referenceRow).not.toBeNull()
+    expect(promptBox?.firstElementChild).toBe(referenceRow)
+    expect(referenceRow?.querySelectorAll('.reference-thumb')).toHaveLength(0)
+    expect(referenceRow?.querySelectorAll('.reference-add-button')).toHaveLength(1)
+    expect(document.querySelector('.reference-footer-button')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('renders reference images inside the prompt box as a compact numbered strip', async () => {
+    const { host, root } = await renderComposer(
+      conversation({
+        referenceImages: [
+          {
+            id: 'reference-compact-one',
+            name: 'one.png',
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,b25l',
+            fileSizeBytes: 3,
+            createdAt: '2026-05-23T12:02:00.000Z'
+          },
+          {
+            id: 'reference-compact-two',
+            name: 'two.png',
+            mimeType: 'image/png',
+            dataUrl: 'data:image/png;base64,dHdv',
+            fileSizeBytes: 3,
+            createdAt: '2026-05-23T12:03:00.000Z'
+          }
+        ]
+      })
+    )
+    const promptBox = document.querySelector<HTMLDivElement>('.prompt-box')
+    const referenceRow = promptBox?.querySelector<HTMLDivElement>('.reference-row')
+    const indexes = Array.from(referenceRow?.querySelectorAll('.reference-index') || []).map((item) => item.textContent)
+    const referenceThumbs = Array.from(referenceRow?.querySelectorAll('.reference-thumb') || [])
+    const addButton = referenceRow?.querySelector<HTMLButtonElement>('.reference-add-button')
+
+    expect(referenceRow).not.toBeNull()
+    expect(promptBox?.firstElementChild).toBe(referenceRow)
+    expect(indexes).toEqual(['1', '2'])
+    expect(referenceThumbs).toHaveLength(2)
+    expect(addButton).not.toBeNull()
+    expect(addButton?.previousElementSibling).toBe(referenceThumbs[1])
+    expect(document.querySelector('.reference-footer-button')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('opens reference add choices from the plus button', async () => {
+    const { host, root } = await renderComposer()
+
+    await openReferenceAddMenu()
+
+    expect(document.body.textContent).toContain('链接')
+    expect(document.body.textContent).toContain('本地图片')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('imports a local image from the plus menu', async () => {
+    const importReferenceFiles = vi.fn().mockResolvedValue(true)
+    useAppStore.setState({ importReferenceFiles })
+    const { host, root } = await renderComposer()
+    const file = new File(['local'], 'local.png', { type: 'image/png' })
+
+    await openReferenceAddMenu()
+    await act(async () => {
+      menuItemByText('本地图片')?.click()
+    })
+    await act(async () => {
+      const input = document.querySelector<HTMLInputElement>('.reference-file-input')
+      Object.defineProperty(input, 'files', { configurable: true, value: fileList([file]) })
+      input?.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }))
+    })
+
+    expect(importReferenceFiles).toHaveBeenCalledWith([file])
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('imports a linked image from the plus menu', async () => {
+    const payload = {
+      name: 'remote.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,cmVtb3Rl',
+      fileSizeBytes: 6
+    }
+    const readRemoteImageUrl = vi.spyOn(platform, 'readRemoteImageUrl').mockResolvedValue(payload)
+    const importReferencePayloads = vi.fn().mockResolvedValue(true)
+    useAppStore.setState({ importReferencePayloads })
+    const { host, root } = await renderComposer()
+
+    await openReferenceAddMenu()
+    await act(async () => {
+      menuItemByText('链接')?.click()
+    })
+    await act(async () => {
+      setInputValue(document.querySelector<HTMLInputElement>('.reference-link-input'), ' https://example.com/remote.png ')
+    })
+    await act(async () => {
+      document.querySelector<HTMLFormElement>('.reference-link-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await flushPromises()
+    })
+
+    expect(readRemoteImageUrl).toHaveBeenCalledWith('https://example.com/remote.png')
+    expect(importReferencePayloads).toHaveBeenCalledWith([payload])
+    expect(document.querySelector('[aria-label="添加图片链接"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('keeps the link dialog open when linked image import is rejected by the store', async () => {
+    const payload = {
+      name: 'remote.png',
+      mimeType: 'image/png',
+      dataUrl: 'data:image/png;base64,cmVtb3Rl',
+      fileSizeBytes: 6
+    }
+    vi.spyOn(platform, 'readRemoteImageUrl').mockResolvedValue(payload)
+    const importReferencePayloads = vi.fn().mockResolvedValue(false)
+    useAppStore.setState({ importReferencePayloads })
+    const { host, root } = await renderComposer()
+
+    await openReferenceAddMenu()
+    await act(async () => {
+      menuItemByText('链接')?.click()
+    })
+    await act(async () => {
+      setInputValue(document.querySelector<HTMLInputElement>('.reference-link-input'), 'https://example.com/remote.png')
+    })
+    await act(async () => {
+      document.querySelector<HTMLFormElement>('.reference-link-form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await flushPromises()
+    })
+
+    expect(importReferencePayloads).toHaveBeenCalledWith([payload])
+    expect(document.querySelector('[aria-label="添加图片链接"]')).not.toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
   it('opens a large preview from a reference image thumbnail', async () => {
     const { host, root } = await renderComposer(
       conversation({
@@ -176,7 +357,7 @@ describe('Composer', () => {
   })
 
   it('asks before removing a reference image', async () => {
-    const removeReferenceImage = vi.fn().mockResolvedValue(undefined)
+    const removeReferenceImage = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ removeReferenceImage })
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     const { host, root } = await renderComposer(
@@ -216,7 +397,7 @@ describe('Composer', () => {
   })
 
   it('imports pasted images from the prompt textarea as reference images', async () => {
-    const importReferenceFiles = vi.fn().mockResolvedValue(undefined)
+    const importReferenceFiles = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ importReferenceFiles })
     const { host, root } = await renderComposer()
     const file = new File(['reference'], 'pasted.png', { type: 'image/png' })
@@ -237,7 +418,7 @@ describe('Composer', () => {
   })
 
   it('keeps text paste in the prompt textarea', async () => {
-    const importReferenceFiles = vi.fn().mockResolvedValue(undefined)
+    const importReferenceFiles = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ importReferenceFiles })
     const { host, root } = await renderComposer()
     const textarea = document.querySelector<HTMLTextAreaElement>('.prompt-textarea')
@@ -258,7 +439,7 @@ describe('Composer', () => {
 
   it('keeps mid-text edits locally stable while prompt persistence is pending', async () => {
     vi.useFakeTimers()
-    const updateActiveConversation = vi.fn().mockResolvedValue(undefined)
+    const updateActiveConversation = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ updateActiveConversation })
     const input = conversation({ draftPrompt: '把 claude 替换成 gpt5.5' })
     const { host, root } = await renderComposer(input)
@@ -291,7 +472,7 @@ describe('Composer', () => {
   })
 
   it('does not persist IME composition intermediate text from the prompt textarea', async () => {
-    const updateActiveConversation = vi.fn().mockResolvedValue(undefined)
+    const updateActiveConversation = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ updateActiveConversation })
     const { host, root } = await renderComposer(conversation({ draftPrompt: '基于参考图重绘' }))
     const textarea = document.querySelector<HTMLTextAreaElement>('.prompt-textarea')
@@ -322,7 +503,7 @@ describe('Composer', () => {
   })
 
   it('imports dropped images from the prompt box as reference images', async () => {
-    const importReferenceFiles = vi.fn().mockResolvedValue(undefined)
+    const importReferenceFiles = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ importReferenceFiles })
     const { host, root } = await renderComposer()
     const files = [
@@ -442,7 +623,7 @@ describe('Composer', () => {
   })
 
   it('ignores non-image drops in the prompt box', async () => {
-    const importReferenceFiles = vi.fn().mockResolvedValue(undefined)
+    const importReferenceFiles = vi.fn().mockResolvedValue(true)
     useAppStore.setState({ importReferenceFiles })
     const { host, root } = await renderComposer()
     const file = new File(['notes'], 'notes.txt', { type: 'text/plain' })
@@ -464,7 +645,7 @@ describe('Composer', () => {
 
   it('imports Tauri-dropped image paths inside the prompt box as reference images', async () => {
     setTauriRuntime(true)
-    const importReferencePayloads = vi.fn().mockResolvedValue(undefined)
+    const importReferencePayloads = vi.fn().mockResolvedValue(true)
     const payloadsByPath = new Map([
       ['C:\\drop\\one.png', { name: 'one.png', mimeType: 'image/png', dataUrl: 'data:image/png;base64,b25l', fileSizeBytes: 3 }],
       ['C:\\drop\\two.webp', { name: 'two.webp', mimeType: 'image/webp', dataUrl: 'data:image/webp;base64,dHdv', fileSizeBytes: 3 }]
@@ -578,6 +759,29 @@ function setTextareaValue(textarea: HTMLTextAreaElement | null | undefined, valu
 function setTextareaDomValue(textarea: HTMLTextAreaElement | null | undefined, value: string): void {
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
   setter?.call(textarea, value)
+}
+
+function setInputValue(input: HTMLInputElement | null | undefined, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+  setter?.call(input, value)
+  input?.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }))
+}
+
+async function openReferenceAddMenu(): Promise<void> {
+  const addButton = document.querySelector<HTMLButtonElement>('.reference-add-button')
+  await act(async () => {
+    const pointerDownEvent = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, ctrlKey: false })
+    Object.defineProperty(pointerDownEvent, 'pointerType', { configurable: true, value: 'mouse' })
+    addButton?.dispatchEvent(pointerDownEvent)
+    addButton?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, ctrlKey: false }))
+    addButton?.click()
+    await flushPromises()
+  })
+}
+
+function menuItemByText(text: string): HTMLElement | null {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .find((item) => item.textContent?.includes(text)) || null
 }
 
 function compositionEvent(type: 'compositionstart' | 'compositionend'): Event {

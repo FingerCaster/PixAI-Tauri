@@ -82,8 +82,8 @@ type AppState = {
   loadAppVersionInfo: () => Promise<void>
   checkForAppUpdate: (options?: { silent?: boolean }) => Promise<void>
   downloadAndInstallAppUpdate: () => Promise<void>
-  importReferenceFiles: (files: File[]) => Promise<void>
-  importReferencePayloads: (payloads: ReferenceImageFilePayload[]) => Promise<void>
+  importReferenceFiles: (files: File[]) => Promise<boolean>
+  importReferencePayloads: (payloads: ReferenceImageFilePayload[]) => Promise<boolean>
   addHistoryAsReference: (historyId: string) => Promise<void>
   removeReferenceImage: (referenceImageId: string) => Promise<void>
   reorderReferenceImages: (referenceImageIds: string[]) => Promise<void>
@@ -439,24 +439,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   importReferenceFiles: async (files) => {
     const id = get().activeConversationId
-    if (!id || files.length === 0) return
+    if (!id || files.length === 0) return false
     try {
       const referenceImages = await pixaiApi.reference.importFiles(id, files)
       set({ conversations: get().conversations.map((conversation) => (conversation.id === id ? { ...conversation, referenceImages } : conversation)) })
       get().notify(`已添加 ${files.length} 张参考图`)
+      return true
     } catch (error) {
       get().notify(error instanceof Error ? error.message : '参考图添加失败')
+      return false
     }
   },
   importReferencePayloads: async (payloads) => {
     const id = get().activeConversationId
-    if (!id || payloads.length === 0) return
+    if (!id || payloads.length === 0) return false
     try {
       const referenceImages = await pixaiApi.reference.importPayloads(id, payloads)
       set({ conversations: get().conversations.map((conversation) => (conversation.id === id ? { ...conversation, referenceImages } : conversation)) })
       get().notify(`已添加 ${payloads.length} 张参考图`)
+      return true
     } catch (error) {
       get().notify(error instanceof Error ? error.message : '参考图添加失败')
+      return false
     }
   },
   addHistoryAsReference: async (historyId) => {

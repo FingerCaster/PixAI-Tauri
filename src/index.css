@@ -152,3 +152,87 @@
     @apply font-sans;
   }
 }
+
+@layer components {
+  .composer {
+    border-radius: var(--radius-xl);
+  }
+
+  .prompt-box {
+    overflow: hidden;
+  }
+
+  .reference-row {
+    background: color-mix(in oklch, var(--muted), transparent 45%);
+    border-bottom: 1px solid var(--border);
+    scrollbar-color: color-mix(in oklch, var(--muted-foreground), transparent 40%) transparent;
+  }
+
+  .reference-thumb {
+    isolation: isolate;
+  }
+
+  .reference-add-button {
+    background: color-mix(in oklch, var(--background), var(--muted) 42%);
+    border-color: color-mix(in oklch, var(--border), var(--muted-foreground) 30%);
+    color: var(--muted-foreground);
+    transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+  }
+
+  .reference-add-button:hover,
+  .reference-add-button:focus-visible {
+    background: var(--accent);
+    border-color: var(--ring);
+    color: var(--accent-foreground);
+  }
+
+  .reference-preview-button {
+    display: block;
+  }
+
+  .reference-preview-button:focus-visible,
+  .reference-add-button:focus-visible,
+  .reference-remove-button:focus-visible,
+  .prompt-expand-button:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  .reference-preview-button img {
+    display: block;
+  }
+
+  .reference-remove-button:focus-visible {
+    opacity: 1;
+  }
+
+  .reference-index {
+    pointer-events: none;
+  }
+
+  [data-slot="textarea"].prompt-textarea {
+    field-sizing: fixed;
+    line-height: 1.45;
+    scrollbar-color: var(--muted-foreground) transparent;
+  }
+
+  [data-slot="textarea"].prompt-textarea::-webkit-scrollbar,
+  .reference-row::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  [data-slot="textarea"].prompt-textarea::-webkit-scrollbar-thumb,
+  .reference-row::-webkit-scrollbar-thumb {
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--muted-foreground), transparent 45%);
+  }
+
+  .prompt-foot {
+    min-height: 52px;
+  }
+
+  .prompt-expand-button {
+    flex: 0 0 auto;
+  }
+}
