@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ImageHistoryItem } from '../../shared/types'
 import * as platformModule from '../../lib/platform'
+import { pixaiApi } from '../../services/app-api'
 import { useAppStore } from '../../store/app-store'
 import { GalleryPage } from './GalleryPage'
 
@@ -43,6 +44,13 @@ describe('GalleryPage destructive actions', () => {
       setQuery: vi.fn(),
       deleteHistory: vi.fn().mockResolvedValue(undefined),
       toggleFavorite: vi.fn().mockResolvedValue(undefined),
+      updatePreferences: vi.fn().mockResolvedValue(undefined),
+      preferences: {
+        notifyOnImageSuccess: false,
+        closeToTray: true,
+        downloadOpenFolderBehavior: 'ask',
+        notificationPermission: 'unsupported'
+      },
       notify: vi.fn()
     })
   })
@@ -93,9 +101,12 @@ describe('GalleryPage destructive actions', () => {
   it('downloads multiple selected gallery images in one batch', async () => {
     const downloadHistoryImages = vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
       savedCount: 2,
-      canceled: false
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: ['E:\\BatchExports\\history-gallery-1.png', 'E:\\BatchExports\\history-gallery-2.png']
     })
     const notify = vi.fn()
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
     useAppStore.setState({ notify })
     const { host, root } = await renderGallery()
     const selectAllButton = findButtonByText('全选')
@@ -114,6 +125,233 @@ describe('GalleryPage destructive actions', () => {
       expect.objectContaining({ id: 'history-gallery-2' })
     ])
     expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
+    expect(document.querySelector('[aria-label="下载完成"]')).not.toBeNull()
+    expect(revealPaths).not.toHaveBeenCalled()
+
+    await act(async () => {
+      findButtonByText('打开位置')?.click()
+      await flushPromises()
+    })
+
+    expect(revealPaths).toHaveBeenCalledWith([
+      'E:\\BatchExports\\history-gallery-1.png',
+      'E:\\BatchExports\\history-gallery-2.png'
+    ])
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('remembers the open-folder choice from the download completion dialog', async () => {
+    vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 2,
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: ['E:\\BatchExports\\history-gallery-1.png', 'E:\\BatchExports\\history-gallery-2.png']
+    })
+    const updatePreferences = vi.fn().mockResolvedValue(undefined)
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    useAppStore.setState({ updatePreferences })
+    const { host, root } = await renderGallery()
+
+    await act(async () => {
+      findButtonByText('全选')?.click()
+    })
+    await act(async () => {
+      findButtonByText('下载')?.click()
+      await flushPromises()
+    })
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="不再打扰"]')?.click()
+    })
+    await act(async () => {
+      findButtonByText('不用打开')?.click()
+      await flushPromises()
+    })
+
+    expect(updatePreferences).toHaveBeenCalledWith({ downloadOpenFolderBehavior: 'never' })
+    expect(revealPaths).not.toHaveBeenCalled()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('still opens the downloaded folder when remembering the open choice fails', async () => {
+    vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 2,
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: ['E:\\BatchExports\\history-gallery-1.png', 'E:\\BatchExports\\history-gallery-2.png']
+    })
+    const updatePreferences = vi.fn().mockRejectedValue(new Error('disk full'))
+    const notify = vi.fn()
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    useAppStore.setState({ notify, updatePreferences })
+    const { host, root } = await renderGallery()
+
+    await act(async () => {
+      findButtonByText('全选')?.click()
+    })
+    await act(async () => {
+      findButtonByText('下载')?.click()
+      await flushPromises()
+    })
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[aria-label="不再打扰"]')?.click()
+    })
+    await act(async () => {
+      findButtonByText('打开位置')?.click()
+      await flushPromises()
+    })
+
+    expect(updatePreferences).toHaveBeenCalledWith({ downloadOpenFolderBehavior: 'always' })
+    expect(revealPaths).toHaveBeenCalledWith([
+      'E:\\BatchExports\\history-gallery-1.png',
+      'E:\\BatchExports\\history-gallery-2.png'
+    ])
+    expect(notify).toHaveBeenCalledWith('打开文件夹偏好保存失败：disk full')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('opens the downloaded folder immediately when the preference is always', async () => {
+    vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 2,
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: ['E:\\BatchExports\\history-gallery-1.png', 'E:\\BatchExports\\history-gallery-2.png']
+    })
+    const notify = vi.fn()
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    useAppStore.setState({
+      notify,
+      preferences: {
+        notifyOnImageSuccess: false,
+        closeToTray: true,
+        downloadOpenFolderBehavior: 'always',
+        notificationPermission: 'unsupported'
+      }
+    })
+    const { host, root } = await renderGallery()
+
+    await act(async () => {
+      findButtonByText('全选')?.click()
+    })
+    await act(async () => {
+      findButtonByText('下载')?.click()
+      await flushPromises()
+    })
+
+    expect(revealPaths).toHaveBeenCalledWith([
+      'E:\\BatchExports\\history-gallery-1.png',
+      'E:\\BatchExports\\history-gallery-2.png'
+    ])
+    expect(document.querySelector('[aria-label="下载完成"]')).toBeNull()
+    expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('skips the folder prompt when the preference is never', async () => {
+    vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 2,
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: ['E:\\BatchExports\\history-gallery-1.png', 'E:\\BatchExports\\history-gallery-2.png']
+    })
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    useAppStore.setState({
+      preferences: {
+        notifyOnImageSuccess: false,
+        closeToTray: true,
+        downloadOpenFolderBehavior: 'never',
+        notificationPermission: 'unsupported'
+      }
+    })
+    const { host, root } = await renderGallery()
+
+    await act(async () => {
+      findButtonByText('全选')?.click()
+    })
+    await act(async () => {
+      findButtonByText('下载')?.click()
+      await flushPromises()
+    })
+
+    expect(revealPaths).not.toHaveBeenCalled()
+    expect(document.querySelector('[aria-label="下载完成"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('does not prompt when a download result has no folder directory', async () => {
+    vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 1,
+      canceled: false
+    })
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    const { host, root } = await renderGallery()
+
+    await act(async () => {
+      document.querySelectorAll<HTMLButtonElement>('button[aria-label="选择图片"]')[0]?.click()
+    })
+    await act(async () => {
+      findButtonByText('下载')?.click()
+      await flushPromises()
+    })
+
+    expect(revealPaths).not.toHaveBeenCalled()
+    expect(document.querySelector('[aria-label="下载完成"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('keeps a successful download notification when opening the folder fails', async () => {
+    vi.spyOn(platformModule, 'downloadHistoryImages').mockResolvedValue({
+      savedCount: 2,
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: ['E:\\BatchExports\\history-gallery-1.png', 'E:\\BatchExports\\history-gallery-2.png']
+    })
+    const notify = vi.fn()
+    vi.spyOn(pixaiApi.shell, 'revealPaths').mockRejectedValue(new Error('denied'))
+    useAppStore.setState({
+      notify,
+      preferences: {
+        notifyOnImageSuccess: false,
+        closeToTray: true,
+        downloadOpenFolderBehavior: 'always',
+        notificationPermission: 'unsupported'
+      }
+    })
+    const { host, root } = await renderGallery()
+
+    await act(async () => {
+      findButtonByText('全选')?.click()
+    })
+    await act(async () => {
+      findButtonByText('下载')?.click()
+      await flushPromises()
+    })
+
+    expect(notify).toHaveBeenCalledWith('已保存 2 张图片到所选文件夹')
+    expect(notify).toHaveBeenCalledWith('文件位置打开失败：denied')
 
     await act(async () => {
       root.unmount()
@@ -125,3 +363,10 @@ describe('GalleryPage destructive actions', () => {
 function findButtonByText(text: string): HTMLButtonElement | undefined {
   return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text))
 }
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+

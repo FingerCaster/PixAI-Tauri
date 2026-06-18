@@ -12,8 +12,9 @@ import { cn } from '@/lib/utils'
 import type { ImageHistoryItem } from '../../shared/types'
 import { confirmDestructiveAction } from '../../lib/confirm'
 import { formatDuration } from '../../lib/time'
-import { DownloadCanceledError, downloadImageSource, imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
+import { DownloadCanceledError, copyImageSourceToClipboard, downloadImageSource, imageSourceForDisplay, imageSourceForDisplaySync } from '../../lib/platform'
 import { useAppStore } from '../../store/app-store'
+import { useDownloadedFolderPrompt } from '../common/DownloadedFolderPrompt'
 import { shouldShowFailedImageRetryChip } from '../../generation-retry-display'
 import { ErrorDetailsModal } from './ErrorDetailsModal'
 import { ImageCallLogModal } from './ImageCallLogModal'
@@ -21,6 +22,7 @@ import { ImagePreviewModal } from './ImagePreviewModal'
 
 export function ImageTile({ item }: { item: ImageHistoryItem }) {
   const { addHistoryAsReference, deleteHistory, notify, retryHistory, toggleFavorite } = useAppStore()
+  const { handleDownloadedLocation, downloadedFolderPrompt } = useDownloadedFolderPrompt()
   const [errorDetailsOpen, setErrorDetailsOpen] = useState(false)
   const [callLogOpen, setCallLogOpen] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
@@ -42,36 +44,23 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
     notify('提示词已复制')
   }
   const copyImage = async () => {
-    if (!item.dataUrl) {
-      const copyText = item.storagePath || item.dataUrl
-      if (!copyText) return
-      await navigator.clipboard.writeText(copyText)
-      notify('图片路径已复制')
-      return
-    }
-    if (!item.dataUrl.startsWith('data:')) {
-      await navigator.clipboard.writeText(item.storagePath || item.dataUrl)
-      notify('图片路径已复制')
-      return
-    }
     try {
-      const blob = dataUrlToBlob(item.dataUrl)
-      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
-      notify('图片已复制')
-    } catch {
-      await navigator.clipboard.writeText(item.dataUrl)
-      notify('图片数据已复制')
+      const result = await copyImageSourceToClipboard(item.dataUrl, item.storagePath)
+      notify(getCopyImageResultMessage(result.copied))
+    } catch (error) {
+      notify(error instanceof Error ? `复制失败：${error.message}` : '复制失败')
     }
   }
   const downloadImage = async () => {
     if (!imageSource) return
     try {
-      await downloadImageSource(
+      const result = await downloadImageSource(
         item.dataUrl || imageSource,
         `${item.id}.${extensionFromDataUrl(item.dataUrl || item.storagePath || imageSource)}`,
         item.storagePath
       )
       notify('图片已保存')
+      if (result.directory) await handleDownloadedLocation({ directory: result.directory, paths: result.path ? [result.path] : [] }, 1)
     } catch (error) {
       if (error instanceof DownloadCanceledError) return
       notify(error instanceof Error ? error.message : '图片下载失败')
@@ -197,8 +186,16 @@ export function ImageTile({ item }: { item: ImageHistoryItem }) {
       </div>
       {previewOpen ? <ImagePreviewModal item={item} onClose={() => setPreviewOpen(false)} /> : null}
       {callLogOpen ? <ImageCallLogModal item={item} onClose={() => setCallLogOpen(false)} /> : null}
+      {downloadedFolderPrompt}
     </article>
   )
+}
+
+function getCopyImageResultMessage(copied: Awaited<ReturnType<typeof copyImageSourceToClipboard>>['copied']): string {
+  if (copied === 'image') return '图片已复制'
+  if (copied === 'path') return '图片路径已复制'
+  if (copied === 'url') return '图片地址已复制'
+  return '图片数据已复制'
 }
 
 function ImageTileMoreMenu({
@@ -225,17 +222,6 @@ function ImageTileMoreMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   )
-}
-
-function dataUrlToBlob(dataUrl: string): Blob {
-  const match = /^data:([^;]+);base64,(.+)$/i.exec(dataUrl)
-  if (!match) return new Blob([dataUrl], { type: 'text/plain' })
-  const binary = atob(match[2])
-  const bytes = new Uint8Array(binary.length)
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-  return new Blob([bytes], { type: match[1] })
 }
 
 function extensionFromDataUrl(dataUrl: string): string {

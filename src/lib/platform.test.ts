@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetPlatformStateForTests,
+  copyImageSourceToClipboard,
   downloadImageSource,
   getSystemNotificationPermission,
   imageSourceForDisplay,
@@ -94,6 +95,56 @@ describe('platform image display sources', () => {
       dataUrl: 'data:image/png;base64,AQID',
       fileSizeBytes: 3
     })
+  })
+
+  it('falls back to text when clipboard image writes are rejected', async () => {
+    const write = vi.fn().mockRejectedValue(new Error('image denied'))
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    const OriginalClipboardItem = globalThis.ClipboardItem
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { write, writeText }
+    })
+    vi.stubGlobal('ClipboardItem', class ClipboardItemMock {
+      constructor(readonly items: Record<string, Blob>) {}
+    })
+
+    try {
+      const result = await copyImageSourceToClipboard('data:image/png;base64,aGVsbG8=')
+
+      expect(result).toEqual({ copied: 'data' })
+      expect(write).toHaveBeenCalledWith([expect.any(ClipboardItem)])
+      expect(writeText).toHaveBeenCalledWith('data:image/png;base64,aGVsbG8=')
+    } finally {
+      vi.stubGlobal('ClipboardItem', OriginalClipboardItem)
+    }
+  })
+
+  it('falls back to text when image bytes cannot be resolved', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    })
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('offline') }))
+
+    const result = await copyImageSourceToClipboard('https://example.test/image.png')
+
+    expect(result).toEqual({ copied: 'url' })
+    expect(writeText).toHaveBeenCalledWith('https://example.test/image.png')
+  })
+
+  it('classifies stored path clipboard fallbacks separately from image copy success', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    })
+
+    const result = await copyImageSourceToClipboard(null, 'C:\\PixAI\\stored\\image.png')
+
+    expect(result).toEqual({ copied: 'path' })
+    expect(writeText).toHaveBeenCalledWith('C:\\PixAI\\stored\\image.png')
   })
 })
 

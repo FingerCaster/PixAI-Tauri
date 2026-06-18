@@ -1,5 +1,5 @@
 import { getSystemNotificationPermission, readJsonState, requestSystemNotificationPermission, writeJsonState } from '../lib/platform'
-import type { AppPreferences, AppPreferencesUpdate, NotificationPermissionState } from '../shared/types'
+import type { AppPreferences, AppPreferencesUpdate, DownloadOpenFolderBehavior, NotificationPermissionState } from '../shared/types'
 
 const STATE_NAME = 'app-preferences'
 
@@ -50,6 +50,7 @@ function createDefaultPreferences(notificationPermission: NotificationPermission
   return {
     notifyOnImageSuccess: false,
     closeToTray: true,
+    downloadOpenFolderBehavior: 'ask',
     notificationPermission
   }
 }
@@ -58,6 +59,7 @@ function normalizePreferences(preferences: AppPreferencesFile): AppPreferences {
   return {
     notifyOnImageSuccess: preferences.notifyOnImageSuccess === true,
     closeToTray: preferences.closeToTray !== false,
+    downloadOpenFolderBehavior: normalizeDownloadOpenFolderBehavior(preferences.downloadOpenFolderBehavior),
     notificationPermission: normalizePermission(preferences.notificationPermission)
   }
 }
@@ -71,4 +73,9 @@ function normalizePermission(permission: unknown): NotificationPermissionState {
     return permission
   }
   return 'default'
+}
+
+function normalizeDownloadOpenFolderBehavior(value: unknown): DownloadOpenFolderBehavior {
+  if (value === 'always' || value === 'never') return value
+  return 'ask'
 }

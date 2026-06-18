@@ -73,10 +73,12 @@ export type ProviderSettingsUpdate = Partial<
 >
 
 export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'unsupported'
+export type DownloadOpenFolderBehavior = 'ask' | 'always' | 'never'
 
 export type AppPreferences = {
   notifyOnImageSuccess: boolean
   closeToTray: boolean
+  downloadOpenFolderBehavior: DownloadOpenFolderBehavior
   notificationPermission: NotificationPermissionState
 }
 
