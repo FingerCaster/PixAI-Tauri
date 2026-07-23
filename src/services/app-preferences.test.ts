@@ -10,17 +10,31 @@ describe('AppPreferencesStore', () => {
 
     expect(preferences.notifyOnImageSuccess).toBe(false)
     expect(preferences.closeToTray).toBe(true)
+    expect(preferences.downloadOpenFolderBehavior).toBe('ask')
     expect(preferences.notificationPermission).toBe('unsupported')
   })
 
   it('persists successful image notification preference changes', async () => {
     const store = new AppPreferencesStore()
 
-    await store.update({ notifyOnImageSuccess: true, closeToTray: false })
+    await store.update({ notifyOnImageSuccess: true, closeToTray: false, downloadOpenFolderBehavior: 'always' })
 
     await expect(new AppPreferencesStore().get()).resolves.toMatchObject({
       notifyOnImageSuccess: true,
-      closeToTray: false
+      closeToTray: false,
+      downloadOpenFolderBehavior: 'always'
+    })
+  })
+
+  it('normalizes invalid download folder preferences to ask', async () => {
+    const store = new AppPreferencesStore()
+
+    await store.update({ downloadOpenFolderBehavior: 'never' })
+    const updated = await store.update({ downloadOpenFolderBehavior: 'invalid' as never })
+
+    expect(updated.downloadOpenFolderBehavior).toBe('ask')
+    await expect(new AppPreferencesStore().get()).resolves.toMatchObject({
+      downloadOpenFolderBehavior: 'ask'
     })
   })
 

@@ -1,6 +1,7 @@
 import { emit, listen } from '@tauri-apps/api/event'
 import { DEFAULT_IMAGE_MAX_RETRIES, DEFAULT_MODEL, getDefaultImageSize, isImageSizeCompatible } from '../shared/image-options'
 import { copyBinaryFile, isTauriRuntime, markCodexBridgeReady, readBinaryFileBase64, readLocalImageFile, respondCodexBridge, writeDataUrlFile } from '../lib/platform'
+import { normalizeCodexProjectPath } from '../shared/codex-project-path'
 import type { PixaiApi } from './app-api'
 import { pixaiApi } from './app-api'
 import { ImageGenerationPreflightError } from './image-service'
@@ -296,10 +297,12 @@ async function reedit(api: PixaiApi, historyId: string, body: unknown, port: num
     throw new BridgeHttpError(400, '只能重新编辑已成功生成且有本地图片数据的历史项。')
   }
   const input = readCodexReeditInput(body)
+  const sourceConversationId = input.projectPath ? undefined : source.conversationId ?? undefined
   const prepared = await prepareGeneration(api, {
     ...input,
     prompt: input.prompt?.trim() || source.prompt,
-    conversationId: input.conversationId ?? source.conversationId ?? undefined,
+    conversationId: input.conversationId ?? sourceConversationId,
+    projectPath: input.projectPath ?? undefined,
     referenceHistoryIds: [source.id],
     clearReferences: input.clearReferences ?? true,
     ratio: input.ratio ?? source.ratio,
@@ -415,8 +418,17 @@ async function prepareGeneration(
   references: ReferenceImage[]
   importedReferences: Array<ReferenceImage & { sourcePath: string; sourceHistoryId?: string }>
 }> {
-  let conversation = input.conversationId ? await api.conversation.get(input.conversationId) : (await api.conversation.list())[0] || null
-  if (input.conversationId && !conversation) throw new BridgeHttpError(404, '未找到会话。')
+  let conversation: Conversation | null = null
+  if (input.conversationId) {
+    conversation = await api.conversation.get(input.conversationId)
+    if (!conversation) throw new BridgeHttpError(404, '未找到会话。')
+  } else if (input.projectPath) {
+    const normalizedProjectPath = normalizeCodexProjectPath(input.projectPath)
+    conversation = normalizedProjectPath
+      ? await api.conversation.findOrCreateCodexProjectConversation(normalizedProjectPath)
+      : null
+  }
+  if (!conversation) conversation = (await api.conversation.list())[0] || null
   if (!conversation) conversation = await api.conversation.create()
 
   let workingReferences = conversation.referenceImages
@@ -528,6 +540,7 @@ function readCodexGenerateInput(body: unknown): CodexGenerateImageInput {
   return {
     prompt,
     conversationId: readOptionalString(input.conversationId, 'conversationId'),
+    projectPath: readOptionalString(input.projectPath, 'projectPath'),
     title: readOptionalString(input.title, 'title'),
     model: readOptionalString(input.model, 'model'),
     ratio,

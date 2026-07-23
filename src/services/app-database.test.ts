@@ -61,6 +61,34 @@ describe('AppDatabase', () => {
       storagePath: LEGACY_REFERENCE_PATH
     })
   })
+
+  it('loads legacy conversations without codex project metadata', async () => {
+    await writeJsonState(STATE_NAME, JSON.stringify({
+      conversations: [conversation()],
+      runs: [],
+      history: []
+    }))
+
+    const database = new AppDatabase()
+    const conversations = await database.listConversations()
+
+    expect(conversations[0].codexProjectPath).toBeNull()
+  })
+
+  it('finds or creates one normalized conversation per codex project path', async () => {
+    const database = new AppDatabase()
+
+    const first = await database.findOrCreateCodexProjectConversation('C:\\Work\\PixAI\\Repo\\')
+    const reused = await database.findOrCreateCodexProjectConversation('c:/work/pixai/repo')
+    const different = await database.findOrCreateCodexProjectConversation('C:\\Work\\PixAI\\Other')
+    const conversations = await database.listConversations()
+
+    expect(reused.id).toBe(first.id)
+    expect(different.id).not.toBe(first.id)
+    expect(conversations).toHaveLength(2)
+    expect(await database.findCodexProjectConversation('C:/WORK/PIXA I/Repo')).toBeNull()
+    expect((await database.findCodexProjectConversation('C:\\WORK\\PIXAI\\REPO'))?.id).toBe(first.id)
+  })
 })
 
 function conversation(overrides: Record<string, unknown> = {}) {

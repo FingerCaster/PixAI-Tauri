@@ -1,13 +1,20 @@
-import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent } from 'react'
+import type { ChangeEvent, ClipboardEvent, CompositionEvent, DragEvent, FormEvent } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { Image, Loader2, Maximize2, Sparkles, WandSparkles, X } from 'lucide-react'
+import { Image, Link2, Loader2, Maximize2, Plus, Sparkles, WandSparkles, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from '@/components/ui/dropdown-menu'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { confirmDestructiveAction } from '../../lib/confirm'
-import { imageSourceForDisplay, imageSourceForDisplaySync, isTauriRuntime, readLocalImageFile } from '../../lib/platform'
+import { imageSourceForDisplay, imageSourceForDisplaySync, isTauriRuntime, readLocalImageFile, readRemoteImageUrl } from '../../lib/platform'
 import { IMAGE_QUALITY_LABELS } from '../../shared/image-options'
 import type { Conversation, ReferenceImage } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
@@ -34,6 +41,9 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   const [draftPrompt, setDraftPrompt] = useState(conversation.draftPrompt)
   const [promptExpanded, setPromptExpanded] = useState(false)
   const [previewReference, setPreviewReference] = useState<ReferenceImage | null>(null)
+  const [referenceLinkDialogOpen, setReferenceLinkDialogOpen] = useState(false)
+  const [referenceLinkUrl, setReferenceLinkUrl] = useState('')
+  const [referenceLinkLoading, setReferenceLinkLoading] = useState(false)
   const composingPromptRef = useRef(false)
   const draftPromptRef = useRef(conversation.draftPrompt)
   const persistedDraftPromptRef = useRef(conversation.draftPrompt)
@@ -41,6 +51,7 @@ export function Composer({ conversation, generating }: { conversation: Conversat
   const promptSaveVersionRef = useRef(0)
   const previousConversationIdRef = useRef(conversation.id)
   const promptBoxRef = useRef<HTMLDivElement>(null)
+  const referenceFileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => () => clearPromptSaveTimer(), [])
 
@@ -125,6 +136,19 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     void importReferenceFiles(Array.from(files))
   }
 
+  function onReferenceFileInputChange(event: ChangeEvent<HTMLInputElement>): void {
+    onFiles(event.target.files)
+    event.currentTarget.value = ''
+  }
+
+  function onReferenceLinkDialogOpenChange(open: boolean): void {
+    setReferenceLinkDialogOpen(open)
+    if (!open) {
+      setReferenceLinkUrl('')
+      setReferenceLinkLoading(false)
+    }
+  }
+
   function clearPromptSaveTimer(): void {
     if (promptSaveTimerRef.current == null) return
     window.clearTimeout(promptSaveTimerRef.current)
@@ -188,10 +212,22 @@ export function Composer({ conversation, generating }: { conversation: Conversat
     await removeReferenceImage(referenceId)
   }
 
-  const onDrop = (event: DragEvent<HTMLLabelElement>) => {
+  async function onReferenceLinkSubmit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault()
-    event.stopPropagation()
-    onFiles(event.dataTransfer.files)
+    const url = referenceLinkUrl.trim()
+    if (!url || referenceLinkLoading) return
+    setReferenceLinkLoading(true)
+    try {
+      const payload = await readRemoteImageUrl(url)
+      const imported = await importReferencePayloads([payload])
+      if (!imported) return
+      setReferenceLinkUrl('')
+      setReferenceLinkDialogOpen(false)
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '图片链接添加失败')
+    } finally {
+      setReferenceLinkLoading(false)
+    }
   }
 
   const onPromptPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
@@ -233,31 +269,57 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           </Button>
         </div>
       </div>
-      {conversation.referenceImages.length > 0 ? (
-        <div className="reference-row mb-3 flex gap-2 overflow-x-auto pb-1">
-          {conversation.referenceImages.map((reference) => {
+      <div ref={promptBoxRef} className="prompt-box rounded-xl border border-input bg-background" onDragOver={onPromptDragOver} onDrop={onPromptDrop}>
+        <div className="reference-row flex gap-2 overflow-x-auto px-3 pb-2 pt-3" aria-label="参考图">
+          {conversation.referenceImages.map((reference, index) => {
             const source = referenceSources[reference.id] || synchronousReferenceSources[reference.id] || null
             return (
-              <div className="reference-thumb group relative size-16 shrink-0 overflow-hidden rounded-xl border border-border bg-muted" key={reference.id}>
+              <div className="reference-thumb group relative size-14 shrink-0 overflow-hidden rounded-lg border border-border bg-background shadow-sm" key={reference.id}>
                 <button className="reference-preview-button h-full w-full" type="button" onClick={() => setPreviewReference(reference)} title="查看参考图">
                   {source ? <img className="h-full w-full object-cover" src={source} alt={reference.name} /> : null}
+                  <span className="reference-index absolute right-0 top-0 flex h-4 min-w-4 items-center justify-center rounded-bl-md bg-black/70 px-1 text-[10px] font-semibold leading-none text-white">
+                    {index + 1}
+                  </span>
                 </button>
                 <button
-                  className="reference-remove-button absolute right-1 top-1 flex size-6 items-center justify-center rounded-full bg-background/90 text-foreground shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
+                  className="reference-remove-button absolute right-1 top-1 flex size-5 items-center justify-center rounded-full bg-black/75 text-white shadow-sm opacity-0 transition-opacity hover:bg-destructive hover:text-destructive-foreground group-hover:opacity-100"
                   type="button"
                   onClick={() => void onRemoveReferenceImage(reference.id)}
                   title="移除参考图"
                 >
-                  <X size={14} />
+                  <X size={12} />
                 </button>
               </div>
             )
           })}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="reference-add-button flex size-14 shrink-0 items-center justify-center rounded-lg border border-dashed" type="button" title="添加参考图" aria-label="添加参考图">
+                <Plus size={20} />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-36">
+              <DropdownMenuItem onSelect={() => setReferenceLinkDialogOpen(true)}>
+                <Link2 size={14} />
+                链接
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => referenceFileInputRef.current?.click()}>
+                <Image size={14} />
+                本地图片
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input
+            ref={referenceFileInputRef}
+            className="reference-file-input hidden"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            onChange={onReferenceFileInputChange}
+          />
         </div>
-      ) : null}
-      <div ref={promptBoxRef} className="prompt-box rounded-xl border border-input bg-background" onDragOver={onPromptDragOver} onDrop={onPromptDrop}>
         <Textarea
-          className="prompt-textarea min-h-28 resize-none border-0 bg-transparent p-3 text-base shadow-none focus-visible:ring-0"
+          className="prompt-textarea block h-28 min-h-0 resize-none overflow-y-auto border-0 bg-transparent p-3 text-base shadow-none focus-visible:ring-0"
           value={draftPrompt}
           placeholder="描述你想生成的画面..."
           onChange={(event) => updateDraftPrompt(event.target.value)}
@@ -266,22 +328,6 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           onPaste={onPromptPaste}
         />
         <div className="prompt-foot flex items-center gap-2 border-t border-border px-2 py-2">
-          <label
-            className="reference-footer-button inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-            onDragOver={(event) => event.preventDefault()}
-            onDrop={onDrop}
-            title="添加参考图"
-          >
-            <Image size={17} />
-            {conversation.referenceImages.length > 0 ? <span>{conversation.referenceImages.length}</span> : null}
-            <input
-              className="hidden"
-              type="file"
-              accept="image/png,image/jpeg,image/webp"
-              multiple
-              onChange={(event: ChangeEvent<HTMLInputElement>) => onFiles(event.target.files)}
-            />
-          </label>
           <div className="hint min-w-0 flex-1 truncate text-xs text-muted-foreground">
             {conversation.ratio} · {conversation.size} · {IMAGE_QUALITY_LABELS[conversation.quality]}
           </div>
@@ -306,6 +352,14 @@ export function Composer({ conversation, generating }: { conversation: Conversat
           onPromptCompositionEnd={onPromptCompositionEnd}
         />
       ) : null}
+      <ReferenceLinkDialog
+        loading={referenceLinkLoading}
+        open={referenceLinkDialogOpen}
+        url={referenceLinkUrl}
+        onOpenChange={onReferenceLinkDialogOpenChange}
+        onSubmit={onReferenceLinkSubmit}
+        onUrlChange={setReferenceLinkUrl}
+      />
       {previewReference ? (
         <ReferencePreviewModal
           reference={previewReference}
@@ -314,6 +368,52 @@ export function Composer({ conversation, generating }: { conversation: Conversat
         />
       ) : null}
     </section>
+  )
+}
+
+function ReferenceLinkDialog({
+  loading,
+  open,
+  url,
+  onOpenChange,
+  onSubmit,
+  onUrlChange
+}: {
+  loading: boolean
+  open: boolean
+  url: string
+  onOpenChange: (open: boolean) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void>
+  onUrlChange: (url: string) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="reference-link-panel max-w-md" aria-label="添加图片链接" aria-describedby={undefined}>
+        <DialogHeader>
+          <DialogTitle>添加图片链接</DialogTitle>
+        </DialogHeader>
+        <form className="reference-link-form space-y-3" onSubmit={(event) => void onSubmit(event)}>
+          <Input
+            className="reference-link-input"
+            value={url}
+            aria-label="图片链接"
+            placeholder="https://example.com/image.png"
+            autoFocus
+            disabled={loading}
+            onChange={(event) => onUrlChange(event.target.value)}
+          />
+          <div className="flex items-center justify-end gap-2">
+            <Button variant="outline" type="button" onClick={() => onOpenChange(false)} disabled={loading}>
+              取消
+            </Button>
+            <Button type="submit" disabled={loading || !url.trim()}>
+              {loading ? <Loader2 className="spin animate-spin" /> : <Link2 />}
+              添加
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
   )
 }
 

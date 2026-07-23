@@ -12,6 +12,7 @@ use std::{
     io::{Read, Write},
     net::{Shutdown, TcpListener, TcpStream},
     path::{Path, PathBuf},
+    process::Command,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc, Mutex, OnceLock,
@@ -800,6 +801,72 @@ fn copy_binary_file(source: String, directory: String, filename: String) -> Resu
     let path = unique_file_path(&directory, &sanitize_export_filename(&filename));
     fs::copy(&source_path, &path).map_err(|error| error.to_string())?;
     Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn open_directory(path: String) -> Result<(), String> {
+    let directory = PathBuf::from(path);
+    if !directory.is_dir() {
+        return Err("文件夹不存在。".to_string());
+    }
+    open_directory_with_system_file_manager(&directory)
+}
+
+#[tauri::command]
+fn reveal_paths(paths: Vec<String>) -> Result<(), String> {
+    let mut file_paths = Vec::new();
+    let mut fallback_directory: Option<PathBuf> = None;
+
+    for path in paths
+        .into_iter()
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+    {
+        if path.is_file() {
+            file_paths.push(path);
+        } else if path.is_dir() && fallback_directory.is_none() {
+            fallback_directory = Some(path);
+        }
+    }
+
+    if !file_paths.is_empty() {
+        return tauri_plugin_opener::reveal_items_in_dir(file_paths)
+            .map_err(|error| format!("无法打开文件位置：{error}"));
+    }
+
+    if let Some(directory) = fallback_directory {
+        return open_directory_with_system_file_manager(&directory);
+    }
+
+    Err("文件不存在。".to_string())
+}
+
+#[cfg(target_os = "windows")]
+fn open_directory_with_system_file_manager(directory: &Path) -> Result<(), String> {
+    Command::new("explorer.exe")
+        .arg(directory)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开文件夹：{error}"))
+}
+
+#[cfg(target_os = "macos")]
+fn open_directory_with_system_file_manager(directory: &Path) -> Result<(), String> {
+    Command::new("open")
+        .arg(directory)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开文件夹：{error}"))
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn open_directory_with_system_file_manager(directory: &Path) -> Result<(), String> {
+    Command::new("xdg-open")
+        .arg(directory)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法打开文件夹：{error}"))
 }
 
 #[tauri::command]
@@ -1987,6 +2054,8 @@ pub fn run() {
             write_binary_file,
             write_binary_file_in_directory,
             copy_binary_file,
+            open_directory,
+            reveal_paths,
             store_data_url_file,
             codex_skill_status,
             install_codex_skill,

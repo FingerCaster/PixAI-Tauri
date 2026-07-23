@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -68,11 +68,13 @@ async function buildReleaseUpdater() {
   await ensureKeypair({ force: false })
   await assertConfiguredPubkey()
   const version = await resolveVersion()
+  const macosArch = normalizeMacosArch(readMacosArchOption())
   const privateKey = process.env.TAURI_SIGNING_PRIVATE_KEY || await readFile(keyPath, 'utf8')
   const tempConfig = {
     version,
     bundle: {
-      createUpdaterArtifacts: true
+      createUpdaterArtifacts: true,
+      ...(macosArch ? { targets: ['app'] } : {})
     }
   }
 
@@ -97,7 +99,51 @@ async function buildReleaseUpdater() {
     }
   })
 
+  await createManualMacosDmg({ version, macosArch })
+
   console.log('Signed production build finished.')
+}
+
+async function createManualMacosDmg({ version, macosArch }) {
+  if (process.platform !== 'darwin' || !macosArch) return
+
+  const tauriConfig = JSON.parse(await readFile(tauriConfigPath, 'utf8'))
+  const productName = readStringOption(tauriConfig.productName) || 'PixAI'
+  const archLabel = macosArch === 'x86_64' ? 'x64' : macosArch
+  const bundleDir = join(srcTauriDir, 'target', `${macosArch}-apple-darwin`, 'release', 'bundle')
+  const macosDir = join(bundleDir, 'macos')
+  const dmgDir = join(bundleDir, 'dmg')
+  const appPath = join(macosDir, `${productName}.app`)
+  const dmgSourceDir = join(releaseUpdaterDir, 'manual-dmg', `${version}-${macosArch}`)
+  const dmgPath = join(dmgDir, `${productName}_${version}_macos-${archLabel}.dmg`)
+
+  if (!await pathExists(appPath)) {
+    throw new Error(`Cannot create macOS DMG because ${relative(rootDir, appPath)} does not exist.`)
+  }
+
+  await rm(dmgSourceDir, { recursive: true, force: true })
+  await mkdir(dmgSourceDir, { recursive: true })
+  await mkdir(dmgDir, { recursive: true })
+  await cp(appPath, join(dmgSourceDir, `${productName}.app`), { recursive: true })
+  await symlink('/Applications', join(dmgSourceDir, 'Applications'), 'dir')
+  await rm(dmgPath, { force: true })
+
+  console.log(`Creating simple macOS DMG: ${relative(rootDir, dmgPath)}`)
+  try {
+    await runCommand('hdiutil', [
+      'create',
+      '-volname',
+      productName,
+      '-srcfolder',
+      dmgSourceDir,
+      '-ov',
+      '-format',
+      'UDZO',
+      dmgPath
+    ], { cwd: rootDir, env: process.env, shell: false })
+  } finally {
+    await rm(dmgSourceDir, { recursive: true, force: true })
+  }
 }
 
 async function pullReleaseUpdaterKey() {

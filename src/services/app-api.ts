@@ -1,4 +1,5 @@
-import { openPath } from '@tauri-apps/plugin-opener'
+import { openPath, revealItemInDir } from '@tauri-apps/plugin-opener'
+import { invoke } from '@tauri-apps/api/core'
 import { storeDataUrlFile } from '../lib/platform'
 import { AppDatabase } from './app-database'
 import { AppUpdateService } from './app-update'
@@ -52,6 +53,9 @@ export function createPixaiApi() {
     conversation: {
       list: () => database.listConversations(),
       get: (id: string) => database.getConversation(id),
+      findCodexProjectConversation: (projectPath: string) => database.findCodexProjectConversation(projectPath),
+      findOrCreateCodexProjectConversation: (projectPath: string, input?: ConversationCreateInput) =>
+        database.findOrCreateCodexProjectConversation(projectPath, input),
       create: (input?: ConversationCreateInput) => database.createConversation(input),
       update: (id: string, input: ConversationUpdate) => database.updateConversation(id, input),
       delete: (id: string) => database.deleteConversation(id),
@@ -96,12 +100,39 @@ export function createPixaiApi() {
       install: () => installPixaiCodexSkill()
     },
     shell: {
-      openPath: (path: string) => openPath(path)
+      openPath: (path: string) => openLocalPath(path),
+      revealPaths: (paths: string[]) => revealLocalPaths(paths)
     }
   }
 }
 
 export const pixaiApi = createPixaiApi()
+
+async function openLocalPath(path: string): Promise<void> {
+  try {
+    await openPath(path)
+  } catch (error) {
+    try {
+      await invoke('open_directory', { path })
+    } catch {
+      throw error
+    }
+  }
+}
+
+async function revealLocalPaths(paths: string[]): Promise<void> {
+  const filteredPaths = paths.map((path) => path.trim()).filter(Boolean)
+  if (filteredPaths.length === 0) return
+  try {
+    await revealItemInDir(filteredPaths)
+  } catch (error) {
+    try {
+      await invoke('reveal_paths', { paths: filteredPaths })
+    } catch {
+      throw error
+    }
+  }
+}
 
 async function importReferenceFiles(database: AppDatabase, conversationId: string, files: File[]) {
   const payload = await Promise.all(

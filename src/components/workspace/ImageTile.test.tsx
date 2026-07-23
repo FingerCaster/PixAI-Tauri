@@ -1,6 +1,8 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as platformModule from '../../lib/platform'
+import { pixaiApi } from '../../services/app-api'
 import type { ImageHistoryItem } from '../../shared/types'
 import { useAppStore } from '../../store/app-store'
 import { ImageTile } from './ImageTile'
@@ -39,6 +41,7 @@ describe('ImageTile', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
     useAppStore.setState({
+      preferences: null,
       deleteHistory: originalDeleteHistory,
       retryHistory: originalRetryHistory,
       addHistoryAsReference: originalAddHistoryAsReference
@@ -227,4 +230,206 @@ describe('ImageTile', () => {
     })
     host.remove()
   })
+
+  it('copies generated image bytes from the more menu', async () => {
+    const copyImageSourceToClipboard = vi.spyOn(platformModule, 'copyImageSourceToClipboard').mockResolvedValue({ copied: 'image' })
+    const notify = vi.fn()
+    useAppStore.setState({ notify })
+    const { host, root } = await renderTile()
+
+    await openMoreMenu()
+    await act(async () => {
+      menuItemByText('复制图片')?.click()
+      await flushPromises()
+    })
+
+    expect(copyImageSourceToClipboard).toHaveBeenCalledWith('data:image/png;base64,aGVsbG8=', undefined)
+    expect(notify).toHaveBeenCalledWith('图片已复制')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('prompts to open the saved folder after a direct image download', async () => {
+    const downloadImageSource = vi.spyOn(platformModule, 'downloadImageSource').mockResolvedValue({
+      path: 'E:\\SingleExports\\history-preview-test.png',
+      directory: 'E:\\SingleExports'
+    })
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    const notify = vi.fn()
+    useAppStore.setState({
+      notify,
+      updatePreferences: vi.fn().mockResolvedValue(undefined),
+      preferences: {
+        notifyOnImageSuccess: false,
+        closeToTray: true,
+        downloadOpenFolderBehavior: 'ask',
+        notificationPermission: 'unsupported'
+      }
+    })
+    const { host, root } = await renderTile()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="下载图片"]')?.click()
+      await flushPromises()
+    })
+
+    expect(downloadImageSource).toHaveBeenCalledWith('data:image/png;base64,aGVsbG8=', 'history-preview-test.png', undefined)
+    expect(notify).toHaveBeenCalledWith('图片已保存')
+    expect(document.querySelector('[aria-label="下载完成"]')).not.toBeNull()
+    expect(revealPaths).not.toHaveBeenCalled()
+
+    await act(async () => {
+      findButtonByText('打开位置')?.click()
+      await flushPromises()
+    })
+
+    expect(revealPaths).toHaveBeenCalledWith(['E:\\SingleExports\\history-preview-test.png'])
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('opens the saved folder immediately for direct downloads when the preference is always', async () => {
+    vi.spyOn(platformModule, 'downloadImageSource').mockResolvedValue({
+      path: 'E:\\SingleExports\\history-preview-test.png',
+      directory: 'E:\\SingleExports'
+    })
+    const revealPaths = vi.spyOn(pixaiApi.shell, 'revealPaths').mockResolvedValue(undefined)
+    useAppStore.setState({
+      preferences: {
+        notifyOnImageSuccess: false,
+        closeToTray: true,
+        downloadOpenFolderBehavior: 'always',
+        notificationPermission: 'unsupported'
+      }
+    })
+    const { host, root } = await renderTile()
+
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('button[title="下载图片"]')?.click()
+      await flushPromises()
+    })
+
+    expect(revealPaths).toHaveBeenCalledWith(['E:\\SingleExports\\history-preview-test.png'])
+    expect(document.querySelector('[aria-label="下载完成"]')).toBeNull()
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('copies stored local image bytes instead of the image path', async () => {
+    const copyImageSourceToClipboard = vi.spyOn(platformModule, 'copyImageSourceToClipboard').mockResolvedValue({ copied: 'image' })
+    vi.spyOn(platformModule, 'imageSourceForDisplaySync').mockReturnValue('tauri-safe://stored/image.png')
+    vi.spyOn(platformModule, 'imageSourceForDisplay').mockResolvedValue('tauri-safe://stored/image.png')
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText }
+    })
+    const notify = vi.fn()
+    useAppStore.setState({ notify })
+    const { host, root } = await renderTileForItem(succeededItem({
+      dataUrl: 'C:\\PixAI\\stored\\image.png',
+      storagePath: 'C:\\PixAI\\stored\\image.png'
+    }))
+
+    await openMoreMenu()
+    await act(async () => {
+      menuItemByText('复制图片')?.click()
+      await flushPromises()
+    })
+
+    expect(copyImageSourceToClipboard).toHaveBeenCalledWith('C:\\PixAI\\stored\\image.png', 'C:\\PixAI\\stored\\image.png')
+    expect(writeText).not.toHaveBeenCalled()
+    expect(notify).toHaveBeenCalledWith('图片已复制')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('reports a path fallback when image bytes cannot be copied from a stored file', async () => {
+    const copyImageSourceToClipboard = vi.spyOn(platformModule, 'copyImageSourceToClipboard').mockResolvedValue({ copied: 'path' })
+    vi.spyOn(platformModule, 'imageSourceForDisplaySync').mockReturnValue('tauri-safe://stored/image.png')
+    vi.spyOn(platformModule, 'imageSourceForDisplay').mockResolvedValue('tauri-safe://stored/image.png')
+    const notify = vi.fn()
+    useAppStore.setState({ notify })
+    const { host, root } = await renderTileForItem(succeededItem({
+      dataUrl: null,
+      storagePath: 'C:\\PixAI\\stored\\image.png'
+    }))
+
+    await openMoreMenu()
+    await act(async () => {
+      menuItemByText('复制图片')?.click()
+      await flushPromises()
+    })
+
+    expect(copyImageSourceToClipboard).toHaveBeenCalledWith(null, 'C:\\PixAI\\stored\\image.png')
+    expect(notify).toHaveBeenCalledWith('图片路径已复制')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
+
+  it('reports a url fallback when only an image address can be copied', async () => {
+    const copyImageSourceToClipboard = vi.spyOn(platformModule, 'copyImageSourceToClipboard').mockResolvedValue({ copied: 'url' })
+    const notify = vi.fn()
+    useAppStore.setState({ notify })
+    const { host, root } = await renderTileForItem(succeededItem({
+      dataUrl: 'https://example.test/generated.png'
+    }))
+
+    await openMoreMenu()
+    await act(async () => {
+      menuItemByText('复制图片')?.click()
+      await flushPromises()
+    })
+
+    expect(copyImageSourceToClipboard).toHaveBeenCalledWith('https://example.test/generated.png', undefined)
+    expect(notify).toHaveBeenCalledWith('图片地址已复制')
+
+    await act(async () => {
+      root.unmount()
+    })
+    host.remove()
+  })
 })
+
+async function openMoreMenu(): Promise<void> {
+  const moreButton = document.querySelector<HTMLButtonElement>('button[aria-label="更多操作"]')
+  await act(async () => {
+    const pointerDownEvent = new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, ctrlKey: false })
+    Object.defineProperty(pointerDownEvent, 'pointerType', { configurable: true, value: 'mouse' })
+    moreButton?.dispatchEvent(pointerDownEvent)
+    moreButton?.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, ctrlKey: false }))
+    moreButton?.click()
+    await flushPromises()
+  })
+}
+
+function menuItemByText(text: string): HTMLElement | null {
+  return Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+    .find((item) => item.textContent?.includes(text)) || null
+}
+
+function findButtonByText(text: string): HTMLButtonElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent?.includes(text))
+}
+
+async function flushPromises(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+  await Promise.resolve()
+}
+

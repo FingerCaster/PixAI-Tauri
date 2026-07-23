@@ -22,6 +22,7 @@ let coreModule = undefined as unknown as typeof import('@tauri-apps/api/core')
 let dialogModule = undefined as unknown as typeof import('@tauri-apps/plugin-dialog')
 let openerModule = undefined as unknown as typeof import('@tauri-apps/plugin-opener')
 let pathModule = undefined as unknown as typeof import('@tauri-apps/api/path')
+let downloadImageSource = undefined as unknown as typeof import('./platform')['downloadImageSource']
 let downloadHistoryImages = undefined as unknown as typeof import('./platform')['downloadHistoryImages']
 let resetPlatformState = undefined as unknown as typeof import('./platform')['__resetPlatformStateForTests']
 
@@ -35,6 +36,7 @@ describe('downloadHistoryImages', () => {
     openerModule = await import('@tauri-apps/plugin-opener')
     pathModule = await import('@tauri-apps/api/path')
     const platform = await import('./platform')
+    downloadImageSource = platform.downloadImageSource
     downloadHistoryImages = platform.downloadHistoryImages
     resetPlatformState = platform.__resetPlatformStateForTests
 
@@ -58,10 +60,13 @@ describe('downloadHistoryImages', () => {
         }
       }
       if (command === 'copy_binary_file') {
-        return `copied:${String(args?.filename)}`
+        return `${String(args?.directory)}\\${String(args?.filename)}`
+      }
+      if (command === 'write_binary_file') {
+        return String(args?.path)
       }
       if (command === 'write_binary_file_in_directory') {
-        return `written:${String(args?.filename)}`
+        return `${String(args?.directory)}\\${String(args?.filename)}`
       }
       throw new Error(`unexpected command ${command}`)
     })
@@ -73,7 +78,7 @@ describe('downloadHistoryImages', () => {
     resetPlatformState()
   })
 
-  it('selects one folder and saves multiple selected images there', async () => {
+  it('selects one folder and saves multiple selected images there without opening it directly', async () => {
     const result = await downloadHistoryImages([
       {
         id: 'data-source-1',
@@ -96,9 +101,55 @@ describe('downloadHistoryImages', () => {
     })
     expect(result).toEqual({
       savedCount: 2,
-      canceled: false
+      canceled: false,
+      directory: 'E:\\BatchExports',
+      paths: [
+        'E:\\BatchExports\\data-source-1.jpg',
+        'E:\\BatchExports\\data-source-2.png'
+      ]
     })
-    expect(openerModule.openPath).toHaveBeenCalledWith('E:\\BatchExports')
+    expect(openerModule.openPath).not.toHaveBeenCalled()
+  })
+
+  it('returns the saved directory for a single Tauri image download', async () => {
+    const result = await downloadImageSource('data:image/png;base64,aGVsbG8=', 'single.png')
+
+    expect(dialogModule.save).toHaveBeenCalledWith({
+      defaultPath: 'single.png',
+      filters: [
+        {
+          name: '图片',
+          extensions: ['png', 'jpg', 'jpeg', 'webp']
+        }
+      ]
+    })
+    expect(coreModule.invoke).toHaveBeenCalledWith('write_binary_file', {
+      path: 'E:\\SingleExports\\ignored.png',
+      bytesBase64: 'aGVsbG8='
+    })
+    expect(result).toEqual({
+      path: 'E:\\SingleExports\\ignored.png',
+      directory: 'E:\\SingleExports'
+    })
+  })
+
+  it('returns the saved directory for a one-item history download', async () => {
+    const result = await downloadHistoryImages([
+      {
+        id: 'single-source',
+        dataUrl: 'data:image/png;base64,aGVsbG8=',
+        storagePath: null
+      }
+    ])
+
+    expect(dialogModule.open).not.toHaveBeenCalled()
+    expect(dialogModule.save).toHaveBeenCalledTimes(1)
+    expect(result).toEqual({
+      savedCount: 1,
+      canceled: false,
+      directory: 'E:\\SingleExports',
+      paths: ['E:\\SingleExports\\ignored.png']
+    })
   })
 
   it('returns canceled when the batch folder dialog is dismissed', async () => {

@@ -1,6 +1,5 @@
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { downloadDir } from '@tauri-apps/api/path'
-import { openPath } from '@tauri-apps/plugin-opener'
 import { open, save } from '@tauri-apps/plugin-dialog'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
@@ -68,6 +67,17 @@ type DownloadableHistoryImage = Pick<ImageHistoryItem, 'id' | 'dataUrl' | 'stora
 type DownloadHistoryImagesResult = {
   savedCount: number
   canceled: boolean
+  directory?: string
+  paths?: string[]
+}
+
+export type DownloadImageSourceResult = {
+  path?: string
+  directory?: string
+}
+
+type CopyImageSourceResult = {
+  copied: 'image' | 'data' | 'path' | 'url' | 'text'
 }
 
 const memoryStorage = new Map<string, string>()
@@ -424,7 +434,7 @@ export async function writeDataUrlFile(directory: string, filename: string, data
   return invoke<string>('write_data_url_file', { directory, filename, dataUrl })
 }
 
-export async function downloadImageSource(source: string | null, filename: string, storagePath?: string | null): Promise<void> {
+export async function downloadImageSource(source: string | null, filename: string, storagePath?: string | null): Promise<DownloadImageSourceResult> {
   const blob = await resolveDownloadBlob(source, storagePath)
   if (!blob) throw new Error('图片内容不可用，无法下载。')
   if (isTauriRuntime()) {
@@ -438,13 +448,14 @@ export async function downloadImageSource(source: string | null, filename: strin
       ]
     })
     if (!selectedPath) throw new DownloadCanceledError()
-    await invoke('write_binary_file', {
+    const writtenPath = await invoke<string>('write_binary_file', {
       path: selectedPath,
       bytesBase64: await blobToBase64(blob)
     })
-    return
+    return { path: writtenPath, directory: directoryFromFilePath(writtenPath) }
   }
   await downloadBlob(blob, filename)
+  return {}
 }
 
 export async function downloadHistoryImages(items: DownloadableHistoryImage[]): Promise<DownloadHistoryImagesResult> {
@@ -453,57 +464,55 @@ export async function downloadHistoryImages(items: DownloadableHistoryImage[]): 
 
   if (!isTauriRuntime() || downloadable.length === 1) {
     let savedCount = 0
+    let directory: string | undefined
+    const paths: string[] = []
     for (const item of downloadable) {
       try {
-        await downloadImageSource(item.dataUrl ?? item.storagePath ?? null, historyDownloadFilename(item), item.storagePath)
+        const result = await downloadImageSource(item.dataUrl ?? item.storagePath ?? null, historyDownloadFilename(item), item.storagePath)
         savedCount += 1
+        directory ||= result.directory
+        if (result.path) paths.push(result.path)
       } catch (error) {
         if (error instanceof DownloadCanceledError) {
           return { savedCount, canceled: true }
         }
       }
     }
-    return { savedCount, canceled: false }
+    return { savedCount, canceled: false, directory: savedCount > 0 ? directory : undefined, paths }
   }
 
   const directory = await selectDownloadDirectory()
   if (!directory) return { savedCount: 0, canceled: true }
 
   let savedCount = 0
+  const paths: string[] = []
   for (const item of downloadable) {
     try {
-      await downloadImageSourceToDirectory(item.dataUrl ?? item.storagePath ?? null, historyDownloadFilename(item), item.storagePath, directory)
+      const path = await downloadImageSourceToDirectory(item.dataUrl ?? item.storagePath ?? null, historyDownloadFilename(item), item.storagePath, directory)
       savedCount += 1
+      paths.push(path)
     } catch {
       // Keep batch downloads moving when one history item is temporarily unavailable.
     }
   }
-  if (savedCount > 0) {
-    try {
-      await openPath(directory)
-    } catch {
-      // Opening the folder is a convenience; never block the download result on it.
-    }
-  }
-  return { savedCount, canceled: false }
+  return { savedCount, canceled: false, directory: savedCount > 0 ? directory : undefined, paths }
 }
 
-export async function downloadImageSourceToDirectory(source: string | null, filename: string, storagePath: string | null | undefined, directory: string): Promise<void> {
+export async function downloadImageSourceToDirectory(source: string | null, filename: string, storagePath: string | null | undefined, directory: string): Promise<string> {
   const blob = await resolveDownloadBlob(source, storagePath)
   if (!blob) throw new Error('图片内容不可用，无法下载。')
   if (storagePath && isLocalFilePath(storagePath)) {
-    await copyBinaryFile(storagePath, directory, filename)
-    return
+    return copyBinaryFile(storagePath, directory, filename)
   }
   if (isTauriRuntime()) {
-    await invoke('write_binary_file_in_directory', {
+    return invoke<string>('write_binary_file_in_directory', {
       directory,
       filename,
       bytesBase64: await blobToBase64(blob)
     })
-    return
   }
   await downloadBlob(blob, filename)
+  return ''
 }
 
 export async function readBinaryFileBase64(path: string): Promise<string> {
@@ -514,6 +523,38 @@ export async function readBinaryFileBase64(path: string): Promise<string> {
 export async function copyBinaryFile(source: string, directory: string, filename: string): Promise<string> {
   if (!isTauriRuntime()) throw new Error('复制图片文件只能在 Tauri 应用中执行。')
   return invoke<string>('copy_binary_file', { source, directory, filename })
+}
+
+export async function copyImageSourceToClipboard(source: string | null, storagePath?: string | null): Promise<CopyImageSourceResult> {
+  const blob = await resolveCopyImageBlob(source, storagePath)
+  const clipboardMimeType = blob?.type || 'image/png'
+  if (blob && clipboardMimeType.startsWith('image/') && typeof ClipboardItem !== 'undefined' && typeof navigator.clipboard?.write === 'function') {
+    try {
+      await navigator.clipboard.write([new ClipboardItem({ [clipboardMimeType]: blob })])
+      return { copied: 'image' }
+    } catch {
+      // Some browsers expose ClipboardItem but reject image writes; keep text fallback available.
+    }
+  }
+  const fallbackText = storagePath || source
+  if (!fallbackText) throw new Error('图片内容不可用，无法复制。')
+  await navigator.clipboard.writeText(fallbackText)
+  return { copied: classifyClipboardFallbackText(fallbackText) }
+}
+
+async function resolveCopyImageBlob(source: string | null, storagePath?: string | null): Promise<Blob | null> {
+  try {
+    return await resolveDownloadBlob(source, storagePath)
+  } catch {
+    return null
+  }
+}
+
+function classifyClipboardFallbackText(value: string): CopyImageSourceResult['copied'] {
+  if (value.startsWith('data:')) return 'data'
+  if (/^(?:https?|blob|asset):/i.test(value)) return 'url'
+  if (isLocalFilePath(value) || value.startsWith('browser-memory/')) return 'path'
+  return 'text'
 }
 
 export async function storeDataUrlFile(namespace: string, filename: string, dataUrl: string): Promise<StoredDataUrlFileResult> {
@@ -864,6 +905,12 @@ function storagePathFromAssetUrl(value: string): string | null {
 
 function isLocalFilePath(value: string): boolean {
   return /^[a-z]:[\\/]/i.test(value) || value.startsWith('\\\\')
+}
+
+function directoryFromFilePath(path: string): string | undefined {
+  const normalized = path.replace(/[\\/]+$/, '')
+  const separatorIndex = Math.max(normalized.lastIndexOf('\\'), normalized.lastIndexOf('/'))
+  return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : undefined
 }
 
 export async function getCodexSkillStatus(name: string): Promise<CodexSkillStatus> {

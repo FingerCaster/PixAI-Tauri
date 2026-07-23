@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { ScrollArea } from '@/components/ui/scroll-area'
+import { useDownloadedFolderPrompt } from '../common/DownloadedFolderPrompt'
 import { ImageTile } from '../workspace/ImageTile'
 import { confirmDestructiveAction } from '../../lib/confirm'
 import { downloadHistoryImages } from '../../lib/platform'
@@ -13,6 +14,7 @@ import { useAppStore } from '../../store/app-store'
 export function GalleryPage() {
   const { favoritesOnly, history, query, reloadHistory, setFavoritesOnly, setQuery, deleteHistory, toggleFavorite, notify } = useAppStore()
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const { handleDownloadedLocation, downloadedFolderPrompt } = useDownloadedFolderPrompt()
   const filtered = useMemo(() => history.filter((item) => {
     const q = query.trim().toLowerCase()
     return !q || `${item.prompt} ${item.model} ${item.size || ''}`.toLowerCase().includes(q)
@@ -33,6 +35,9 @@ export function GalleryPage() {
     const result = await downloadHistoryImages(selectedItems)
     if (result.savedCount > 0) {
       notify(result.savedCount > 1 ? `已保存 ${result.savedCount} 张图片到所选文件夹` : '已保存 1 张图片')
+      if (result.directory) {
+        await handleDownloadedLocation({ directory: result.directory, paths: result.paths }, result.savedCount)
+      }
       return
     }
     if (!result.canceled) notify('没有可下载的图片')
@@ -116,6 +121,7 @@ export function GalleryPage() {
           </div>
         </ScrollArea>
       )}
+      {downloadedFolderPrompt}
     </section>
   )
 }

@@ -73,10 +73,12 @@ export type ProviderSettingsUpdate = Partial<
 >
 
 export type NotificationPermissionState = 'granted' | 'denied' | 'default' | 'unsupported'
+export type DownloadOpenFolderBehavior = 'ask' | 'always' | 'never'
 
 export type AppPreferences = {
   notifyOnImageSuccess: boolean
   closeToTray: boolean
+  downloadOpenFolderBehavior: DownloadOpenFolderBehavior
   notificationPermission: NotificationPermissionState
 }
 
@@ -205,6 +207,7 @@ export type Conversation = {
   title: string
   draftPrompt: string
   model: string
+  codexProjectPath?: string | null
   ratio: ImageRatio
   size: string
   quality: ImageQuality
@@ -246,6 +249,7 @@ export type ConversationUpdate = Partial<
     | 'generationTimeoutSeconds'
     | 'autoSaveHistory'
     | 'keepFailureDetails'
+    | 'codexProjectPath'
     | 'referenceImages'
   >
 >
@@ -381,6 +385,7 @@ export type CodexSkillStatus = {
 export type CodexGenerateImageInput = Partial<Omit<GenerateImageInput, 'conversationId' | 'referenceImageIds'>> & {
   prompt: string
   conversationId?: string
+  projectPath?: string
   title?: string
   referenceImageIds?: string[]
   referenceHistoryIds?: string[]
