@@ -1,6 +1,6 @@
 [package]
 name = "pixai-tauri"
-version = "0.0.16"
+version = "0.0.17"
 description = "PixAI desktop image generation app rebuilt on Tauri 2"
 authors = ["PixAI"]
 edition = "2021"
