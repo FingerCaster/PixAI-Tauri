@@ -42,6 +42,22 @@ than constructing service graphs or provider requests.
 - Store updater progress in the dedicated `AppUpdateState` state machine.
   Persisted preferences do not own transient checking/downloading progress.
 
+## References, Retries, And Diagnostics
+
+- `Conversation.referenceImages` owns the editable reference set. Generation
+  input selects stable IDs, while `ImageService` snapshots the selected
+  references into the run/history record. Keep full binary payloads out of
+  run/history snapshots with `stripReferenceImagePayloads`.
+- `AppDatabase` owns migration and persistence of reference/image payloads.
+  It writes data URLs to app storage and normalizes legacy asset/local paths to
+  `storagePath`; components do not decide how filesystem references are stored.
+- A manual retry starts from the failed history item's prompt, model, ratio,
+  quality, and reference snapshot, filters out references no longer present in
+  the owning conversation, and switches the user back to that conversation.
+- Adapter `onCallLog` is diagnostic-only: a sanitized `ImageGenerationCallLog`
+  can be persisted with history and viewed/copied without making logging a new
+  failure path for image generation.
+
 ## Provider And Secret Boundaries
 
 - Image and prompt providers have independent selected IDs. Preserve usage
@@ -53,6 +69,9 @@ than constructing service graphs or provider requests.
 - A provider adapter/profile advertises provider-level capabilities. Model-only
   restrictions use shared helpers such as `supportsImageInputFidelity`; do not
   duplicate either decision as component-local string checks.
+- `imageGenerationEndpoint` belongs to the image provider profile, not the
+  prompt provider or a component-local draft. Preserve separate image/prompt
+  selection and model state when it is edited.
 - Normalize loaded persisted state to migrate old defaults and invalid
   selections. Corrupt local JSON falls back to explicit defaults rather than
   leaking unvalidated objects into the store.
@@ -73,3 +92,6 @@ must not change generation results.
 - Treating image and prompt provider selection as one field.
 - Duplicating provider capability logic in UI branches.
 - Replacing per-conversation generation maps with a global loading flag.
+- Storing raw image binaries in every run/history snapshot or retrying against
+  a different conversation's references.
+- Making call-log capture required for a successful provider request.

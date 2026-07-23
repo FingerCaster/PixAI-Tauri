@@ -69,3 +69,22 @@ source-backed Trellis guidance while preserving required third-party notices.
   its recoverable upstream, audited commit, and license therefore must be
   recorded before removal.
 - There are no remaining blocking product or scope questions.
+
+## Post-Rebase Update
+
+After rebasing this migration onto `origin/main` at release `0.0.15`, 22 newer
+`.codestable/` records were reintroduced by upstream history. They are subject
+to the same authority order and removal requirement: retain only rules verified
+against the current source/tests, then delete the directory again. The audited
+findings live in `research/remote-0.0.15-audit.md`.
+
+## Release Tag Divergence
+
+Remote tag `0.0.16` exists at `cc70e5c`, but neither local `main` nor
+`origin/main` contains it. The tag is a two-commit descendant of
+`origin/main` (`a6c40dd`, then `cc70e5c`), while this migration commit is on a
+separate child of the same `0.0.15` base. Its behavior is audited in
+`research/remote-0.0.16-audit.md`, but rules unique to that tag must not be
+presented as current `main` behavior until the tag is explicitly integrated.
+Integrating the release is a separate product/history change and remains
+outside this documentation-only migration task.

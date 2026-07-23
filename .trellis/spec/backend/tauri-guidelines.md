@@ -36,6 +36,68 @@ avoid duplicating store or provider workflow logic.
 - Image display may use stored paths, asset URLs, data URLs, or remote URLs.
   Preserve conversion/caching behavior in the platform wrapper rather than
   teaching components filesystem rules.
+- `read_remote_image_url` is the native boundary for provider-returned image
+  URLs. It accepts HTTP(S) only, validates PNG/JPEG/WEBP content, enforces the
+  20 MiB limit both from headers and while streaming, and returns a normalized
+  data URL payload before service persistence. Do not make desktop components
+  fetch arbitrary provider URLs directly.
+
+## Remote Reference Image Contract
+
+### 1. Scope / Trigger
+
+Provider responses can contain an external image URL. This crosses Rust HTTP,
+the `lib/platform.ts` wrapper, `ImageService`, and `AppDatabase`; it must be
+normalized before it becomes an image or reference record.
+
+### 2. Signatures
+
+- Rust command: `read_remote_image_url(url: String) -> Result<RemoteImageReadResult, String>`.
+- TypeScript boundary: `readRemoteImageUrl(url: string): Promise<ReferenceImageFilePayload>`.
+
+### 3. Contracts
+
+- Input is a trimmed HTTP(S) URL only.
+- Output is a named PNG/JPEG/WEBP payload with a base64 data URL and file size.
+- The native command enforces the 20 MiB limit from both `Content-Length` and
+  streamed bytes; `ImageService` then uses the ordinary storage pipeline.
+
+### 4. Validation And Error Matrix
+
+- Invalid/non-HTTP URL -> actionable validation error; no network request.
+- Unsupported MIME or oversized body -> actionable image-import error; no
+  persistence write.
+- Valid image -> normalized payload -> app-data storage -> display through the
+  TypeScript platform helper.
+
+### 5. Good, Base, And Bad Cases
+
+- Good: an HTTPS PNG URL is normalized and stored before history persistence.
+- Base: a data URL continues through the existing storage path unchanged.
+- Bad: a component fetches a remote URL directly and stores the raw URL or an
+  unverified path in `dataUrl`.
+
+### 6. Tests Required
+
+- `src/lib/platform.test.ts` verifies platform normalization/mock boundaries.
+- `src/services/image-service.test.ts` verifies provider image URLs enter the
+  existing storage pipeline.
+- Add Rust helper coverage when changing URL scheme, MIME, or byte limits.
+
+### 7. Wrong Vs Correct
+
+#### Wrong
+
+```ts
+item.dataUrl = providerImageUrl
+```
+
+#### Correct
+
+```ts
+const payload = await readRemoteImageUrl(providerImageUrl)
+// Pass payload through the owning service/database persistence path.
+```
 
 ## Secrets
 
@@ -52,6 +114,10 @@ avoid duplicating store or provider workflow logic.
   and structured diagnostics from `format_http_proxy_error`.
 - Validate URL scheme and HTTP method before sending. Do not turn arbitrary
   non-HTTP URLs into a generic native fetch primitive.
+- Keep remote-reference URL validation separate from the general proxy:
+  `read_remote_image_url` has its own scheme, image MIME, and byte-limit
+  contract so untrusted image content cannot enter the app-data persistence
+  path unchecked.
 - Errors crossing `invoke` should retain enough stage/source-chain data for
   `PlatformHttpProxyError` and `ErrorDetailsModal`, without exposing secrets.
 

@@ -16,6 +16,11 @@
 - [x] Mark the original Trellis bootstrap-guidelines checklist complete once
       the spec tree passes its quality gate.
 - [x] Run the full validation set and inspect the final Git diff/status.
+- [x] Reconcile the `0.0.15` upstream rebase: capture verified new rules,
+      remove reintroduced `.codestable/` records, and repeat validation.
+- [x] Audit the published-but-unmerged `0.0.16` tag, record its branch
+      divergence and contracts, and avoid describing tag-only behavior as
+      current `main` behavior.
 
 ## Validation
 
@@ -32,6 +37,8 @@
    legacy directories or accidental unrelated changes.
 9. Verify `THIRD_PARTY_NOTICES/PixAI-Codex-LICENSE.txt` retains the exact
    required notice and license heading from the reference clone.
+10. Confirm `0.0.16` is not an ancestor of `main`/`origin/main` before keeping
+    its behavior out of current-branch specs.
 
 ## Risk And Rollback Gates
 

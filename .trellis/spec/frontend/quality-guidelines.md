@@ -27,9 +27,12 @@ code. Tests use jsdom and colocated `*.test.ts(x)` files.
   notifications only while unfocused and never fail generation because native
   notification delivery failed. See `lib/platform.test.ts` and
   `store/app-store.test.ts`.
-- **Downloads:** Tauri downloads open the native save dialog and write the
-  selected path. `DownloadCanceledError` is a quiet user cancellation, not an
-  error toast. See `ImageTile.tsx` and `GalleryPage.tsx`.
+- **Downloads:** a single Tauri image uses the native save dialog.
+  `downloadHistoryImages` chooses a directory once for a multi-image desktop
+  batch, continues after an individual failure, then tries to open the folder
+  after at least one success. `DownloadCanceledError` and directory selection
+  cancellation are quiet user cancellations, not error toasts. See
+  `lib/platform.ts` and `GalleryPage.tsx`.
 - **Nested scrolling:** preserve `min-h-0` through every flex/grid ancestor.
   Result grids require `auto-rows-max`; sparse pages must not stretch cards.
 - **Generation slots:** completed, failed, retrying, and removed request indexes
@@ -38,10 +41,21 @@ code. Tests use jsdom and colocated `*.test.ts(x)` files.
   and edits without a new key retain the existing secret.
 - **Updater fallback:** a normal no-update result must not open GitHub. Fallback
   is only for known updater source/signature failures, version comparison is
-  numeric, and installer selection respects MSI versus NSIS. See
-  `services/app-update.test.ts`.
+  numeric, and target/asset selection respects OS plus architecture plus
+  installer type (Windows MSI/NSIS; macOS aarch64/x86_64 DMG). Linux must fail
+  explicitly rather than selecting a Windows asset. See `services/app-update.test.ts`.
 - **Modal/tile propagation:** close/remove actions must not bubble into an
   underlying preview opener.
+- **Destructive actions:** test the declined and accepted paths through
+  `confirmDestructiveAction`; Tauri calls the native warning dialog and browser
+  tests use the fallback. A declined/failed confirmation must not mutate state.
+- **Composer and references:** cover IME composition, debounced draft flush,
+  native drop cleanup, storage-path previews, and reference removal without
+  reopening the preview tile. Never expose raw local paths as image sources.
+- **Provider diagnostics:** call logs may be copied or persisted only after
+  headers, data URLs, base64 payloads, and long strings are redacted. SSE
+  payloads that contain `error` or `response.failed` remain provider failures
+  even when the HTTP status is 200.
 
 ## Review Checklist
 

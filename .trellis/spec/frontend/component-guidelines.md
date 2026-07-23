@@ -61,6 +61,11 @@
 - Hidden file inputs may remain when the browser file picker requires a real
   input element; the visible trigger and preview/removal actions must remain
   separate, as tested in `Composer.test.tsx`.
+- Route every destructive UI action through `confirmDestructiveAction` from
+  `src/lib/confirm.ts`. Tauri uses its native warning dialog; browser tests and
+  fallback use `window.confirm`. A declined dialog or dialog error must return
+  before the store/service mutation. This applies to deleting sessions,
+  providers, templates, history items, references, and batch operations.
 
 ## Common Mistakes
 
@@ -71,3 +76,5 @@
 - Omitting `min-h-0` anywhere in a nested scroll chain.
 - Combining high-frequency conversation parameters with application settings.
 - Letting an icon click bubble into the preview/open action underneath it.
+- Calling `window.confirm` directly from product UI instead of the shared
+  desktop-aware confirmation boundary.

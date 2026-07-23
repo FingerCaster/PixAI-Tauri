@@ -43,6 +43,13 @@ boundaries:
   the public TypeScript result camelCase.
 - Normalize non-`Error` failures before displaying or classifying them.
   `app-update.ts` and `PlatformHttpProxyError` preserve structured diagnostics.
+- A `ReferenceImage` separates transient `dataUrl` payload data from the native
+  `storagePath`. On load, normalize legacy `asset.localhost` and local-path
+  values into `storagePath`; UI must resolve them through
+  `imageSourceForDisplay*`, never cast a filesystem path into an image URL.
+- Remote provider image URLs cross the `readRemoteImageUrl` platform boundary
+  before persistence. Keep the service contract as a normalized image payload,
+  not an arbitrary remote URL or unvalidated response body.
 
 The project currently uses focused validation helpers rather than Zod or
 another schema package. Reuse the owning normalizer before adding a second
@@ -55,6 +62,12 @@ validation style.
 `apiKeyStored`. `LegacyProviderSettingsUpdate` exists for Bridge compatibility
 and may accept legacy field spellings, but responses must remain redacted.
 
+`ImageGenerationCallLog` is a public diagnostic shape only after adapter
+sanitization: authorization values, data URLs, base64 image data, and oversized
+strings must be redacted or summarized. When adding `imageGenerationEndpoint`
+or another provider enum/field, update the profile normalizer, Bridge input,
+adapter dispatch, workspace UI, fixtures, and tests together.
+
 ## Forbidden Patterns
 
 - `any`, `as unknown as T`, or unchecked JSON casts at trust boundaries.
@@ -63,3 +76,5 @@ and may accept legacy field spellings, but responses must remain redacted.
   types.
 - Returning raw caught values directly to the UI without normalization.
 - Adding a capability or state variant without updating consumers and tests.
+- Rendering a raw local path as `img.src`, or persisting it in `dataUrl`.
+- Exposing a raw Authorization header or binary request body in a call log.

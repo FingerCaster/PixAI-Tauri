@@ -21,6 +21,7 @@ src-tauri/target
 .codedb-mcp/deepwiki/
 .tmp-edge-profile*
 *.local
+__pycache__/
 
 # Editor directories and files
 .vscode/*

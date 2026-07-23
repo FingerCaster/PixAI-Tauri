@@ -38,6 +38,23 @@ return () => {
 This handles unmounting before the async subscription resolves. Always clean
 up Tauri listeners, DOM listeners, intervals, and timeouts.
 
+## Draft Persistence And Native Drop Events
+
+- `Composer.tsx` persists prompt drafts on a 250 ms debounce. It uses refs for
+  the current draft, last persisted draft, composition state, timer, and save
+  version so an older async write cannot overwrite a newer edit or a switched
+  conversation.
+- Do not persist during an IME composition. Cancel the timer on composition
+  start, save the final `currentTarget.value` on composition end, and flush the
+  draft before generate or prompt-enrichment actions.
+- Browser paste/drop can use a `FileList`, but desktop window drops arrive
+  through `getCurrentWindow().onDragDropEvent`. Filter the drop to the prompt
+  surface, turn native paths into payloads with `readLocalImageFile`, and use
+  the async-listener disposal pattern before unmounting.
+- Image display sources resolve asynchronously through `imageSourceForDisplay`.
+  Guard the result with cancellation, as `Composer.tsx` does, so a stale
+  reference list cannot replace the current one.
+
 ## Store Access
 
 - Destructure several values/actions when a component truly consumes them
@@ -69,3 +86,6 @@ up Tauri listeners, DOM listeners, intervals, and timeouts.
 - Adding a generic custom hook layer that only renames Zustand actions.
 - Capturing preferences or active IDs in long-lived callbacks when the latest
   value is required.
+- Saving draft text mid-composition or allowing an older debounced write to win.
+- Treating a Tauri `onDragDropEvent` as a browser `DataTransfer` event, or
+  leaving its asynchronous cleanup unresolved.

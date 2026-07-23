@@ -13,6 +13,11 @@ This avoids importing stale rules. For example, the old Bridge PRD says raw
 provider fields are rejected, while `src/services/codex-bridge.ts` currently
 accepts compatibility fields and only redacts secrets from responses.
 
+Published tags do not outrank the checked-out branch automatically. A release
+tag that is not an ancestor of `main` is useful research evidence, but its
+unique behavior stays out of current-branch specs until the release commits
+are explicitly integrated.
+
 ## Trellis Spec Shape
 
 The existing frontend scaffold remains the stable navigation surface, but each
