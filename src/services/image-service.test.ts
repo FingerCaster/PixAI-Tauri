@@ -64,4 +64,82 @@ describe('ImageService', () => {
     })
     expect(result.items[0].storagePath).toContain('browser-memory/images/')
   })
+
+  it('notifies after persisting a running run and before the provider request starts', async () => {
+    let resolveProvider: (response: Response) => void = () => undefined
+    const providerResponse = new Promise<Response>((resolve) => {
+      resolveProvider = resolve
+    })
+    const fetchMock = vi.fn(() => providerResponse)
+    vi.stubGlobal('fetch', fetchMock)
+    const providers = new ProviderSettingsStore()
+    const settings = await providers.upsertProfile({
+      name: 'Deferred image provider',
+      baseUrl: 'http://127.0.0.1:37123',
+      enabledUsages: ['image'],
+      apiKey: 'sk-123456789'
+    })
+    await providers.update({ selectedImageProfileId: settings.profiles.at(-1)?.id })
+    const database = new AppDatabase()
+    const conversation = await database.createConversation()
+    const service = new ImageService(database, providers)
+    let startedRunId: string | null = null
+
+    const generation = service.generate({
+      conversationId: conversation.id,
+      prompt: 'a deferred cat',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'high',
+      n: 1,
+      outputFormat: 'png',
+      maxRetries: 0
+    }, {
+      onRunStarted: (run) => {
+        expect(fetchMock).not.toHaveBeenCalled()
+        expect(run.status).toBe('running')
+        startedRunId = run.id
+      }
+    })
+
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+    expect(startedRunId).not.toBeNull()
+    await expect(database.listRuns(conversation.id)).resolves.toEqual([
+      expect.objectContaining({ id: startedRunId, status: 'running' })
+    ])
+
+    resolveProvider(new Response(JSON.stringify({ data: [{ b64_json: btoa('deferred-image'.repeat(8)) }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    }))
+    await expect(generation).resolves.toMatchObject({ run: { status: 'succeeded' } })
+  })
+
+  it('does not notify or persist a run when generation preflight fails', async () => {
+    const providers = new ProviderSettingsStore()
+    const settings = await providers.upsertProfile({
+      name: 'Missing key provider',
+      baseUrl: 'http://127.0.0.1:37123',
+      enabledUsages: ['image']
+    })
+    await providers.update({ selectedImageProfileId: settings.profiles.at(-1)?.id })
+    const database = new AppDatabase()
+    const conversation = await database.createConversation()
+    const service = new ImageService(database, providers)
+    const onRunStarted = vi.fn()
+
+    await expect(service.generate({
+      conversationId: conversation.id,
+      prompt: 'a cat without credentials',
+      ratio: '1:1',
+      size: '1024x1024',
+      quality: 'high',
+      n: 1,
+      outputFormat: 'png',
+      maxRetries: 0
+    }, { onRunStarted })).rejects.toThrow('API Key 尚未配置。')
+
+    expect(onRunStarted).not.toHaveBeenCalled()
+    await expect(database.listRuns(conversation.id)).resolves.toHaveLength(0)
+  })
 })

@@ -8,13 +8,14 @@ import { PromptLibraryPage } from './components/prompts/PromptLibraryPage'
 import { GlobalSettingsModal, type GlobalSettingsTab } from './components/settings/global/GlobalSettingsModal'
 import { SettingsPanel } from './components/settings/SettingsPanel'
 import { Workspace } from './components/workspace/Workspace'
-import { registerCodexBridgeHandler } from './services/codex-bridge'
+import { CODEX_BRIDGE_CHANGE_EVENT, registerCodexBridgeHandler } from './services/codex-bridge'
 import { isTauriRuntime, notifyWindowSentToTray, watchCloseRequested, watchWindowFocus } from './lib/platform'
 import { applyDocumentTheme } from './lib/theme'
 import { useAppStore } from './store/app-store'
+import type { CodexBridgeChange } from './shared/types'
 
 function App() {
-  const { darkMode, load, loading, reloadHistory, setView, setWindowFocused, settingsVisible, toast, view } = useAppStore()
+  const { darkMode, handleCodexBridgeGenerationChange, load, loading, reloadHistory, setView, setWindowFocused, settingsVisible, toast, view } = useAppStore()
   const [globalSettingsState, setGlobalSettingsState] = useState<{ open: boolean; tab: GlobalSettingsTab }>({
     open: false,
     tab: 'general'
@@ -27,25 +28,34 @@ function App() {
   useLayoutEffect(() => applyDocumentTheme(darkMode), [darkMode])
 
   useEffect(() => {
-    void load()
-  }, [load])
-
-  useEffect(() => {
-    if (!isTauriRuntime()) return undefined
+    if (!isTauriRuntime()) {
+      void load()
+      return undefined
+    }
     let disposed = false
     let unlisten: (() => void) | null = null
-    void registerCodexBridgeHandler()
-    void listen('pixai://codex-bridge/changed', () => {
-      void load().then(() => reloadHistory())
+    void listen<CodexBridgeChange>(CODEX_BRIDGE_CHANGE_EVENT, (event) => {
+      if (event.payload.type === 'generation') {
+        void handleCodexBridgeGenerationChange(event.payload).catch(() => undefined)
+        return
+      }
+      void load().then(() => reloadHistory()).catch(() => undefined)
     }).then((nextUnlisten) => {
       if (disposed) void nextUnlisten()
-      else unlisten = nextUnlisten
+      else {
+        unlisten = nextUnlisten
+        void load()
+          .then(() => registerCodexBridgeHandler())
+          .catch(() => undefined)
+      }
+    }).catch(() => {
+      if (!disposed) void load().catch(() => undefined)
     })
     return () => {
       disposed = true
       if (unlisten) void unlisten()
     }
-  }, [load, reloadHistory])
+  }, [handleCodexBridgeGenerationChange, load, reloadHistory])
 
   useEffect(() => {
     let disposed = false

@@ -9,6 +9,10 @@ import type { GenerateImageInput, GenerateImageResult, GenerationMode, Generatio
 import type { AppDatabase } from './app-database'
 import type { ProviderSettingsStore } from './provider-settings'
 
+export type ImageGenerationLifecycle = {
+  onRunStarted?: (run: GenerationRun) => void | Promise<void>
+}
+
 export class ImageService {
   private activeRequests = new Map<string, Array<AbortController>>()
 
@@ -17,7 +21,7 @@ export class ImageService {
     private readonly providers: ProviderSettingsStore
   ) {}
 
-  async generate(input: GenerateImageInput): Promise<GenerateImageResult> {
+  async generate(input: GenerateImageInput, lifecycle: ImageGenerationLifecycle = {}): Promise<GenerateImageResult> {
     const startedAt = Date.now()
     const settings = await this.providers.get()
     const runtimeProfile = await this.providers.getRuntimeProfile(settings.selectedImageProfileId)
@@ -63,6 +67,7 @@ export class ImageService {
     const count = Math.min(10, Math.max(1, input.n || 1))
     const controllers = Array.from({ length: count }, () => new AbortController())
     this.activeRequests.set(run.id, controllers)
+    await notifyRunStarted(lifecycle, run)
     const items: ImageHistoryItem[] = []
     let succeededCount = 0
     let canceledCount = 0
@@ -250,6 +255,14 @@ export class ImageService {
       callLog,
       createdAt: nowIso()
     })
+  }
+}
+
+async function notifyRunStarted(lifecycle: ImageGenerationLifecycle, run: GenerationRun): Promise<void> {
+  try {
+    await lifecycle.onRunStarted?.(run)
+  } catch {
+    // UI observers must not invalidate a run that has already been persisted.
   }
 }
 

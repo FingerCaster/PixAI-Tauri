@@ -5,7 +5,7 @@ import { AppDatabase } from './app-database'
 import { AppUpdateService } from './app-update'
 import { AppPreferencesStore } from './app-preferences'
 import { getPixaiCodexSkillStatus, installPixaiCodexSkill } from './codex-skill-installer'
-import { ImageService } from './image-service'
+import { ImageService, type ImageGenerationLifecycle } from './image-service'
 import { PromptService } from './prompt-service'
 import { PromptTemplateStore } from './prompt-templates'
 import { ProviderSettingsStore } from './provider-settings'
@@ -62,7 +62,7 @@ export function createPixaiApi() {
       runs: (id: string) => database.listRuns(id)
     },
     image: {
-      generate: (input: GenerateImageInput) => images.generate(input),
+      generate: (input: GenerateImageInput, lifecycle?: ImageGenerationLifecycle) => images.generate(input, lifecycle),
       cancel: (runId: string, requestIndex?: number) => images.cancel(runId, requestIndex)
     },
     prompt: {

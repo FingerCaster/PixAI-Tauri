@@ -6,6 +6,8 @@ import type { PixaiApi } from './app-api'
 import { pixaiApi } from './app-api'
 import { ImageGenerationPreflightError } from './image-service'
 import type {
+  CodexBridgeChange,
+  CodexBridgeChangeType,
   CodexBridgeRequest,
   CodexBridgeResponse,
   CodexGenerateImageInput,
@@ -14,6 +16,8 @@ import type {
   ConversationCreateInput,
   ConversationUpdate,
   GenerateImageInput,
+  GenerateImageResult,
+  GenerationRun,
   HistoryListOptions,
   ImageBackground,
   ImageHistoryItem,
@@ -39,7 +43,7 @@ type BridgeResult = {
 type JsonRecord = Record<string, unknown>
 
 const CODEX_BRIDGE_REQUEST_EVENT = 'pixai://codex-bridge/request'
-const CODEX_BRIDGE_CHANGE_EVENT = 'pixai://codex-bridge/changed'
+export const CODEX_BRIDGE_CHANGE_EVENT = 'pixai://codex-bridge/changed'
 const VALID_RATIOS: ImageRatio[] = ['1:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16', '21:9', '9:21']
 const VALID_QUALITIES: ImageQuality[] = ['auto', 'low', 'medium', 'high']
 const VALID_OUTPUT_FORMATS: ImageOutputFormat[] = ['png', 'jpeg', 'webp']
@@ -272,9 +276,8 @@ async function listHistory(api: PixaiApi, url: URL, port: number): Promise<Bridg
 async function generate(api: PixaiApi, body: unknown, port: number): Promise<BridgeResult> {
   const input = readCodexGenerateInput(body)
   const prepared = await prepareGeneration(api, input)
-  const result = await api.image.generate(prepared.generateInput)
+  const result = await generateWithBridgeLifecycle(api, prepared.generateInput, prepared.conversation)
   const items = result.items.map((item) => enrichHistoryItem(item, port))
-  await notifyBridgeChange('generation')
   return {
     status: result.errorMessage ? 202 : 201,
     body: {
@@ -310,9 +313,8 @@ async function reedit(api: PixaiApi, historyId: string, body: unknown, port: num
     quality: input.quality ?? source.quality,
     model: input.model ?? source.model
   })
-  const result = await api.image.generate(prepared.generateInput)
+  const result = await generateWithBridgeLifecycle(api, prepared.generateInput, prepared.conversation)
   const items = result.items.map((item) => enrichHistoryItem(item, port))
-  await notifyBridgeChange('generation')
   return {
     status: result.errorMessage ? 202 : 201,
     body: {
@@ -327,6 +329,20 @@ async function reedit(api: PixaiApi, historyId: string, body: unknown, port: num
       references: prepared.references,
       importedReferences: prepared.importedReferences
     }
+  }
+}
+
+async function generateWithBridgeLifecycle(api: PixaiApi, input: GenerateImageInput, conversation: Conversation): Promise<GenerateImageResult> {
+  let startedRun: GenerationRun | null = null
+  try {
+    return await api.image.generate(input, {
+      onRunStarted: async (run) => {
+        startedRun = run
+        await notifyGenerationChange('started', run, conversation)
+      }
+    })
+  } finally {
+    if (startedRun) await notifyGenerationChange('finished', startedRun)
   }
 }
 
@@ -792,9 +808,30 @@ function withCompatibilitySettings(settings: ProviderSettings): ProviderSettings
   }
 }
 
-async function notifyBridgeChange(type: string): Promise<void> {
+async function notifyBridgeChange(type: Exclude<CodexBridgeChangeType, 'generation'>): Promise<void> {
   if (!isTauriRuntime()) return
-  await emit(CODEX_BRIDGE_CHANGE_EVENT, { type, createdAt: new Date().toISOString() })
+  const change: CodexBridgeChange = { type, createdAt: new Date().toISOString() }
+  await emit(CODEX_BRIDGE_CHANGE_EVENT, change)
+}
+
+async function notifyGenerationChange(phase: 'started' | 'finished', run: GenerationRun, conversation?: Conversation): Promise<void> {
+  if (!isTauriRuntime()) return
+  const change: CodexBridgeChange = {
+    type: 'generation',
+    phase,
+    conversationId: run.conversationId,
+    runId: run.id,
+    createdAt: new Date().toISOString(),
+    ...(phase === 'started' && conversation ? { conversation: sanitizeConversationForBridgeEvent(conversation) } : {})
+  }
+  await emit(CODEX_BRIDGE_CHANGE_EVENT, change).catch(() => undefined)
+}
+
+function sanitizeConversationForBridgeEvent(conversation: Conversation): Conversation {
+  return {
+    ...conversation,
+    referenceImages: conversation.referenceImages.map((reference) => ({ ...reference, dataUrl: '' }))
+  }
 }
 
 class BridgeHttpError extends Error {

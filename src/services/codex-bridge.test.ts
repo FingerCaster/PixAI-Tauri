@@ -112,6 +112,90 @@ describe('codex bridge', () => {
     expect(fileResponse.bodyBase64).toBe(bridgeImageBase64)
   })
 
+  it('persists and announces a running generation before the Bridge response settles', async () => {
+    const api = createPixaiApi()
+    await configureImageProvider(api)
+    const originalGenerate = api.image.generate
+    let resolveProvider: (response: Response) => void = () => undefined
+    const providerResponse = new Promise<Response>((resolve) => {
+      resolveProvider = resolve
+    })
+    vi.stubGlobal('fetch', vi.fn(() => providerResponse))
+    let resolveStarted: () => void = () => undefined
+    const started = new Promise<void>((resolve) => {
+      resolveStarted = resolve
+    })
+    let startedRunId: string | null = null
+    vi.spyOn(api.image, 'generate').mockImplementation((input, lifecycle) =>
+      originalGenerate(input, {
+        onRunStarted: async (run) => {
+          startedRunId = run.id
+          await lifecycle?.onRunStarted?.(run)
+          resolveStarted()
+        }
+      })
+    )
+    let responseSettled = false
+
+    const responsePromise = handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '桥接实时状态测试',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    void responsePromise.finally(() => {
+      responseSettled = true
+    })
+
+    await started
+    expect(responseSettled).toBe(false)
+    expect(startedRunId).not.toBeNull()
+    const conversations = await api.conversation.list()
+    await expect(api.conversation.runs(conversations[0].id)).resolves.toEqual([
+      expect.objectContaining({ id: startedRunId, status: 'running' })
+    ])
+
+    resolveProvider(new Response(JSON.stringify({ data: [{ b64_json: bridgeImageBase64 }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    }))
+    await expect(responsePromise).resolves.toMatchObject({ status: 201 })
+  })
+
+  it('uses the same generation lifecycle for reedit requests', async () => {
+    const api = createPixaiApi()
+    await configureImageProvider(api)
+    const sourceResponse = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '重新编辑来源',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const source = JSON.parse(sourceResponse.body || '{}')
+    const generateSpy = vi.spyOn(api.image, 'generate')
+
+    const response = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/images/' + source.items[0].id + '/reedit', 'POST', {
+        prompt: '重新编辑后的猫'
+      })
+    )
+
+    expect(response.status).toBe(201)
+    expect(generateSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: '重新编辑后的猫' }),
+      expect.objectContaining({ onRunStarted: expect.any(Function) })
+    )
+  })
+
   it('reuses the same conversation for the same projectPath', async () => {
     const api = createPixaiApi()
     await configureImageProvider(api)

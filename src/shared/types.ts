@@ -348,6 +348,22 @@ export type ImageApiData = {
 
 export type CodexBridgeChangeType = 'settings' | 'conversation' | 'history' | 'generation' | 'prompt'
 
+export type CodexBridgeGenerationChange = {
+  type: 'generation'
+  phase: 'started' | 'finished'
+  conversationId: string
+  runId: string
+  createdAt: string
+  conversation?: Conversation
+}
+
+export type CodexBridgeChange =
+  | CodexBridgeGenerationChange
+  | {
+      type: Exclude<CodexBridgeChangeType, 'generation'>
+      createdAt: string
+    }
+
 export type CodexBridgeRequest = {
   id: string
   method: string

@@ -42,6 +42,95 @@ Do not duplicate TypeScript business logic in the Rust listener.
   content headers; JSON remains UTF-8.
 - Mutations emit the existing changed event so the UI reloads affected state.
 
+## Scenario: Live Generation Lifecycle
+
+### 1. Scope / Trigger
+
+- Trigger: `/generate` and `/images/:id/reedit` are long-running Bridge
+  mutations whose persisted `running` state must be visible before the HTTP
+  response completes.
+
+### 2. Signatures
+
+```ts
+type ImageGenerationLifecycle = {
+  onRunStarted?: (run: GenerationRun) => void | Promise<void>
+}
+
+image.generate(input: GenerateImageInput, lifecycle?: ImageGenerationLifecycle)
+```
+
+`ImageService.generate` invokes `onRunStarted` after `insertRun` and request
+controller registration, but before awaiting provider work. The observer is
+best-effort and must not turn a persisted run into a generation failure.
+
+### 3. Contracts
+
+Generation changes use `pixai://codex-bridge/changed`:
+
+```ts
+type CodexBridgeGenerationChange = {
+  type: 'generation'
+  phase: 'started' | 'finished'
+  conversationId: string
+  runId: string
+  createdAt: string
+  conversation?: Conversation
+}
+```
+
+- `started` carries the resolved conversation snapshot so a newly created
+  project conversation can render immediately. Strip reference `dataUrl`
+  payloads before emitting it.
+- `finished` identifies the same run and is emitted in `finally` after every
+  started request, including success, provider failure, cancellation, and an
+  unexpected post-start error.
+- Project-path routing and explicit `conversationId` precedence are resolved
+  before lifecycle emission and must not be reimplemented by the UI.
+- Register the changed-event listener before marking the renderer Bridge
+  handler ready, or the first request can race past the listener.
+
+### 4. Validation & Error Matrix
+
+| Condition | Run | Lifecycle events | Bridge result |
+|---|---|---|---|
+| Invalid prompt/provider/capability preflight | none | none | existing 400 error |
+| Provider succeeds | running -> succeeded | started, finished | 201 |
+| Provider returns a handled batch failure | running -> failed | started, finished | 202 |
+| Request is canceled | running -> failed | started, finished | existing canceled result |
+| Event emission fails | unchanged | best effort | generation continues |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a new `projectPath` emits a sanitized conversation plus running run ID,
+  and the workbench renders that workspace before the provider resolves.
+- Base: an existing conversation receives the same lifecycle without changing
+  Bridge response fields.
+- Bad: emit one unstructured `generation` event only after awaiting
+  `image.generate`; this hides the only observable running interval.
+
+### 6. Tests Required
+
+- Defer provider completion and assert the start callback observes a persisted
+  `status: 'running'` run before provider fetch.
+- Assert `/generate` has not settled when the running run becomes observable.
+- Assert `/reedit` uses the same lifecycle helper.
+- Assert preflight failure invokes no start callback and persists no run.
+- Store tests must cover first-frame conversation insertion, concurrent run-ID
+  deduplication, completion cleanup, and stale-refresh rejection.
+
+### 7. Wrong vs Correct
+
+```ts
+// Wrong: completion-only notification.
+const result = await api.image.generate(input)
+await notifyBridgeChange('generation')
+
+// Correct: persist -> started -> provider -> finished.
+await api.image.generate(input, { onRunStarted })
+// The Bridge wrapper emits finished in finally for the same runId.
+```
+
 ## Settings And Secrets
 
 The Bridge intentionally accepts legacy `baseURL`/`baseUrl`, model, endpoint,
@@ -58,6 +147,7 @@ a license to expose secrets:
 - Rust tests cover loopback binding, fallback ports, parser size/error cases,
   and CORS.
 - `src/services/codex-bridge.test.ts` covers routes, compatibility settings,
-  generation/history, prompt routing, preflight errors, and unknown routes.
+  generation lifecycle/history, prompt routing, preflight errors, and unknown
+  routes.
 - Run the Rust and frontend suites after any route, payload, event, port, or
   timeout change.

@@ -36,6 +36,17 @@ than constructing service graphs or provider requests.
 - Keep generation state per conversation and request index. Do not collapse it
   into a single global boolean; `generation-state.ts` and
   `removedGenerationIndexesByRunId` preserve concurrent and retry slots.
+- External generation lifecycle events compose with the same per-conversation
+  counters. Track Bridge work by authoritative `runId`, make duplicate
+  start/finish events idempotent, and decrement only the matching active run.
+- When a lifecycle event activates a conversation that is not loaded yet,
+  insert its sanitized event snapshot synchronously before async refresh so the
+  workspace never renders an empty first frame.
+- Version asynchronous refreshes by their owning slice: runs per conversation,
+  conversations and history globally. A slow `started` refresh must not
+  overwrite a newer `finished` refresh with stale `running` data, and one
+  project's old history request must not overwrite another project's newer
+  global history.
 - Refresh the minimum owning slice after service mutations. For example,
   template actions reload templates and history actions reload history rather
   than rerunning the entire application load.

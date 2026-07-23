@@ -204,6 +204,205 @@ describe('useAppStore', () => {
     })
   })
 
+  it('activates the Bridge conversation immediately and refreshes its final run', async () => {
+    await useAppStore.getState().load()
+    const previousConversation = useAppStore.getState().conversations[0]
+    const bridgeConversation = await pixaiApi.conversation.create({
+      title: 'Codex project',
+      codexProjectPath: 'c:/work/pixai/project'
+    })
+    const runningRun = createGenerationRun('run-bridge-live', bridgeConversation.id, 'running')
+    const completedRun = { ...runningRun, status: 'succeeded' as const, durationMs: 1400 }
+    vi.spyOn(pixaiApi.conversation, 'runs')
+      .mockResolvedValueOnce([runningRun])
+      .mockResolvedValueOnce([completedRun])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([])
+    useAppStore.setState({ view: 'gallery' })
+
+    const started = useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'started',
+      conversationId: bridgeConversation.id,
+      runId: runningRun.id,
+      createdAt: '2026-07-23T09:00:00.000Z',
+      conversation: bridgeConversation
+    })
+
+    expect(useAppStore.getState()).toMatchObject({
+      view: 'workspace',
+      activeConversationId: bridgeConversation.id,
+      bridgeGenerationConversationByRunId: { [runningRun.id]: bridgeConversation.id }
+    })
+    expect(useAppStore.getState().conversations[0]).toMatchObject({ id: bridgeConversation.id })
+    expect(useAppStore.getState().getConversationGenerationState(bridgeConversation.id)).toMatchObject({
+      generating: true,
+      activeCount: 1
+    })
+
+    await started
+    expect(useAppStore.getState().conversations).toContainEqual(expect.objectContaining({ id: bridgeConversation.id }))
+    expect(useAppStore.getState().runsByConversation[bridgeConversation.id]).toEqual([runningRun])
+
+    useAppStore.setState({ activeConversationId: previousConversation.id })
+    const finished = useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'finished',
+      conversationId: bridgeConversation.id,
+      runId: runningRun.id,
+      createdAt: '2026-07-23T09:00:01.400Z'
+    })
+
+    expect(useAppStore.getState().activeConversationId).toBe(previousConversation.id)
+    expect(useAppStore.getState().getConversationGenerationState(bridgeConversation.id)).toMatchObject({
+      generating: false,
+      activeCount: 0
+    })
+
+    await finished
+    expect(useAppStore.getState().runsByConversation[bridgeConversation.id]).toEqual([completedRun])
+    expect(useAppStore.getState().bridgeGenerationConversationByRunId).toEqual({})
+  })
+
+  it('preserves loaded reference payloads when applying a sanitized Bridge conversation snapshot', async () => {
+    await useAppStore.getState().load()
+    const conversation = {
+      ...useAppStore.getState().conversations[0],
+      referenceImages: [{
+        id: 'reference-live',
+        name: 'live.png',
+        mimeType: 'image/png',
+        dataUrl: 'data:image/png;base64,bGl2ZQ==',
+        fileSizeBytes: 4,
+        createdAt: '2026-07-23T09:05:00.000Z'
+      }]
+    }
+    useAppStore.setState({ conversations: [conversation], activeConversationId: conversation.id })
+    vi.spyOn(pixaiApi.conversation, 'list').mockResolvedValue([conversation])
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([])
+
+    await useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'started',
+      conversationId: conversation.id,
+      runId: 'run-sanitized-conversation',
+      createdAt: '2026-07-23T09:05:00.000Z',
+      conversation: {
+        ...conversation,
+        referenceImages: conversation.referenceImages.map((reference) => ({ ...reference, dataUrl: '' }))
+      }
+    })
+
+    expect(useAppStore.getState().conversations[0].referenceImages[0].dataUrl).toBe('data:image/png;base64,bGl2ZQ==')
+  })
+
+  it('deduplicates Bridge lifecycle events and keeps concurrent runs independent', async () => {
+    await useAppStore.getState().load()
+    const conversation = await pixaiApi.conversation.create({ title: 'Concurrent Bridge runs' })
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([])
+    const started = (runId: string) => ({
+      type: 'generation' as const,
+      phase: 'started' as const,
+      conversationId: conversation.id,
+      runId,
+      createdAt: '2026-07-23T09:10:00.000Z'
+    })
+    const finished = (runId: string) => ({
+      ...started(runId),
+      phase: 'finished' as const
+    })
+
+    await useAppStore.getState().handleCodexBridgeGenerationChange(started('run-bridge-a'))
+    await useAppStore.getState().handleCodexBridgeGenerationChange(started('run-bridge-a'))
+    await useAppStore.getState().handleCodexBridgeGenerationChange(started('run-bridge-b'))
+    expect(useAppStore.getState().getConversationGenerationState(conversation.id).activeCount).toBe(2)
+
+    await useAppStore.getState().handleCodexBridgeGenerationChange(finished('run-bridge-a'))
+    await useAppStore.getState().handleCodexBridgeGenerationChange(finished('run-bridge-a'))
+    expect(useAppStore.getState().getConversationGenerationState(conversation.id).activeCount).toBe(1)
+
+    await useAppStore.getState().handleCodexBridgeGenerationChange(finished('run-bridge-b'))
+    expect(useAppStore.getState().getConversationGenerationState(conversation.id)).toMatchObject({
+      generating: false,
+      activeCount: 0
+    })
+  })
+
+  it('ignores a stale running refresh that resolves after Bridge completion', async () => {
+    await useAppStore.getState().load()
+    const conversation = await pixaiApi.conversation.create({ title: 'Refresh ordering' })
+    const runningRun = createGenerationRun('run-refresh-order', conversation.id, 'running')
+    const completedRun = { ...runningRun, status: 'succeeded' as const, durationMs: 900 }
+    const staleConversations = deferred<Awaited<ReturnType<typeof pixaiApi.conversation.list>>>()
+    const staleRuns = deferred<GenerationRun[]>()
+    vi.spyOn(pixaiApi.conversation, 'list')
+      .mockImplementationOnce(() => staleConversations.promise)
+      .mockResolvedValueOnce([conversation])
+    vi.spyOn(pixaiApi.conversation, 'runs')
+      .mockImplementationOnce(() => staleRuns.promise)
+      .mockResolvedValueOnce([completedRun])
+    vi.spyOn(pixaiApi.history, 'list').mockResolvedValue([])
+
+    const started = useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'started',
+      conversationId: conversation.id,
+      runId: runningRun.id,
+      createdAt: '2026-07-23T09:20:00.000Z'
+    })
+    const finished = useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'finished',
+      conversationId: conversation.id,
+      runId: runningRun.id,
+      createdAt: '2026-07-23T09:20:00.900Z'
+    })
+
+    await finished
+    expect(useAppStore.getState().runsByConversation[conversation.id]).toEqual([completedRun])
+
+    staleConversations.resolve([])
+    staleRuns.resolve([runningRun])
+    await started
+    expect(useAppStore.getState().conversations).toEqual([conversation])
+    expect(useAppStore.getState().runsByConversation[conversation.id]).toEqual([completedRun])
+  })
+
+  it('keeps the newest global history refresh across different Bridge conversations', async () => {
+    await useAppStore.getState().load()
+    const conversationA = await pixaiApi.conversation.create({ title: 'Project A' })
+    const conversationB = await pixaiApi.conversation.create({ title: 'Project B' })
+    const historyA = createHistoryItem('history-project-a', conversationA.id)
+    const historyB = createHistoryItem('history-project-b', conversationB.id)
+    const staleHistory = deferred<ImageHistoryItem[]>()
+    vi.spyOn(pixaiApi.conversation, 'list').mockResolvedValue([conversationB, conversationA])
+    vi.spyOn(pixaiApi.conversation, 'runs').mockResolvedValue([])
+    vi.spyOn(pixaiApi.history, 'list')
+      .mockImplementationOnce(() => staleHistory.promise)
+      .mockResolvedValueOnce([historyB])
+
+    const finishA = useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'finished',
+      conversationId: conversationA.id,
+      runId: 'run-project-a',
+      createdAt: '2026-07-23T09:30:00.000Z'
+    })
+    const finishB = useAppStore.getState().handleCodexBridgeGenerationChange({
+      type: 'generation',
+      phase: 'finished',
+      conversationId: conversationB.id,
+      runId: 'run-project-b',
+      createdAt: '2026-07-23T09:30:01.000Z'
+    })
+
+    await finishB
+    expect(useAppStore.getState().history).toEqual([historyB])
+    staleHistory.resolve([historyA])
+    await finishA
+    expect(useAppStore.getState().history).toEqual([historyB])
+  })
+
   it('shows preflight generation errors as direct toast messages', async () => {
     await useAppStore.getState().load()
     await useAppStore.getState().updateActiveConversation({ draftPrompt: '一座玻璃城市' })
@@ -385,4 +584,61 @@ async function prepareSuccessfulGeneration(): Promise<void> {
   vi.spyOn(openAiCompatibleAdapter, 'generateImage').mockResolvedValue([
     { b64_json: 'aGVsbG8=' }
   ])
+}
+
+function createGenerationRun(id: string, conversationId: string, status: GenerationRun['status']): GenerationRun {
+  return {
+    id,
+    conversationId,
+    prompt: 'Bridge cat',
+    model: 'gpt-image-1',
+    ratio: '1:1',
+    size: '1024x1024',
+    quality: 'high',
+    n: 1,
+    status,
+    durationMs: null,
+    errorMessage: null,
+    errorDetails: null,
+    maxRetries: 0,
+    retryAttempts: {},
+    retryFailures: {},
+    generationMode: 'text-to-image',
+    referenceImages: [],
+    createdAt: '2026-07-23T09:00:00.000Z',
+    items: []
+  }
+}
+
+function createHistoryItem(id: string, conversationId: string): ImageHistoryItem {
+  return {
+    id,
+    conversationId,
+    runId: 'run-' + id,
+    prompt: 'Bridge history',
+    model: 'gpt-image-1',
+    ratio: '1:1',
+    size: '1024x1024',
+    quality: 'high',
+    requestIndex: 0,
+    durationMs: 900,
+    dataUrl: 'data:image/png;base64,aGVsbG8=',
+    fileSizeBytes: 5,
+    status: 'succeeded',
+    errorMessage: null,
+    errorDetails: null,
+    retryAttempt: 0,
+    favorite: false,
+    generationMode: 'text-to-image',
+    referenceImages: [],
+    createdAt: '2026-07-23T09:30:00.000Z'
+  }
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve: (value: T) => void = () => undefined
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
 }

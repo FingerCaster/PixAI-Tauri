@@ -120,6 +120,11 @@ After implementation:
       casting payload fields locally
 - [ ] Checked that derived state points back to the source event identifier
       (`seq`, `id`, `version`) instead of inventing a second cursor
+- [ ] For long-running mutations, identified the authoritative persisted
+      `started` point and guaranteed every started operation has a terminal
+      event
+- [ ] Registered lifecycle consumers before producers advertise readiness
+- [ ] Tested a deferred operation before completion, not only the final result
 
 ---
 

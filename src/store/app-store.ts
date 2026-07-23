@@ -9,6 +9,7 @@ import type {
   AppPreferences,
   AppPreferencesUpdate,
   AppUpdateState,
+  CodexBridgeGenerationChange,
   CodexSkillStatus,
   Conversation,
   ConversationCreateInput,
@@ -55,10 +56,12 @@ type AppState = {
   generationClockMs: number
   generatingByConversation: Record<string, number>
   generationStartedAtByConversation: Record<string, number>
+  bridgeGenerationConversationByRunId: Record<string, string>
   removedGenerationIndexesByRunId: Record<string, number[]>
   promptAssistantRunning: { inspire: boolean; enrich: boolean }
   toast: string | null
   getConversationGenerationState: (conversationId: string) => { generating: boolean; startedAt: number | null; activeCount: number }
+  handleCodexBridgeGenerationChange: (change: CodexBridgeGenerationChange) => Promise<void>
   load: () => Promise<void>
   setView: (view: View) => void
   toggleSettings: () => void
@@ -107,6 +110,9 @@ type AppState = {
 let generationClockTimer: number | null = null
 let startupUpdateCheckStarted = false
 const conversationUpdateVersions = new Map<string, number>()
+const conversationResultsRefreshVersions = new Map<string, number>()
+let conversationListRefreshVersion = 0
+let historyRefreshVersion = 0
 
 const initialAppUpdateState: AppUpdateState = {
   status: 'idle',
@@ -159,11 +165,62 @@ export const useAppStore = create<AppState>((set, get) => ({
   generationClockMs: Date.now(),
   generatingByConversation: {},
   generationStartedAtByConversation: {},
+  bridgeGenerationConversationByRunId: {},
   removedGenerationIndexesByRunId: {},
   promptAssistantRunning: { inspire: false, enrich: false },
   toast: null,
   getConversationGenerationState: (conversationId) =>
     getConversationGenerationStateForId(conversationId, get().generatingByConversation, get().generationStartedAtByConversation),
+  handleCodexBridgeGenerationChange: async (change) => {
+    const state = get()
+    if (change.phase === 'started') {
+      if (state.bridgeGenerationConversationByRunId[change.runId]) return
+      const startedAt = parseGenerationTimestamp(change.createdAt)
+      const nextGenerationState = beginConversationGeneration(change.conversationId, {
+        generatingByConversation: state.generatingByConversation,
+        startedAtByConversation: state.generationStartedAtByConversation,
+        removedIndexesByRunId: state.removedGenerationIndexesByRunId
+      }, startedAt)
+      const conversationSnapshot = mergeBridgeConversationSnapshot(change.conversation, state.conversations)
+      set({
+        activeConversationId: change.conversationId,
+        view: 'workspace',
+        generationClockMs: startedAt,
+        conversations: conversationSnapshot
+          ? [conversationSnapshot, ...state.conversations.filter((conversation) => conversation.id !== conversationSnapshot.id)]
+          : state.conversations,
+        bridgeGenerationConversationByRunId: {
+          ...state.bridgeGenerationConversationByRunId,
+          [change.runId]: change.conversationId
+        },
+        generatingByConversation: nextGenerationState.generatingByConversation,
+        generationStartedAtByConversation: nextGenerationState.startedAtByConversation,
+        removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+      })
+      startGenerationClock()
+      await refreshConversationData(change.conversationId, { includeConversations: true, includeHistory: false })
+      return
+    }
+
+    const conversationId = state.bridgeGenerationConversationByRunId[change.runId]
+    if (conversationId) {
+      const bridgeGenerationConversationByRunId = { ...state.bridgeGenerationConversationByRunId }
+      delete bridgeGenerationConversationByRunId[change.runId]
+      const endedGenerationState = endConversationGeneration(conversationId, {
+        generatingByConversation: state.generatingByConversation,
+        startedAtByConversation: state.generationStartedAtByConversation,
+        removedIndexesByRunId: state.removedGenerationIndexesByRunId
+      })
+      set({
+        bridgeGenerationConversationByRunId,
+        generatingByConversation: endedGenerationState.generatingByConversation,
+        generationStartedAtByConversation: endedGenerationState.startedAtByConversation,
+        removedGenerationIndexesByRunId: endedGenerationState.removedIndexesByRunId
+      })
+      if (Object.keys(endedGenerationState.generatingByConversation).length === 0) stopGenerationClock()
+    }
+    await refreshConversationData(change.conversationId, { includeConversations: true })
+  },
   load: async () => {
     set({ loading: true })
     const [settings, preferences] = await Promise.all([
@@ -569,24 +626,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const resultPromise = pixaiApi.image.generate(input)
       void get().refreshConversationResults(conversation.id)
       const result = await resultPromise
-      const runs = await pixaiApi.conversation.runs(conversation.id)
-      const history = await pixaiApi.history.list({
-        query: state.query,
-        favoritesOnly: state.favoritesOnly,
-        sort: 'newest'
-      })
-      const runsByConversation = { ...get().runsByConversation, [conversation.id]: runs }
-      const runningRunIds = collectRunningRunIds(runsByConversation)
-      const prunedGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
-        generatingByConversation: get().generatingByConversation,
-        startedAtByConversation: get().generationStartedAtByConversation,
-        removedIndexesByRunId: get().removedGenerationIndexesByRunId
-      })
-      set({
-        runsByConversation,
-        history,
-        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
-      })
+      await refreshConversationData(conversation.id)
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
       const completionMessage = result.canceled ? `已取消${durationText}` : result.errorMessage ? `生成失败：${result.errorMessage}${durationText}` : `生成完成${durationText}`
       get().notify(completionMessage)
@@ -670,24 +710,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const resultPromise = pixaiApi.image.generate(input)
       void get().refreshConversationResults(conversation.id)
       const result = await resultPromise
-      const runs = await pixaiApi.conversation.runs(conversation.id)
-      const history = await pixaiApi.history.list({
-        query: get().query,
-        favoritesOnly: get().favoritesOnly,
-        sort: 'newest'
-      })
-      const runsByConversation = { ...get().runsByConversation, [conversation.id]: runs }
-      const runningRunIds = collectRunningRunIds(runsByConversation)
-      const prunedGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
-        generatingByConversation: get().generatingByConversation,
-        startedAtByConversation: get().generationStartedAtByConversation,
-        removedIndexesByRunId: get().removedGenerationIndexesByRunId
-      })
-      set({
-        runsByConversation,
-        history,
-        removedGenerationIndexesByRunId: prunedGenerationState.removedIndexesByRunId
-      })
+      await refreshConversationData(conversation.id)
       const durationText = result.run.durationMs != null ? `，用时 ${formatDuration(result.run.durationMs)}` : ''
       const completionMessage = result.errorMessage ? `重试失败：${result.errorMessage}${durationText}` : `重试完成${durationText}`
       get().notify(completionMessage)
@@ -727,34 +750,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     await pixaiApi.image.cancel(runId, requestIndex)
   },
   refreshConversationResults: async (conversationId) => {
-    const state = get()
-    const runs = await pixaiApi.conversation.runs(conversationId)
-    const history = await pixaiApi.history.list({
-      query: state.query,
-      favoritesOnly: state.favoritesOnly,
-      sort: 'newest'
-    })
-    const runsByConversation = { ...get().runsByConversation, [conversationId]: runs }
-    const runningRunIds = collectRunningRunIds(runsByConversation)
-    const nextGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
-      generatingByConversation: get().generatingByConversation,
-      startedAtByConversation: get().generationStartedAtByConversation,
-      removedIndexesByRunId: get().removedGenerationIndexesByRunId
-    })
-    set({
-      runsByConversation,
-      history,
-      removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
-    })
+    await refreshConversationData(conversationId)
   },
   reloadHistory: async (options = {}) => {
     const state = get()
+    const refreshVersion = ++historyRefreshVersion
     const history = await pixaiApi.history.list({
       query: options.query ?? state.query,
       favoritesOnly: options.favoritesOnly ?? state.favoritesOnly,
       sort: options.sort ?? 'newest'
     })
-    set({ history })
+    if (refreshVersion === historyRefreshVersion) set({ history })
   },
   deleteHistory: async (id) => {
     const item = findHistoryItem(get(), id)
@@ -882,6 +888,83 @@ function nextConversationUpdateVersion(conversationId: string): number {
   const nextVersion = (conversationUpdateVersions.get(conversationId) || 0) + 1
   conversationUpdateVersions.set(conversationId, nextVersion)
   return nextVersion
+}
+
+function nextConversationResultsRefreshVersion(conversationId: string): number {
+  const nextVersion = (conversationResultsRefreshVersions.get(conversationId) || 0) + 1
+  conversationResultsRefreshVersions.set(conversationId, nextVersion)
+  return nextVersion
+}
+
+function parseGenerationTimestamp(createdAt: string): number {
+  const timestamp = Date.parse(createdAt)
+  return Number.isFinite(timestamp) ? timestamp : Date.now()
+}
+
+function mergeBridgeConversationSnapshot(
+  snapshot: Conversation | undefined,
+  conversations: Conversation[]
+): Conversation | null {
+  if (!snapshot) return null
+  const existing = conversations.find((conversation) => conversation.id === snapshot.id)
+  if (!existing) return snapshot
+  return {
+    ...snapshot,
+    referenceImages: snapshot.referenceImages.map((reference) => {
+      const existingReference = existing.referenceImages.find((item) => item.id === reference.id)
+      return existingReference?.dataUrl ? { ...reference, dataUrl: existingReference.dataUrl } : reference
+    })
+  }
+}
+
+async function refreshConversationData(
+  conversationId: string,
+  options: { includeConversations?: boolean; includeHistory?: boolean } = {}
+): Promise<void> {
+  const resultsVersion = nextConversationResultsRefreshVersion(conversationId)
+  const listVersion = options.includeConversations ? ++conversationListRefreshVersion : null
+  const nextHistoryVersion = options.includeHistory === false ? null : ++historyRefreshVersion
+  const state = useAppStore.getState()
+  const conversationsPromise = options.includeConversations
+    ? pixaiApi.conversation.list()
+    : Promise.resolve<Conversation[] | null>(null)
+  const historyPromise = options.includeHistory === false
+    ? Promise.resolve<ImageHistoryItem[] | null>(null)
+    : pixaiApi.history.list({
+        query: state.query,
+        favoritesOnly: state.favoritesOnly,
+        sort: 'newest'
+      })
+  const [conversations, runs, history] = await Promise.all([
+    conversationsPromise,
+    pixaiApi.conversation.runs(conversationId),
+    historyPromise
+  ])
+
+  if (listVersion != null && listVersion === conversationListRefreshVersion && conversations) {
+    useAppStore.setState({ conversations })
+  }
+  const current = useAppStore.getState()
+  const resultsAreCurrent = conversationResultsRefreshVersions.get(conversationId) === resultsVersion
+  const historyIsCurrent = nextHistoryVersion != null && nextHistoryVersion === historyRefreshVersion && history != null
+  if (!resultsAreCurrent && !historyIsCurrent) return
+
+  if (resultsAreCurrent) {
+    const runsByConversation = { ...current.runsByConversation, [conversationId]: runs }
+    const runningRunIds = collectRunningRunIds(runsByConversation)
+    const nextGenerationState = pruneRemovedGenerationIndexesByRunId(runningRunIds, {
+      generatingByConversation: current.generatingByConversation,
+      startedAtByConversation: current.generationStartedAtByConversation,
+      removedIndexesByRunId: current.removedGenerationIndexesByRunId
+    })
+    useAppStore.setState({
+      runsByConversation,
+      ...(historyIsCurrent ? { history } : {}),
+      removedGenerationIndexesByRunId: nextGenerationState.removedIndexesByRunId
+    })
+    return
+  }
+  if (historyIsCurrent) useAppStore.setState({ history })
 }
 
 function findHistoryItem(state: AppState, id: string): ImageHistoryItem | null {
