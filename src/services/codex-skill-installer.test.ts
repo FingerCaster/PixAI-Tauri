@@ -12,6 +12,7 @@ describe('codex skill installer payload', () => {
     expect(files.get('SKILL.md')).toContain('bridge.json')
     expect(files.get('scripts/pixai-codex.mjs')).toContain("const BRIDGE_STATE_PATH = join(dirname(dirname(fileURLToPath(import.meta.url))), 'bridge.json')")
     expect(files.get('scripts/pixai-codex.mjs')).toContain("['generate', { method: 'POST', path: '/generate'")
+    expect(files.get('scripts/pixai-codex.mjs')).toContain('body.projectPath = process.cwd()')
     expect(files.get('agents/openai.yaml')).toContain('display_name: "PixAI Image Workbench"')
   })
 })

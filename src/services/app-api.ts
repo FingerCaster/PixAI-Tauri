@@ -53,6 +53,9 @@ export function createPixaiApi() {
     conversation: {
       list: () => database.listConversations(),
       get: (id: string) => database.getConversation(id),
+      findCodexProjectConversation: (projectPath: string) => database.findCodexProjectConversation(projectPath),
+      findOrCreateCodexProjectConversation: (projectPath: string, input?: ConversationCreateInput) =>
+        database.findOrCreateCodexProjectConversation(projectPath, input),
       create: (input?: ConversationCreateInput) => database.createConversation(input),
       update: (id: string, input: ConversationUpdate) => database.updateConversation(id, input),
       delete: (id: string) => database.deleteConversation(id),

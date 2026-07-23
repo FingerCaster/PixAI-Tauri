@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPixaiApi } from './app-api'
 import { handleCodexBridgeRequest } from './codex-bridge'
+import type { PixaiApi } from './app-api'
 
 function bridgeRequest(path: string, method = 'GET', body?: unknown) {
   return {
@@ -88,14 +89,7 @@ describe('codex bridge', () => {
 
   it('generates images through the existing image service and exposes history file bytes', async () => {
     const api = createPixaiApi()
-    const settings = await api.settings.upsertProfile({
-      name: 'Local image',
-      baseUrl: 'http://127.0.0.1:37123',
-      enabledUsages: ['image'],
-      apiKey: 'sk-123456789'
-    })
-    const profile = settings.profiles.at(-1)
-    await api.settings.update({ selectedImageProfileId: profile?.id })
+    await configureImageProvider(api)
 
     const generateResponse = await handleCodexBridgeRequest(
       api,
@@ -116,6 +110,124 @@ describe('codex bridge', () => {
     expect(fileResponse.status).toBe(200)
     expect(fileResponse.headers?.['Content-Type']).toBe('image/png')
     expect(fileResponse.bodyBase64).toBe(bridgeImageBase64)
+  })
+
+  it('reuses the same conversation for the same projectPath', async () => {
+    const api = createPixaiApi()
+    await configureImageProvider(api)
+    const first = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '项目 A 第一次',
+        projectPath: 'C:\\Work\\PixAI\\Repo\\',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const second = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '项目 A 第二次',
+        projectPath: 'c:/work/pixai/repo',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const firstPayload = JSON.parse(first.body || '{}')
+    const secondPayload = JSON.parse(second.body || '{}')
+    const conversations = await api.conversation.list()
+
+    expect(firstPayload.conversation.id).toBe(secondPayload.conversation.id)
+    expect(conversations).toHaveLength(1)
+    expect(conversations[0].codexProjectPath).toBe('c:/work/pixai/repo')
+  })
+
+  it('separates different projectPath values into different conversations', async () => {
+    const api = createPixaiApi()
+    await configureImageProvider(api)
+    const first = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '项目 A',
+        projectPath: 'C:\\Work\\PixAI\\Repo-A',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const second = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '项目 B',
+        projectPath: 'C:\\Work\\PixAI\\Repo-B',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const firstPayload = JSON.parse(first.body || '{}')
+    const secondPayload = JSON.parse(second.body || '{}')
+    const conversations = await api.conversation.list()
+
+    expect(firstPayload.conversation.id).not.toBe(secondPayload.conversation.id)
+    expect(conversations).toHaveLength(2)
+    expect(conversations.map((conversation) => conversation.codexProjectPath)).toEqual([
+      'c:/work/pixai/repo-b',
+      'c:/work/pixai/repo-a'
+    ])
+  })
+
+  it('honors explicit conversationId over projectPath routing', async () => {
+    const api = createPixaiApi()
+    await configureImageProvider(api)
+    const firstConversation = await api.conversation.create({ codexProjectPath: 'c:/work/pixai/repo-a' })
+    const secondConversation = await api.conversation.create({ codexProjectPath: 'c:/work/pixai/repo-b' })
+
+    const response = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '显式会话优先',
+        conversationId: secondConversation.id,
+        projectPath: 'C:\\Work\\PixAI\\Repo-A',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const payload = JSON.parse(response.body || '{}')
+
+    expect(payload.conversation.id).toBe(secondConversation.id)
+    expect(payload.conversation.codexProjectPath).toBe('c:/work/pixai/repo-b')
+    expect((await api.conversation.get(firstConversation.id))?.codexProjectPath).toBe('c:/work/pixai/repo-a')
+  })
+
+  it('keeps the legacy first-conversation fallback when projectPath is missing', async () => {
+    const api = createPixaiApi()
+    await configureImageProvider(api)
+    const firstConversation = await api.conversation.create({ title: 'older' })
+    const secondConversation = await api.conversation.create({ title: 'newer' })
+
+    const response = await handleCodexBridgeRequest(
+      api,
+      bridgeRequest('/generate', 'POST', {
+        prompt: '旧回退',
+        ratio: '1:1',
+        size: '1024x1024',
+        quality: 'high',
+        n: 1
+      })
+    )
+    const payload = JSON.parse(response.body || '{}')
+
+    expect(payload.conversation.id).toBe(secondConversation.id)
+    expect(payload.conversation.id).not.toBe(firstConversation.id)
   })
 
   it('returns a preflight error without workspace records when image profile has no API key', async () => {
@@ -176,3 +288,14 @@ describe('codex bridge', () => {
     expect(payload.error).toContain('未知 Codex Bridge 路由')
   })
 })
+
+async function configureImageProvider(api: PixaiApi) {
+  const settings = await api.settings.upsertProfile({
+    name: 'Local image',
+    baseUrl: 'http://127.0.0.1:37123',
+    enabledUsages: ['image'],
+    apiKey: 'sk-123456789'
+  })
+  const profile = settings.profiles.at(-1)
+  await api.settings.update({ selectedImageProfileId: profile?.id })
+}

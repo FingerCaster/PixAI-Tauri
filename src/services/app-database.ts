@@ -9,6 +9,7 @@ import {
   normalizeImageGenerationTimeoutSeconds,
   normalizeRetryCount
 } from '../shared/image-options'
+import { normalizeCodexProjectPath } from '../shared/codex-project-path'
 import type {
   Conversation,
   ConversationCreateInput,
@@ -61,16 +62,33 @@ export class AppDatabase {
     return this.requireData().conversations.find((conversation) => conversation.id === id) || null
   }
 
+  async findCodexProjectConversation(projectPath: string): Promise<Conversation | null> {
+    await this.load()
+    const normalizedPath = normalizeCodexProjectPath(projectPath)
+    if (!normalizedPath) return null
+    return this.requireData().conversations.find((conversation) => normalizeCodexProjectPath(conversation.codexProjectPath) === normalizedPath) || null
+  }
+
+  async findOrCreateCodexProjectConversation(projectPath: string, template?: ConversationCreateInput): Promise<Conversation> {
+    const normalizedPath = normalizeCodexProjectPath(projectPath)
+    if (!normalizedPath) throw new Error('Project path is required.')
+    const existing = await this.findCodexProjectConversation(normalizedPath)
+    if (existing) return existing
+    return this.createConversation({ ...template, codexProjectPath: normalizedPath })
+  }
+
   async createConversation(input: ConversationCreateInput = {}): Promise<Conversation> {
     await this.load()
     const data = this.requireData()
     const now = nowIso()
     const ratio = input.ratio || '1:1'
+    const codexProjectPath = normalizeCodexProjectPath(input.codexProjectPath ?? null)
     const conversation: Conversation = {
       id: createId('conversation'),
       title: '新会话',
       draftPrompt: '',
       model: input.model || DEFAULT_MODEL,
+      codexProjectPath,
       ratio,
       size: input.size && isImageSizeCompatible(ratio, input.size) ? input.size : getDefaultImageSize(ratio),
       quality: input.quality || 'high',
@@ -104,6 +122,7 @@ export class AppDatabase {
     const next: Conversation = {
       ...current,
       ...input,
+      codexProjectPath: normalizeCodexProjectPath(input.codexProjectPath ?? current.codexProjectPath),
       ratio,
       size: normalizeConversationSize(ratio, input.size, input.ratio ? undefined : current.size),
       n: normalizeInteger(input.n, 1, 10) ?? current.n,
@@ -368,6 +387,11 @@ async function normalizeData(data: PersistedData): Promise<{ data: PersistedData
     conversations: Array.isArray(data.conversations)
       ? await Promise.all(data.conversations.map(async (conversation) => ({
         ...conversation,
+        codexProjectPath: (() => {
+          const normalizedPath = normalizeCodexProjectPath(conversation.codexProjectPath)
+          if ((conversation.codexProjectPath ?? null) !== normalizedPath) changed = true
+          return normalizedPath
+        })(),
         size: isImageSizeCompatible(conversation.ratio, conversation.size)
           ? conversation.size
           : getDefaultImageSize(conversation.ratio),

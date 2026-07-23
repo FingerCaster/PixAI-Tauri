@@ -207,6 +207,7 @@ export type Conversation = {
   title: string
   draftPrompt: string
   model: string
+  codexProjectPath?: string | null
   ratio: ImageRatio
   size: string
   quality: ImageQuality
@@ -248,6 +249,7 @@ export type ConversationUpdate = Partial<
     | 'generationTimeoutSeconds'
     | 'autoSaveHistory'
     | 'keepFailureDetails'
+    | 'codexProjectPath'
     | 'referenceImages'
   >
 >
@@ -383,6 +385,7 @@ export type CodexSkillStatus = {
 export type CodexGenerateImageInput = Partial<Omit<GenerateImageInput, 'conversationId' | 'referenceImageIds'>> & {
   prompt: string
   conversationId?: string
+  projectPath?: string
   title?: string
   referenceImageIds?: string[]
   referenceHistoryIds?: string[]

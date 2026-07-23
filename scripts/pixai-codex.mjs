@@ -55,6 +55,9 @@ async function main() {
   if (command.body) {
     const body = await buildBody(options, command.optionalBody)
     if (body !== undefined) {
+      if ((commandName === 'generate' || commandName === 'reedit' || commandName === 'inspire' || commandName === 'enrich') && body.projectPath === undefined) {
+        body.projectPath = process.cwd()
+      }
       init.headers['Content-Type'] = 'application/json'
       init.body = JSON.stringify(body)
     }
