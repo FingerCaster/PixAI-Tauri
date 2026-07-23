@@ -22,10 +22,10 @@ PixAI Tauri 是一个基于 Tauri 2 重建的桌面图片生成工作台。它�
 本仓库整理自 PixAI / PixAI-Codex 的产品思路和交互经验，但不是旧仓库的原地迁移。
 
 - 原始参考项目：[fengxinzi-mulan/PixAI](https://github.com/fengxinzi-mulan/PixAI)
-- Electron + Codex Bridge 参考版本：`PixAI-Codex`
+- Electron + Codex Bridge 来源：[Adaoer/PixAI-Codex](https://github.com/Adaoer/PixAI-Codex)，本项目审计基线为 [`db3eefd`](https://github.com/Adaoer/PixAI-Codex/tree/db3eefd5c217b7131f844b855f7c41ea10fd013e)。
 - 当前项目：`PixAI-Tauri`，使用 Tauri 2 重建桌面壳、数据边界、更新系统和前端 UI。
 
-开发工作区里可能存在 `.omx/reference/PixAI-Codex/` 这样的本地参考快照。它只用于对照旧实现，不是当前项目的运行依赖，也不会随 Tauri 应用发布。
+当前项目移植并大幅改造了参考版本中的部分核心模型、生成状态和 Codex CLI 实现；对应的 PolyForm Noncommercial 1.0.0 许可与 Required Notice 保存在 `THIRD_PARTY_NOTICES/PixAI-Codex-LICENSE.txt`。这不代表当前仓库已选择统一的根许可证。
 
 ## 环境要求
 
