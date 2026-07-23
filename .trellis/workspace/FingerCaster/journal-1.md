@@ -71,3 +71,36 @@ Restored immediate live status updates for Codex Bridge image generation, includ
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Publish PixAI 0.0.17
+
+**Date**: 2026-07-23
+**Task**: Publish PixAI 0.0.17
+**Branch**: `main`
+
+### Summary
+
+Released PixAI 0.0.17 after version synchronization, 166 passing checks, successful GitHub Actions builds for Windows and both macOS architectures, and verification of the public updater feed.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `506e901` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
