@@ -38,3 +38,36 @@ Initialized Trellis for FingerCaster, migrated verified legacy knowledge and thi
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Restore live Bridge generation status
+
+**Date**: 2026-07-23
+**Task**: Restore live Bridge generation status
+**Branch**: `main`
+
+### Summary
+
+Restored immediate live status updates for Codex Bridge image generation, including run lifecycle events, resilient store synchronization, tests, and Trellis specs.
+
+### Main Changes
+
+- Detailed change bullets were not supplied; see the summary above.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e2d8a45` | (see git log) |
+
+### Testing
+
+- Validation was not recorded for this session.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
