@@ -3,7 +3,7 @@
   "name": "publish-0-0-17",
   "title": "Publish 0.0.17 release",
   "description": "Publish the verified main branch as PixAI 0.0.17 through the production GitHub Actions release pipeline.",
-  "status": "in_progress",
+  "status": "completed",
   "dev_type": null,
   "scope": null,
   "package": null,
@@ -11,7 +11,7 @@
   "creator": "FingerCaster",
   "assignee": "FingerCaster",
   "createdAt": "2026-07-23",
-  "completedAt": null,
+  "completedAt": "2026-07-23",
   "branch": null,
   "base_branch": "main",
   "worktree_path": null,
@@ -21,6 +21,16 @@
   "children": [],
   "parent": null,
   "relatedFiles": [],
-  "notes": "",
-  "meta": {}
+  "notes": "Published PixAI 0.0.17 through the production GitHub Actions release workflow.",
+  "meta": {
+    "release": {
+      "version": "0.0.17",
+      "tag": "0.0.17",
+      "commit": "506e90134d89d3d583594369c589f3717b4a5026",
+      "workflow_run_id": 30004994681,
+      "workflow_url": "https://github.com/FingerCaster/PixAI-Tauri/actions/runs/30004994681",
+      "release_url": "https://github.com/FingerCaster/PixAI-Tauri/releases/tag/0.0.17",
+      "verified_at": "2026-07-23T12:12:52Z"
+    }
+  }
 }

@@ -47,18 +47,18 @@ latest fixes and the signed updater feed advances from `0.0.16`.
 
 ## Acceptance Criteria
 
-- [ ] All four application metadata locations report `0.0.17`.
-- [ ] `pnpm check` passes before the release commit is pushed.
-- [ ] Remote `main` contains the release commit and tag `0.0.17` points to that
+- [x] All four application metadata locations report `0.0.17`.
+- [x] `pnpm check` passes before the release commit is pushed.
+- [x] Remote `main` contains the release commit and tag `0.0.17` points to that
   same commit.
-- [ ] The GitHub Release workflow completes successfully.
-- [ ] GitHub Release `0.0.17` is public, non-draft, non-prerelease, and Latest.
-- [ ] The Release contains `latest.json`, Windows MSI and NSIS installers, both
+- [x] The GitHub Release workflow completes successfully.
+- [x] GitHub Release `0.0.17` is public, non-draft, non-prerelease, and Latest.
+- [x] The Release contains `latest.json`, Windows MSI and NSIS installers, both
   macOS updater archives, and both macOS DMGs.
-- [ ] Public `latest.json` reports version `0.0.17` and contains
+- [x] Public `latest.json` reports version `0.0.17` and contains
   `windows-x86_64-msi`, `windows-x86_64-nsis`, `darwin-aarch64`, and
   `darwin-x86_64`.
-- [ ] The local worktree is clean after Trellis bookkeeping is committed.
+- [x] The local worktree is clean after Trellis bookkeeping is committed.
 
 ## Out Of Scope
 
